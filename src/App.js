@@ -27,11 +27,10 @@ const TsonuWebsite = () => {
           <div className="max-w-6xl mx-auto px-4 py-4">
             <div className="flex justify-between items-center">
               <div className="flex items-center space-x-3">
-                {/* Logo placeholder - you'll replace this with your actual logo */}
                 <img
                     src="/tsonu-t.png"
-                    alt="Tsonu"
-                    className="w-10 h-10 rounded-full"
+                    alt="Tsonu Logo"
+                    className="w-10 h-10 rounded-full object-cover"
                 />
                 <h1 className="text-2xl font-bold tracking-wider text-amber-400">TSONU</h1>
               </div>
@@ -56,13 +55,15 @@ const TsonuWebsite = () => {
           </div>
 
           <div className="max-w-6xl mx-auto text-center relative z-10">
-            {/* Main logo area - replace this div with your actual logo image */}
+            {/* Main logo area */}
             <div className="mb-8">
-              <img
-                  src="/tsonu-t.png"
-                  alt="Tsonu Logo"
-                  className="w-48 h-48 mx-auto mb-6 drop-shadow-2xl"
-              />
+              <div className="mb-6">
+                <img
+                    src="/tsonu-t.png"
+                    alt="Tsonu Logo"
+                    className="w-48 h-48 mx-auto drop-shadow-2xl object-contain"
+                />
+              </div>
 
               <h1 className="text-6xl md:text-8xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 drop-shadow-lg">
                 TSONU
@@ -130,16 +131,18 @@ const TsonuWebsite = () => {
                 </div>
                 <div className="flex-1 text-center md:text-left">
                   <h3 className="text-3xl font-bold mb-2 text-amber-400 font-serif">So We Sleep</h3>
-                  <p className="text-green-400 mb-4 font-serif italic">Debut Album • 2024</p>
+                  <p className="text-green-400 mb-4 font-serif italic">Debut Album • 2025</p>
                   <p className="text-amber-100 leading-relaxed mb-6 font-serif">
-                    Journey through ethereal realms where ancient dreams meet modern harmonies.
-                    "So We Sleep" weaves tales of slumber and awakening, of rest found in
-                    sacred groves where time moves like gentle streams.
+                    A symphonic journey through landscapes of rest and reflection.
+                    "So We Sleep" weaves orchestral grandeur with intimate electronic textures,
+                    creating anthemic pieces that celebrate both the triumph of great adventures
+                    and the profound peace found in quietude. Each track tells a story of
+                    slumber earned, dreams awakened, and the gentle surrender to restoration.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <span className="px-4 py-2 bg-green-700/40 rounded-full text-sm border border-green-600/50 text-green-300">Down Tempo</span>
-                    <span className="px-4 py-2 bg-amber-700/40 rounded-full text-sm border border-amber-600/50 text-amber-300">Electronic</span>
-                    <span className="px-4 py-2 bg-slate-700/40 rounded-full text-sm border border-slate-600/50 text-slate-300">Orchestral</span>
+                    <span className="px-4 py-2 bg-green-700/40 rounded-full text-sm border border-green-600/50 text-green-300">Orchestral</span>
+                    <span className="px-4 py-2 bg-amber-700/40 rounded-full text-sm border border-amber-600/50 text-amber-300">Downtempo</span>
+                    <span className="px-4 py-2 bg-slate-700/40 rounded-full text-sm border border-slate-600/50 text-slate-300">Electronic</span>
                   </div>
                 </div>
               </div>
@@ -171,16 +174,18 @@ const TsonuWebsite = () => {
               <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-2 w-4 h-4 bg-amber-600 rotate-45"></div>
 
               <p className="text-lg text-amber-100 leading-relaxed mb-6 font-serif">
-                From the mists of forgotten realms, Tsonu emerges as a vessel for ancient
-                melodies that have slumbered for centuries. We craft musical tapestries
-                that bridge the mortal world with the ethereal, weaving stories of heroes,
-                dreams, and the sacred rest that comes after great journeys.
+                Tsonu is a solo artist crafting symphonic landscapes that transport listeners
+                to expansive worlds of wonder and emotion. Drawing from the rich tradition of
+                orchestral storytelling, each composition weaves together sweeping melodies,
+                intricate harmonies, and atmospheric textures that evoke epic journeys and
+                intimate moments alike.
               </p>
               <p className="text-lg text-amber-100 leading-relaxed font-serif">
-                With "So We Sleep," we invite you into a sanctuary where time moves slowly,
-                where the weight of the world falls away, and where the soul finds the peace
-                it has long sought. These are lullabies for the weary wanderer, hymns for
-                the dreaming heart.
+                With "So We Sleep," Tsonu explores the delicate balance between grandeur and
+                tranquility, creating anthemic pieces that soar alongside gentle, contemplative
+                interludes. These are musical narratives that speak to the adventurer's spirit
+                while offering solace to the weary soul, blending orchestral majesty with
+                modern electronic sensibilities.
               </p>
             </div>
           </div>
@@ -211,7 +216,7 @@ const TsonuWebsite = () => {
         <footer className="py-8 px-4 border-t border-amber-600/30 bg-slate-900">
           <div className="max-w-6xl mx-auto text-center">
             <div className="w-16 h-px bg-gradient-to-r from-transparent via-amber-600 to-transparent mx-auto mb-4"></div>
-            <p className="text-green-400 mb-4 font-serif">© 2024 Tsonu. All melodies blessed and protected.</p>
+            <p className="text-green-400 mb-4 font-serif">© 2025 Tsonu. All melodies blessed and protected.</p>
             <div className="flex justify-center space-x-6">
               <a href="#instagram" className="text-amber-400 hover:text-amber-300 transition-colors">Instagram</a>
               <a href="#twitter" className="text-amber-400 hover:text-amber-300 transition-colors">Twitter</a>
