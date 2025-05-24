@@ -1,64 +1,106 @@
 import React from 'react';
-import { ExternalLink, Music, Play, Heart, Mail } from 'lucide-react';
+import { ExternalLink, Music, Play, Heart, Mail, Shield, Scroll } from 'lucide-react';
 
 const TsonuWebsite = () => {
   const streamingServices = [
-    { name: 'Spotify', url: '#spotify-link', color: 'bg-green-500' },
-    { name: 'Apple Music', url: '#apple-music-link', color: 'bg-gray-800' },
-    { name: 'YouTube Music', url: '#youtube-music-link', color: 'bg-red-500' },
-    { name: 'Amazon Music', url: '#amazon-music-link', color: 'bg-blue-500' },
-    { name: 'Bandcamp', url: '#bandcamp-link', color: 'bg-teal-500' },
-    { name: 'SoundCloud', url: '#soundcloud-link', color: 'bg-orange-500' }
+    { name: 'Spotify', url: '#spotify-link', color: 'bg-green-600 hover:bg-green-700' },
+    { name: 'Apple Music', url: '#apple-music-link', color: 'bg-gray-700 hover:bg-gray-800' },
+    { name: 'YouTube Music', url: '#youtube-music-link', color: 'bg-red-600 hover:bg-red-700' },
+    { name: 'Amazon Music', url: '#amazon-music-link', color: 'bg-blue-600 hover:bg-blue-700' },
+    { name: 'Bandcamp', url: '#bandcamp-link', color: 'bg-teal-600 hover:bg-teal-700' },
+    { name: 'SoundCloud', url: '#soundcloud-link', color: 'bg-orange-600 hover:bg-orange-700' }
   ];
 
   return (
-      <div className="min-h-screen bg-gradient-to-br from-purple-900 via-blue-900 to-indigo-900 text-white">
+      <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-green-900 text-amber-50">
+        {/* Decorative background pattern */}
+        <div className="fixed inset-0 opacity-5">
+          <div className="absolute inset-0" style={{
+            backgroundImage: `radial-gradient(circle at 25% 25%, #d4af37 1px, transparent 1px),
+                           radial-gradient(circle at 75% 75%, #d4af37 1px, transparent 1px)`,
+            backgroundSize: '100px 100px'
+          }}></div>
+        </div>
+
         {/* Navigation */}
-        <nav className="fixed top-0 w-full bg-black/20 backdrop-blur-md z-50 border-b border-white/10">
+        <nav className="fixed top-0 w-full bg-slate-900/90 backdrop-blur-md z-50 border-b border-amber-600/30">
           <div className="max-w-6xl mx-auto px-4 py-4">
             <div className="flex justify-between items-center">
-              <h1 className="text-2xl font-bold tracking-wider">TSONU</h1>
+              <div className="flex items-center space-x-3">
+                {/* Logo placeholder - you'll replace this with your actual logo */}
+                <img
+                    src="/tsonu-t.png"
+                    alt="Tsonu"
+                    className="w-10 h-10 rounded-full"
+                />
+                <h1 className="text-2xl font-bold tracking-wider text-amber-400">TSONU</h1>
+              </div>
               <div className="hidden md:flex space-x-8">
-                <a href="#home" className="hover:text-purple-300 transition-colors">Home</a>
-                <a href="#music" className="hover:text-purple-300 transition-colors">Music</a>
-                <a href="#about" className="hover:text-purple-300 transition-colors">About</a>
-                <a href="#contact" className="hover:text-purple-300 transition-colors">Contact</a>
+                <a href="#home" className="hover:text-amber-400 transition-colors duration-300 text-amber-200">Home</a>
+                <a href="#music" className="hover:text-amber-400 transition-colors duration-300 text-amber-200">Music</a>
+                <a href="#about" className="hover:text-amber-400 transition-colors duration-300 text-amber-200">About</a>
+                <a href="#contact" className="hover:text-amber-400 transition-colors duration-300 text-amber-200">Contact</a>
               </div>
             </div>
           </div>
         </nav>
 
         {/* Hero Section */}
-        <section id="home" className="pt-20 pb-12 px-4">
-          <div className="max-w-6xl mx-auto text-center">
+        <section id="home" className="pt-20 pb-12 px-4 relative">
+          {/* Decorative elements */}
+          <div className="absolute top-32 left-10 opacity-20">
+            <Shield className="w-16 h-16 text-amber-500 transform rotate-12" />
+          </div>
+          <div className="absolute top-40 right-16 opacity-20">
+            <Scroll className="w-12 h-12 text-green-600 transform -rotate-12" />
+          </div>
+
+          <div className="max-w-6xl mx-auto text-center relative z-10">
+            {/* Main logo area - replace this div with your actual logo image */}
             <div className="mb-8">
-              <h1 className="text-6xl md:text-8xl font-bold mb-4 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+              <img
+                  src="/tsonu-t.png"
+                  alt="Tsonu Logo"
+                  className="w-48 h-48 mx-auto mb-6 drop-shadow-2xl"
+              />
+
+              <h1 className="text-6xl md:text-8xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 drop-shadow-lg">
                 TSONU
               </h1>
-              <p className="text-xl md:text-2xl text-gray-300 mb-8">
-                Atmospheric soundscapes for the modern soul
+              <div className="w-32 h-1 bg-gradient-to-r from-green-600 to-green-700 mx-auto mb-6"></div>
+              <p className="text-xl md:text-2xl text-amber-200 mb-8 font-serif italic">
+                Mystical soundscapes from ancient realms
               </p>
             </div>
 
-            {/* Album Cover Placeholder */}
+            {/* Album Cover */}
             <div className="relative mb-12 max-w-md mx-auto">
-              <div className="aspect-square bg-gradient-to-br from-purple-800 to-indigo-900 rounded-lg shadow-2xl flex items-center justify-center border border-white/20">
-                <div className="text-center">
-                  <Music className="w-16 h-16 mx-auto mb-4 text-purple-300" />
-                  <h3 className="text-2xl font-semibold mb-2">So We Sleep</h3>
-                  <p className="text-gray-400">Debut Album</p>
+              <div className="aspect-square bg-gradient-to-br from-slate-800 via-green-900 to-slate-900 rounded-lg shadow-2xl flex items-center justify-center border-4 border-amber-600/50 relative overflow-hidden">
+                {/* Ornate corner decorations */}
+                <div className="absolute top-2 left-2 w-4 h-4 border-l-2 border-t-2 border-amber-500"></div>
+                <div className="absolute top-2 right-2 w-4 h-4 border-r-2 border-t-2 border-amber-500"></div>
+                <div className="absolute bottom-2 left-2 w-4 h-4 border-l-2 border-b-2 border-amber-500"></div>
+                <div className="absolute bottom-2 right-2 w-4 h-4 border-r-2 border-b-2 border-amber-500"></div>
+
+                <div className="text-center z-10">
+                  <Music className="w-16 h-16 mx-auto mb-4 text-amber-500" />
+                  <h3 className="text-2xl font-bold mb-2 text-amber-400 font-serif">So We Sleep</h3>
+                  <p className="text-green-400 font-serif italic">Debut Album</p>
                 </div>
+
+                {/* Subtle pattern overlay */}
+                <div className="absolute inset-0 opacity-10 bg-gradient-to-br from-amber-500 to-transparent"></div>
               </div>
-              <div className="absolute -inset-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg blur opacity-20 -z-10"></div>
+              <div className="absolute -inset-6 bg-gradient-to-r from-amber-600/20 via-green-600/20 to-amber-600/20 rounded-lg blur-xl -z-10"></div>
             </div>
 
             {/* Call to Action */}
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              <button className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 px-8 py-3 rounded-full font-semibold transition-all transform hover:scale-105">
+              <button className="flex items-center gap-2 bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 px-8 py-3 rounded-full font-bold transition-all transform hover:scale-105 shadow-lg border border-amber-500">
                 <Play className="w-5 h-5" />
                 Listen Now
               </button>
-              <button className="flex items-center gap-2 border border-white/30 hover:bg-white/10 px-8 py-3 rounded-full font-semibold transition-all">
+              <button className="flex items-center gap-2 border-2 border-green-600 hover:bg-green-600/20 px-8 py-3 rounded-full font-bold transition-all text-green-400 hover:text-green-300">
                 <Heart className="w-5 h-5" />
                 Follow
               </button>
@@ -67,28 +109,37 @@ const TsonuWebsite = () => {
         </section>
 
         {/* Music Section */}
-        <section id="music" className="py-16 px-4 bg-black/20">
+        <section id="music" className="py-16 px-4 bg-slate-900/50 relative">
+          {/* Decorative border */}
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-amber-600 to-transparent"></div>
+
           <div className="max-w-6xl mx-auto">
-            <h2 className="text-4xl font-bold text-center mb-12">Stream Our Music</h2>
+            <h2 className="text-4xl font-bold text-center mb-12 text-amber-400 font-serif">Sacred Melodies</h2>
 
             {/* Album Info */}
-            <div className="bg-white/5 rounded-xl p-8 mb-12 backdrop-blur-sm border border-white/10">
-              <div className="flex flex-col md:flex-row items-center gap-8">
-                <div className="w-48 h-48 bg-gradient-to-br from-purple-800 to-indigo-900 rounded-lg flex items-center justify-center">
-                  <Music className="w-12 h-12 text-purple-300" />
+            <div className="bg-slate-800/50 rounded-xl p-8 mb-12 backdrop-blur-sm border-2 border-amber-600/30 relative overflow-hidden">
+              {/* Decorative corner elements */}
+              <div className="absolute top-4 left-4 w-8 h-8 border-l-2 border-t-2 border-amber-500 rounded-tl-lg"></div>
+              <div className="absolute top-4 right-4 w-8 h-8 border-r-2 border-t-2 border-amber-500 rounded-tr-lg"></div>
+              <div className="absolute bottom-4 left-4 w-8 h-8 border-l-2 border-b-2 border-amber-500 rounded-bl-lg"></div>
+              <div className="absolute bottom-4 right-4 w-8 h-8 border-r-2 border-b-2 border-amber-500 rounded-br-lg"></div>
+
+              <div className="flex flex-col md:flex-row items-center gap-8 relative z-10">
+                <div className="w-48 h-48 bg-gradient-to-br from-slate-700 via-green-800 to-slate-800 rounded-lg flex items-center justify-center border-2 border-amber-600/50 shadow-xl">
+                  <Music className="w-12 h-12 text-amber-500" />
                 </div>
                 <div className="flex-1 text-center md:text-left">
-                  <h3 className="text-3xl font-bold mb-2">So We Sleep</h3>
-                  <p className="text-gray-400 mb-4">Debut Album • 2024</p>
-                  <p className="text-gray-300 leading-relaxed mb-6">
-                    An introspective journey through ambient soundscapes and ethereal melodies.
-                    "So We Sleep" explores themes of rest, dreams, and the quiet moments between
-                    consciousness and slumber.
+                  <h3 className="text-3xl font-bold mb-2 text-amber-400 font-serif">So We Sleep</h3>
+                  <p className="text-green-400 mb-4 font-serif italic">Debut Album • 2024</p>
+                  <p className="text-amber-100 leading-relaxed mb-6 font-serif">
+                    Journey through ethereal realms where ancient dreams meet modern harmonies.
+                    "So We Sleep" weaves tales of slumber and awakening, of rest found in
+                    sacred groves where time moves like gentle streams.
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <span className="px-3 py-1 bg-purple-600/30 rounded-full text-sm">Ambient</span>
-                    <span className="px-3 py-1 bg-purple-600/30 rounded-full text-sm">Electronic</span>
-                    <span className="px-3 py-1 bg-purple-600/30 rounded-full text-sm">Experimental</span>
+                    <span className="px-4 py-2 bg-green-700/40 rounded-full text-sm border border-green-600/50 text-green-300">Down Tempo</span>
+                    <span className="px-4 py-2 bg-amber-700/40 rounded-full text-sm border border-amber-600/50 text-amber-300">Electronic</span>
+                    <span className="px-4 py-2 bg-slate-700/40 rounded-full text-sm border border-slate-600/50 text-slate-300">Orchestral</span>
                   </div>
                 </div>
               </div>
@@ -100,11 +151,11 @@ const TsonuWebsite = () => {
                   <a
                       key={index}
                       href={service.url}
-                      className={`${service.color} hover:opacity-80 transition-all transform hover:scale-105 rounded-lg p-6 text-center group relative overflow-hidden`}
+                      className={`${service.color} transition-all transform hover:scale-105 rounded-lg p-6 text-center group relative overflow-hidden border border-amber-600/30`}
                   >
-                    <div className="absolute inset-0 bg-gradient-to-r from-white/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
-                    <ExternalLink className="w-6 h-6 mx-auto mb-2" />
-                    <span className="font-semibold">{service.name}</span>
+                    <div className="absolute inset-0 bg-gradient-to-r from-amber-500/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                    <ExternalLink className="w-6 h-6 mx-auto mb-2 relative z-10" />
+                    <span className="font-bold relative z-10">{service.name}</span>
                   </a>
               ))}
             </div>
@@ -112,52 +163,59 @@ const TsonuWebsite = () => {
         </section>
 
         {/* About Section */}
-        <section id="about" className="py-16 px-4">
+        <section id="about" className="py-16 px-4 relative">
           <div className="max-w-4xl mx-auto text-center">
-            <h2 className="text-4xl font-bold mb-8">About Tsonu</h2>
-            <div className="bg-white/5 rounded-xl p-8 backdrop-blur-sm border border-white/10">
-              <p className="text-lg text-gray-300 leading-relaxed mb-6">
-                Tsonu crafts immersive sonic experiences that blur the boundaries between
-                consciousness and dream. Drawing inspiration from the quiet hours of night
-                and the liminal spaces between sleep and waking, our music invites listeners
-                into a world of contemplative beauty.
+            <h2 className="text-4xl font-bold mb-8 text-amber-400 font-serif">The Chronicles</h2>
+            <div className="bg-slate-800/30 rounded-xl p-8 backdrop-blur-sm border-2 border-green-600/30 relative">
+              {/* Ornate decorative elements */}
+              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-2 w-4 h-4 bg-amber-600 rotate-45"></div>
+
+              <p className="text-lg text-amber-100 leading-relaxed mb-6 font-serif">
+                From the mists of forgotten realms, Tsonu emerges as a vessel for ancient
+                melodies that have slumbered for centuries. We craft musical tapestries
+                that bridge the mortal world with the ethereal, weaving stories of heroes,
+                dreams, and the sacred rest that comes after great journeys.
               </p>
-              <p className="text-lg text-gray-300 leading-relaxed">
-                With "So We Sleep," we explore the vulnerable moments of rest and the
-                profound peace found in surrender. Each track is a meditation on the
-                necessity of sleep, both as physical restoration and spiritual renewal.
+              <p className="text-lg text-amber-100 leading-relaxed font-serif">
+                With "So We Sleep," we invite you into a sanctuary where time moves slowly,
+                where the weight of the world falls away, and where the soul finds the peace
+                it has long sought. These are lullabies for the weary wanderer, hymns for
+                the dreaming heart.
               </p>
             </div>
           </div>
         </section>
 
         {/* Contact Section */}
-        <section id="contact" className="py-16 px-4 bg-black/20">
+        <section id="contact" className="py-16 px-4 bg-slate-900/50 relative">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-green-600 to-transparent"></div>
+
           <div className="max-w-4xl mx-auto text-center">
-            <h2 className="text-4xl font-bold mb-8">Get In Touch</h2>
-            <div className="bg-white/5 rounded-xl p-8 backdrop-blur-sm border border-white/10">
-              <p className="text-lg text-gray-300 mb-6">
-                For booking inquiries, press, or just to say hello
+            <h2 className="text-4xl font-bold mb-8 text-amber-400 font-serif">Send Word</h2>
+            <div className="bg-slate-800/30 rounded-xl p-8 backdrop-blur-sm border-2 border-amber-600/30">
+              <p className="text-lg text-amber-200 mb-6 font-serif">
+                For collaborations, bookings, or to share tales of your own journeys
               </p>
               <a
                   href="mailto:contact@tsonu.com"
-                  className="inline-flex items-center gap-2 bg-purple-600 hover:bg-purple-700 px-8 py-3 rounded-full font-semibold transition-all transform hover:scale-105"
+                  className="inline-flex items-center gap-2 bg-gradient-to-r from-green-700 to-green-800 hover:from-green-800 hover:to-green-900 px-8 py-3 rounded-full font-bold transition-all transform hover:scale-105 border border-green-600"
               >
                 <Mail className="w-5 h-5" />
-                contact@tsonu.music
+                contact@tsonu.com
               </a>
             </div>
           </div>
         </section>
 
         {/* Footer */}
-        <footer className="py-8 px-4 border-t border-white/10">
+        <footer className="py-8 px-4 border-t border-amber-600/30 bg-slate-900">
           <div className="max-w-6xl mx-auto text-center">
-            <p className="text-gray-400 mb-4">© 2024 Tsonu. All rights reserved.</p>
+            <div className="w-16 h-px bg-gradient-to-r from-transparent via-amber-600 to-transparent mx-auto mb-4"></div>
+            <p className="text-green-400 mb-4 font-serif">© 2024 Tsonu. All melodies blessed and protected.</p>
             <div className="flex justify-center space-x-6">
-              <a href="#instagram" className="text-gray-400 hover:text-white transition-colors">Instagram</a>
-              <a href="#twitter" className="text-gray-400 hover:text-white transition-colors">Twitter</a>
-              <a href="#facebook" className="text-gray-400 hover:text-white transition-colors">Facebook</a>
+              <a href="#instagram" className="text-amber-400 hover:text-amber-300 transition-colors">Instagram</a>
+              <a href="#twitter" className="text-amber-400 hover:text-amber-300 transition-colors">Twitter</a>
+              <a href="#facebook" className="text-amber-400 hover:text-amber-300 transition-colors">Facebook</a>
             </div>
           </div>
         </footer>
