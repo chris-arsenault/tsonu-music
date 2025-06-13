@@ -28,10 +28,11 @@ const TsonuWebsite = () => {
             <div className="flex justify-between items-center">
               <div className="flex items-center space-x-3">
                 <img
-                    src="/tsonu-t.png"
+                    src="/android-chrome-512x512.png"
                     alt="Tsonu Logo"
                     className="w-10 h-10 rounded-full object-cover"
                 />
+
                 <h1 className="text-2xl font-bold tracking-wider text-amber-400">TSONU</h1>
               </div>
               <div className="hidden md:flex space-x-8">
@@ -59,15 +60,11 @@ const TsonuWebsite = () => {
             <div className="mb-8">
               <div className="mb-6">
                 <img
-                    src="/tsonu-t.png"
+                    src="/tsonu-combined.png"
                     alt="Tsonu Logo"
-                    className="w-48 h-48 mx-auto drop-shadow-2xl object-contain"
+                    className="w-128 h-96 mx-auto drop-shadow-2xl object-contain"
                 />
               </div>
-
-              <h1 className="text-6xl md:text-8xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 drop-shadow-lg">
-                TSONU
-              </h1>
               <div className="w-32 h-1 bg-gradient-to-r from-green-600 to-green-700 mx-auto mb-6"></div>
               <p className="text-xl md:text-2xl text-amber-200 mb-8 font-serif italic">
                 Mystical soundscapes from ancient realms
