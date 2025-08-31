@@ -1,38 +1,281 @@
-.App {
-  text-align: center;
+/*
+ * Global styles for the Tsonu website.  A restrained colour palette
+ * drawn from the provided logos (dark backgrounds, muted golds and
+ * tree greens) helps tie the website back to the artist’s visual
+ * identity.  Section spacing and typography are kept open and
+ * breathable to prevent the design feeling sterile while still
+ * remaining minimalistic.
+ */
+
+:root {
+    --color-bg: #0f0f0f;
+    --color-panel: #171717;
+    --color-text: #e8e8e8;
+    --color-accent: #d4af37; /* warm gold */
+    --color-accent-hover: #e8c860;
+    --color-secondary: #2f6b2a; /* tree green */
+    --color-bacgkround-green: rgba(50, 80, 40, 0.4);
+    --max-content-width: 900px;
+    --font-base: 16px;
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-family);
+    line-height: 1.6;
+    scroll-behavior: smooth;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+/* Anchor defaults */
+a {
+    color: var(--color-accent);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+a:hover, a:focus {
+    color: var(--color-accent-hover);
 }
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  font-size: calc(10px + 2vmin);
-  color: white;
+/* Hero section */
+ .hero {
+     display: flex;
+     flex-direction: column;
+     align-items: center;
+     justify-content: center;
+     text-align: center;
+     padding: 4rem 1rem 3rem;
+     background: radial-gradient(circle at 50% 30%, var(--color-bacgkround-green), transparent 70%), var(--color-bg);
+ }
+.hero__logo {
+    width: 60%;
+    max-width: 500px;
+    height: auto;
+    margin-bottom: 1.5rem;
+}
+.hero__title {
+    font-size: 2.8rem;
+    margin: 0.5rem 0;
+    font-weight: 600;
+    color: var(--color-accent);
+}
+.hero__subtitle {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+    max-width: 600px;
+}
+.btn {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    border-radius: 2rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.btn--primary {
+    background: var(--color-accent);
+    color: #1a1a1a;
+}
+.btn--primary:hover,
+.btn--primary:focus {
+    background: var(--color-accent-hover);
 }
 
-.App-link {
-  color: #61dafb;
+
+/*!* Album Art *!*/
+/*#album-art {*/
+/*    background-attachment: scroll !important;*/
+/*    background-size: cover;*/
+/*    background-repeat: no-repeat;*/
+/*    background-position: center center;*/
+/*    box-sizing: border-box;*/
+/*    display: block;*/
+/*    position: absolute;*/
+/*    right: 0;*/
+/*    left: 0;*/
+/*    width: 100%;*/
+/*    height: 100%;*/
+/*    overflow: hidden;*/
+/*    -webkit-transform: none !important;*/
+/*    -moz-transform: none !important;*/
+/*    -o-transform: none !important;*/
+/*    -ms-transform: none !important;*/
+/*    transform: none !important;*/
+/*}*/
+
+#album-art img {
+    display: block;
+    width: 100%;
+    height: auto;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* Navigation */
+.nav {
+    background: #000;
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+.nav__list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+}
+.nav__item {
+    margin: 0;
+}
+.nav__item a {
+    display: block;
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    color: var(--color-text);
+    transition: background 0.2s ease;
+}
+.nav__item a:hover {
+    background: var(--color-panel);
+}
+
+
+.nav__logo {
+    width: 30px;
+    height: auto;
+}
+
+/* Section base styling */
+.section {
+    padding: 4rem 1.5rem;
+}
+.section__inner {
+    max-width: var(--max-content-width);
+    margin: 0 auto;
+}
+.section h2 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 2rem;
+    color: var(--color-accent);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.section p {
+    margin-bottom: 1.2rem;
+}
+
+/* Album section specifics */
+.section--album {
+    background: var(--color-panel);
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+
+}
+
+/* Music section */
+.section--music {
+    background: radial-gradient(circle at 50% 30%, rgba(50, 80, 40, 0.4), transparent 70%), var(--color-bg);
+}
+
+.section--music .player {
+    margin: 1.5rem 0;
+    border: 1px solid #333;
+    border-radius: 8px;
+    overflow: hidden;
+}
+.streaming-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.streaming-links__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--color-accent);
+    border-radius: 20px;
+    color: var(--color-accent);
+    transition: background 0.2s ease, color 0.2s ease;
+}
+.streaming-links__item svg {
+    width: 1.1rem;
+    height: 1.1rem;
+}
+.streaming-links__item:hover {
+    background: var(--color-accent);
+    color: #1a1a1a;
+}
+/* Connect section specifics */
+.section--connect {
+    background: var(--color-panel);
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+}
+/* Social links */
+.social-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+.social-links__item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--color-secondary);
+    border-radius: 20px;
+    color: var(--color-secondary);
+    transition: background 0.2s ease, color 0.2s ease;
+}
+.social-links__item svg {
+    width: 1.1rem;
+    height: 1.1rem;
+}
+.social-links__item:hover {
+    background: var(--color-secondary);
+    color: #1a1a1a;
+}
+
+/* Footer */
+.footer {
+    background: #000;
+    text-align: center;
+    padding: 1rem 1rem;
+    border-top: 1px solid #222;
+    font-size: 0.9rem;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.footer__logo {
+    width: 60px;
+    height: auto;
+    margin-bottom: 0.5rem;
+}
+.footer p {
+    transform: translate(10px, -100%)
+}
+
+/* Responsive adjustments */
+@media (max-width: 600px) {
+    .hero__title {
+        font-size: 2rem;
+    }
+    .nav__list {
+        flex-direction: column;
+        align-items: center;
+    }
+    .nav__item a {
+        padding: 0.5rem 1rem;
+    }
+    .streaming-links, .social-links {
+        justify-content: center;
+    }
 }
