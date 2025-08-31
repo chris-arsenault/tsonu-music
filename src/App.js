@@ -60,6 +60,11 @@ function App() {
                         and Dorico (Orchestral edit of Reign of the Simmered).
                     </p>
                     <p>
+                        I've been a fan of dreams for most of my adult life, after having taught myself to lucid dream
+                        in my teens to avoid nightmares (the monsters in the closet couldn't do shit against shotguns).
+                        I dream of spaceships, wizards,
+                    </p>
+                    <p>
                         No journey would be complete with out the friends we meet (or keep) along the way, so big should out
                         to <a href="https://www.tonereverie.com">Tony</a> for providing feedback on the album, coaching me
                         through mixing it, and providing the final mastering.
@@ -88,19 +93,19 @@ function App() {
                         ></iframe>
                     </div>
                     <div className="streaming-links">
-                        <a href="#" className="streaming-links__item" aria-label="Spotify">
+                        <a href="#music" className="streaming-links__item" aria-label="Spotify">
                             <FaSpotify />
                             <span>Spotify</span>
                         </a>
-                        <a href="#" className="streaming-links__item" aria-label="Bandcamp">
+                        <a href="#music" className="streaming-links__item" aria-label="Bandcamp">
                             <FaBandcamp />
                             <span>Bandcamp</span>
                         </a>
-                        <a href="#" className="streaming-links__item" aria-label="SoundCloud">
+                        <a href="#music" className="streaming-links__item" aria-label="SoundCloud">
                             <FaSoundcloud />
                             <span>SoundCloud</span>
                         </a>
-                        <a href="#" className="streaming-links__item" aria-label="YouTube">
+                        <a href="#music" className="streaming-links__item" aria-label="YouTube">
                             <FaYoutube />
                             <span>YouTube</span>
                         </a>
