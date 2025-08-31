@@ -61,8 +61,9 @@ function App() {
                     </p>
                     <p>
                         I've been a fan of dreams for most of my adult life, after having taught myself to lucid dream
-                        in my teens to avoid nightmares (the monsters in the closet couldn't do shit against shotguns).
-                        I dream of spaceships, wizards,
+                        in my teens.  I dream of spaceships, wizards, and epic battles along with the occasional forgetting
+                        to turn my homework in. This album is the adventures I have while dreaming, the same
+                        fantasy as books or the RPGs that inspired some of these tracks.
                     </p>
                     <p>
                         No journey would be complete with out the friends we meet (or keep) along the way, so big should out
