@@ -11,6 +11,7 @@ import {
 } from 'react-icons/fa';
 
 import InstagramIframe from "./InstagramIframe";
+import CookieBanner from './CookieBanner';
 
 // Import assets.  When this project is compiled all assets under
 // src/assets will be bundled automatically.
@@ -32,6 +33,7 @@ import albumCover from './assets/so-we-sleep-front-no-text.jpg';
 function App() {
     return (
         <div className="App">
+            <CookieBanner measurementId="G-PZ5LZZL2YE" />
 
 
             {/* Navigation */}
