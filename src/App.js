@@ -7,7 +7,7 @@ import {
     FaSpotify,
     FaYoutube,
     FaEnvelope,
-    FaAmazon
+    FaAmazon, FaApple
 } from 'react-icons/fa';
 
 // Import assets.  When this project is compiled all assets under
@@ -98,6 +98,10 @@ function App() {
                         <a href="https://open.spotify.com/album/6yC28QGn2Zv8Lr1TIAHYPD" className="streaming-links__item" aria-label="Spotify">
                             <FaSpotify />
                             <span>Spotify</span>
+                        </a>
+                        <a href="https://music.apple.com/us/album/so-we-sleep/1836883166" className="streaming-links__item" aria-label="Spotify">
+                            <FaApple />
+                            <span>Apple</span>
                         </a>
                         <a href="https://music.youtube.com/playlist?list=OLAK5uy_l6Sv8O1P37iK9Qjz621dYc909fE34aoms" className="streaming-links__item" aria-label="YouTube">
                             <FaYoutube />
