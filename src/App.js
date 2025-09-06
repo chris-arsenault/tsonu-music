@@ -1,5 +1,14 @@
 import React from 'react';
-import {FaTwitter, FaInstagram, FaSoundcloud, FaBandcamp, FaSpotify, FaYoutube, FaEnvelope} from 'react-icons/fa';
+import {
+    FaTwitter,
+    FaInstagram,
+    FaSoundcloud,
+    FaBandcamp,
+    FaSpotify,
+    FaYoutube,
+    FaEnvelope,
+    FaAmazon
+} from 'react-icons/fa';
 
 // Import assets.  When this project is compiled all assets under
 // src/assets will be bundled automatically.
@@ -83,32 +92,24 @@ function App() {
                     <h2>Listen</h2>
                     {/* Replace the iframe source with an actual SoundCloud or Spotify embed when available. */}
                     <div className="player">
-                        <iframe
-                            title="Placeholder streaming widget"
-                            width="100%"
-                            height="166"
-                            scrolling="no"
-                            frameBorder="no"
-                            allow="autoplay"
-                            src="https://w.soundcloud.com/player/?url=&amp;color=%231b1b1b&amp;auto_play=false&amp;hide_related=false&amp;show_comments=true&amp;show_user=true&amp;show_reposts=false&amp;show_teaser=true"
-                        ></iframe>
+                        <iframe title="bcplayer" width="100%" height="400px" src="https://bandcamp.com/EmbeddedPlayer/album=2450012966/size=large/bgcol=333333/linkcol=2ebd35/artwork=small/transparent=true/" seamless><a href="https://tsonu.bandcamp.com/album/so-we-sleep">So We Sleep by Tsonu</a></iframe>
                     </div>
                     <div className="streaming-links">
-                        <a href="#music" className="streaming-links__item" aria-label="Spotify">
+                        <a href="https://open.spotify.com/album/6yC28QGn2Zv8Lr1TIAHYPD" className="streaming-links__item" aria-label="Spotify">
                             <FaSpotify />
                             <span>Spotify</span>
                         </a>
-                        <a href="#music" className="streaming-links__item" aria-label="Bandcamp">
+                        <a href="https://music.youtube.com/playlist?list=OLAK5uy_l6Sv8O1P37iK9Qjz621dYc909fE34aoms" className="streaming-links__item" aria-label="YouTube">
+                            <FaYoutube />
+                            <span>YouTube</span>
+                        </a>
+                        <a href="https://tsonu.bandcamp.com/album/so-we-sleep" className="streaming-links__item" aria-label="Bandcamp">
                             <FaBandcamp />
                             <span>Bandcamp</span>
                         </a>
-                        <a href="#music" className="streaming-links__item" aria-label="SoundCloud">
-                            <FaSoundcloud />
-                            <span>SoundCloud</span>
-                        </a>
-                        <a href="#music" className="streaming-links__item" aria-label="YouTube">
-                            <FaYoutube />
-                            <span>YouTube</span>
+                        <a href="https://music.amazon.com/albums/B0FPBB5QCR" className="streaming-links__item" aria-label="SoundCloud">
+                            <FaAmazon />
+                            <span>Amazon</span>
                         </a>
                     </div>
                 </div>
