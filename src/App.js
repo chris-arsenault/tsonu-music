@@ -10,6 +10,8 @@ import {
     FaAmazon, FaApple
 } from 'react-icons/fa';
 
+import InstagramIframe from "./InstagramIframe";
+
 // Import assets.  When this project is compiled all assets under
 // src/assets will be bundled automatically.
 import logoLarge from './assets/tsonu-combined.png';
@@ -35,7 +37,7 @@ function App() {
             {/* Navigation */}
             <nav className="nav">
                 <ul className="nav__list">
-                    <li className="nav__item"><a href="#home"><img src={logoSmall} class="nav__logo" alt="Tsonu emblem" /></a></li>
+                    <li className="nav__item"><a href="#home"><img src={logoSmall} className="nav__logo" alt="Tsonu emblem" /></a></li>
                     <li className="nav__item"><a href="#album">Album</a></li>
                     <li className="nav__item"><a href="#music">Music</a></li>
                     <li className="nav__item"><a href="#connect">Connect</a></li>
@@ -153,12 +155,32 @@ function App() {
                             <span>SoundCloud - Betas & Other Projects</span>
                         </a>
                     </div>
+
+
+                </div>
+            </section>
+            <section id="grow" className="section section--grow">
+
+                <div className="section__inner">
+                    <h2>Help Me Grow</h2>
+                    <div>
+                        <blockquote className="twitter-tweet"><p lang="en" dir="ltr">Debut album, So We Sleep, out now!
+                            Good music for adventuring:<a href="https://t.co/q4rq1MbV86">https://t.co/q4rq1MbV86</a>
+                        </p>&mdash; Tsonu (@Tsonu_Music) <a
+                            href="https://twitter.com/Tsonu_Music/status/1964408798619267289?ref_src=twsrc%5Etfw">September
+                            6, 2025</a></blockquote>
+                        <script async src="https://platform.twitter.com/widgets.js" charSet="utf-8"></script>
+                    </div>
+                    <div>
+
+                        <InstagramIframe url="https://www.instagram.com/p/DORbp-jkorj/" height="800"/>
+                    </div>
                 </div>
             </section>
 
             {/* Footer */}
             <footer className="footer">
-                <img src={logoSmall} alt="Tsonu emblem" className="footer__logo" />
+                <img src={logoSmall} alt="Tsonu emblem" className="footer__logo"/>
                 <p>&copy; {new Date().getFullYear()} Tsonu &nbsp;•&nbsp; All rights reserved.</p>
             </footer>
         </div>

@@ -242,7 +242,11 @@ a:hover, a:focus {
     background: var(--color-secondary);
     color: #1a1a1a;
 }
-
+.section--grow {
+    background: radial-gradient(circle at 50% 30%, rgba(50, 80, 40, 0.4), transparent 70%), var(--color-bg);
+    border-top: 1px solid #222;
+    border-bottom: 1px solid #222;
+}
 /* Footer */
 .footer {
     background: #000;
