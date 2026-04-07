@@ -1,23 +1,22 @@
-// InstagramIframe.tsx
-import React, { useMemo } from "react";
+import { useMemo, CSSProperties } from "react";
 
 type Props = {
-    url: string;          // canonical post URL: https://www.instagram.com/p/POSTID/
-    showCaption?: boolean; // best-effort hint
-    maxWidth?: number;     // default 540
-    height?: number;       // sensible default below
+    url: string;
+    showCaption?: boolean;
+    maxWidth?: number;
+    height?: number;
     className?: string;
-    style?: React.CSSProperties;
+    style?: CSSProperties;
 };
 
 export default function InstagramIframe({
-                                            url,
-                                            showCaption = false,
-                                            maxWidth = 540,
-                                            height = 680,
-                                            className,
-                                            style,
-                                        }: Props) {
+    url,
+    showCaption = false,
+    maxWidth = 540,
+    height = 680,
+    className,
+    style,
+}: Props) {
     const cleanUrl = useMemo(() => {
         try { const u = new URL(url); u.search = ""; return u.toString(); }
         catch { return url; }

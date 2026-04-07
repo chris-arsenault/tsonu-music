@@ -1,0 +1,5 @@
+project: tsonu-music
+prefix: tsonu-music
+stack:
+  - typescript
+  - terraform

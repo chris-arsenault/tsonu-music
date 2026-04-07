@@ -1,15 +1,19 @@
-// CookieBanner.tsx
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState, CSSProperties } from 'react';
 import { getStoredConsent, storeConsent, loadGA, setConsentDenied } from './cookie-consent';
 
+type Props = {
+    measurementId: string;
+    respectDoNotTrack?: boolean;
+};
 
-export default function CookieBanner({ measurementId, respectDoNotTrack = true }) {
+export default function CookieBanner({ measurementId, respectDoNotTrack = true }: Props) {
     const [, setConsent] = useState(() => getStoredConsent());
     const [show, setShow] = useState(false);
 
     // On mount: if already granted, load GA. If denied, set consent mode to denied.
     useEffect(() => {
-        const dnt = typeof navigator !== 'undefined' && ('doNotTrack' in navigator) && (navigator.doNotTrack === '1' || (navigator).msDoNotTrack === '1');
+        const nav = navigator as any;
+        const dnt = typeof navigator !== 'undefined' && ('doNotTrack' in navigator) && (nav.doNotTrack === '1' || nav.msDoNotTrack === '1');
         const stored = getStoredConsent();
 
         if (respectDoNotTrack && dnt && stored === 'unset') {
@@ -64,7 +68,7 @@ export default function CookieBanner({ measurementId, respectDoNotTrack = true }
     );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+const styles: Record<string, CSSProperties> = {
     wrap: {
         position: 'fixed',
         inset: 'auto 0 0 0',

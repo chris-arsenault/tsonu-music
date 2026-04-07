@@ -1,70 +1,40 @@
-# Getting Started with Create React App
+# tsonu-music
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+Marketing site for the band **Tsonu**. Single-page React app announcing the debut album *So We Sleep* with streaming and social links.
 
-## Available Scripts
+## URLs
 
-In the project directory, you can run:
+One CloudFront distribution serves four hostnames:
 
-### `npm start`
+- **`music.tsonu.com`** — primary
+- `tsonu.com`
+- `www.tsonu.com`
+- `music.ahara.io`
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+## Architecture
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+- **Frontend**: React 19 + Vite + TypeScript, in [`frontend/`](./frontend)
+- **Infrastructure**: Terraform in [`infrastructure/terraform/`](./infrastructure/terraform) using the [`website`](https://github.com/chris-arsenault/ahara-tf-patterns/tree/main/modules/website) module from `ahara-tf-patterns` (S3 + CloudFront + ACM + WAF + KMS + Route53)
+- **No backend, no database, no auth.** Analytics is Google Analytics 4 loaded lazily after user consent.
 
-### `npm test`
+## Local development
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```bash
+cd frontend
+pnpm install
+pnpm dev          # http://localhost:3000
+```
 
-### `npm run build`
+## Pre-commit checks
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```bash
+make ci           # runs eslint + tsc --noEmit + terraform fmt -check
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Deploy
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Deploys are CI-only. Pushing to `main` triggers the shared platform workflow at [`.github/workflows/ci.yml`](./.github/workflows/ci.yml), which runs lint/typecheck, builds the frontend, and applies Terraform.
 
-### `npm run eject`
+## License
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+MIT — see [LICENSE](./LICENSE).

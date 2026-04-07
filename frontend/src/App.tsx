@@ -1,4 +1,3 @@
-import React from 'react';
 import {
     FaTwitter,
     FaInstagram,
@@ -175,7 +174,7 @@ function App() {
                     </div>
                     <div>
 
-                        <InstagramIframe url="https://www.instagram.com/p/DORbp-jkorj/" height="800"/>
+                        <InstagramIframe url="https://www.instagram.com/p/DORbp-jkorj/" height={800}/>
                     </div>
                 </div>
             </section>
