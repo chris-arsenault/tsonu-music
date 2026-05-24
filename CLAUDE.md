@@ -1,9 +1,10 @@
 # Agent Guide
 
 Marketing site and first-party streaming surface for the band **Tsonu**. The
-public React app renders catalog, album, and track pages with a bottom sticky
-HLS player. The admin surface manages catalog metadata, master uploads, encode
-jobs, publishing, and CloudWatch RUM playback stats.
+public React app renders catalog, release, song, and track pages with a bottom
+sticky HLS player. The admin surface manages songs, recordings, release
+containers, source-master uploads, encode jobs, publishing, and CloudWatch RUM
+playback stats.
 
 ## URLs
 
@@ -43,6 +44,6 @@ and Rust Lambda artifacts under `backend/`.
 
 - **`music.tsonu.com` is the canonical URL** but all four hostnames resolve to the same S3 content. The band's historical `tsonu.com` presence is preserved.
 - **`frontend/build/`** is the Vite output dir (not the default `dist/`) — preserved from the legacy Create React App layout to minimize churn in downstream paths.
-- **RDS is the catalog source of truth**. Do not commit runtime album, track, or job JSON data into this repo.
+- **RDS is the catalog source of truth**. Do not commit runtime release, song, recording, track, or job JSON data into this repo.
 - **Vitest is enabled** for frontend catalog and analytics behavior.
 - **Tailwind is loaded via CDN** (`https://cdn.tailwindcss.com`) in `frontend/index.html`, not bundled. This predates the Vite migration and hasn't been untangled.

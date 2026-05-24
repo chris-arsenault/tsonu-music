@@ -5,7 +5,7 @@ import {
     formatTime,
     useMusicPlayer,
 } from './MusicPlayerContext';
-import { albumPath, handleInternalLink, trackPath } from './routes';
+import { handleInternalLink, releasePath, trackPath } from './routes';
 
 export default function StickyPlayer() {
     const player = useMusicPlayer();
@@ -23,7 +23,7 @@ export default function StickyPlayer() {
         );
     }
 
-    if (player.loadState === 'loading' || !player.albumManifest || !player.selectedTrack) {
+    if (player.loadState === 'loading' || !player.releaseManifest || !player.selectedTrack) {
         return (
             <aside className="bottom-player bottom-player--status" aria-busy="true">
                 <LoaderCircle className="bottom-player__spinner" aria-hidden="true" />
@@ -37,27 +37,27 @@ export default function StickyPlayer() {
             <div className="bottom-player__layout">
                 <a
                     className="bottom-player__artwork"
-                    href={albumPath(player.albumManifest.slug)}
-                    onClick={(event) => handleInternalLink(event, albumPath(player.albumManifest!.slug))}
-                    aria-label={`Open ${player.albumManifest.title}`}
+                    href={releasePath(player.releaseManifest.slug)}
+                    onClick={(event) => handleInternalLink(event, releasePath(player.releaseManifest!.slug))}
+                    aria-label={`Open ${player.releaseManifest.title}`}
                 >
-                    <img src={player.artworkSrc} alt={player.albumManifest.artwork.altText} />
+                    <img src={player.artworkSrc} alt={player.releaseManifest.artwork.altText} />
                 </a>
 
                 <div className="bottom-player__now-playing">
                     <a
-                        href={trackPath(player.albumManifest.slug, player.selectedTrack.slug)}
-                        onClick={(event) => handleInternalLink(event, trackPath(player.albumManifest!.slug, player.selectedTrack!.slug))}
+                        href={trackPath(player.releaseManifest.slug, player.selectedTrack.slug)}
+                        onClick={(event) => handleInternalLink(event, trackPath(player.releaseManifest!.slug, player.selectedTrack!.slug))}
                         className="bottom-player__track"
                     >
                         {player.selectedTrack.title}
                     </a>
                     <a
-                        href={albumPath(player.albumManifest.slug)}
-                        onClick={(event) => handleInternalLink(event, albumPath(player.albumManifest!.slug))}
+                        href={releasePath(player.releaseManifest.slug)}
+                        onClick={(event) => handleInternalLink(event, releasePath(player.releaseManifest!.slug))}
                         className="bottom-player__album"
                     >
-                        {player.albumManifest.artistName} — {player.albumManifest.title}
+                        {player.releaseManifest.artistName} — {player.releaseManifest.title}
                     </a>
                     {player.playbackError ? <span className="bottom-player__error">{player.playbackError}</span> : null}
                 </div>

@@ -3,7 +3,7 @@ import type { PlaybackQuality, StableId } from './catalog/media-catalog';
 import { getRuntimeConfig, type AppRuntimeConfig } from './runtime-config';
 
 export const playerEventNames = [
-    'album_view',
+    'release_view',
     'track_impression',
     'play_start',
     'play_pause',
@@ -19,8 +19,9 @@ export const playerEventNames = [
 export type PlayerEventName = (typeof playerEventNames)[number];
 
 export interface PlayerEventContext {
-    albumId: StableId;
     releaseId: StableId;
+    songId?: StableId;
+    recordingId?: StableId;
     trackId?: StableId;
     assetId?: StableId;
     quality?: PlaybackQuality | string;
@@ -32,8 +33,9 @@ type PlayerEventExtra = Record<string, string | number | boolean | null>;
 
 type PlayerEventPayload = PlayerEventExtra & {
     eventVersion: number;
-    albumId: StableId;
     releaseId: StableId;
+    songId: StableId | null;
+    recordingId: StableId | null;
     trackId: StableId | null;
     assetId: StableId | null;
     selectedQuality: string | null;
@@ -183,8 +185,9 @@ function buildPayload(context: PlayerEventContext, extra: PlayerEventExtra = {})
     return {
         ...extra,
         eventVersion: config.rum.playbackEventVersion ?? 1,
-        albumId: context.albumId,
         releaseId: context.releaseId,
+        songId: context.songId ?? null,
+        recordingId: context.recordingId ?? null,
         trackId: context.trackId ?? null,
         assetId: context.assetId ?? null,
         selectedQuality: context.quality ?? null,
@@ -222,13 +225,13 @@ export function recordPlayerEvent(
     });
 }
 
-export function recordAlbumView(context: PlayerEventContext): void {
-    recordOnce(`album_view:${context.albumId}:${context.releaseId}`, 'album_view', context);
+export function recordReleaseView(context: PlayerEventContext): void {
+    recordOnce(`release_view:${context.releaseId}`, 'release_view', context);
 }
 
 export function recordTrackImpression(context: PlayerEventContext): void {
     recordOnce(
-        `track_impression:${context.albumId}:${context.releaseId}:${context.trackId ?? context.assetId ?? 'unknown'}`,
+        `track_impression:${context.releaseId}:${context.trackId ?? context.recordingId ?? context.assetId ?? 'unknown'}`,
         'track_impression',
         context,
     );

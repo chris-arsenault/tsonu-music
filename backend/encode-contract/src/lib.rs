@@ -23,8 +23,8 @@ pub struct EncodeJob {
     pub schema_version: u8,
     pub entity_type: String,
     pub job_id: String,
-    pub album_id: String,
-    pub track_id: String,
+    pub song_id: String,
+    pub recording_id: String,
     pub status: EncodeStatus,
     pub requested_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,8 +44,8 @@ pub struct EncodeJob {
 impl EncodeJob {
     pub fn queued(
         job_id: String,
-        album_id: String,
-        track_id: String,
+        song_id: String,
+        recording_id: String,
         requested_at: String,
         input: ObjectRef,
         output: EncodeOutput,
@@ -54,8 +54,8 @@ impl EncodeJob {
             schema_version: SCHEMA_VERSION,
             entity_type: ENCODE_ENTITY_TYPE.to_string(),
             job_id,
-            album_id,
-            track_id,
+            song_id,
+            recording_id,
             status: EncodeStatus::Queued,
             requested_at,
             started_at: None,
@@ -201,8 +201,10 @@ pub fn encode_job_key(job_id: &str) -> String {
     format!("{ENCODE_JOB_KEY_PREFIX}{job_id}")
 }
 
-pub fn build_job_id(track_id: &str, timestamp: &str) -> String {
-    let track_suffix = track_id.strip_prefix("track_").unwrap_or(track_id);
+pub fn build_job_id(recording_id: &str, timestamp: &str) -> String {
+    let track_suffix = recording_id
+        .strip_prefix("recording_")
+        .unwrap_or(recording_id);
     let suffix = bounded_component(
         track_suffix,
         96usize.saturating_sub("_encode_".len() + timestamp.len()),
@@ -331,8 +333,8 @@ mod tests {
 
     #[test]
     fn builds_bounded_job_ids() {
-        let long_track = format!("track_{}", "a".repeat(140));
-        let job_id = build_job_id(&long_track, "20260523t195530z");
+        let long_recording = format!("recording_{}", "a".repeat(140));
+        let job_id = build_job_id(&long_recording, "20260523t195530z");
 
         assert!(job_id.starts_with("job_"));
         assert!(job_id.len() <= 100);
@@ -362,12 +364,12 @@ mod tests {
     fn state_transitions_add_timestamps_and_error() {
         let mut job = EncodeJob::queued(
             "job_x_encode_20260523t195530z".to_string(),
-            "album_x".to_string(),
-            "track_x".to_string(),
+            "song_x".to_string(),
+            "recording_x".to_string(),
             "2026-05-23T19:55:30Z".to_string(),
             ObjectRef {
                 bucket: "masters".to_string(),
-                key: "masters/album_x/track_x/source.wav".to_string(),
+                key: "masters/recording_x/source.wav".to_string(),
                 version_id: None,
                 etag: None,
             },

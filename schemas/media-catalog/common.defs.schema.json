@@ -5,7 +5,7 @@
   "$defs": {
     "stableId": {
       "type": "string",
-      "pattern": "^(album|release|track|asset|job)_[a-z0-9][a-z0-9_-]{2,96}$"
+      "pattern": "^(song|recording|release|track|asset|job)_[a-z0-9][a-z0-9_-]{2,96}$"
     },
     "slug": {
       "type": "string",
@@ -97,6 +97,25 @@
       "properties": {
         "label": { "type": "string", "minLength": 1 },
         "url": { "$ref": "#/$defs/httpsUrl" }
+      }
+    },
+    "sourceMaster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "key", "format", "uploadedAt"],
+      "properties": {
+        "bucket": { "type": "string", "minLength": 1 },
+        "key": { "$ref": "#/$defs/relativePath" },
+        "versionId": { "type": "string" },
+        "etag": { "type": "string" },
+        "format": {
+          "type": "string",
+          "enum": ["wav", "aiff", "flac"]
+        },
+        "uploadedAt": { "$ref": "#/$defs/isoDateTime" },
+        "sampleRateHz": { "type": "integer", "minimum": 1 },
+        "bitDepth": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 }
       }
     }
   }

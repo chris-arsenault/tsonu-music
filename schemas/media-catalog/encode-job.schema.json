@@ -8,8 +8,8 @@
     "schemaVersion",
     "entityType",
     "jobId",
-    "albumId",
-    "trackId",
+    "songId",
+    "recordingId",
     "status",
     "requestedAt",
     "input",
@@ -19,8 +19,8 @@
     "schemaVersion": { "const": 1 },
     "entityType": { "const": "encodeJob" },
     "jobId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
-    "albumId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
-    "trackId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "songId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "recordingId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
     "status": {
       "type": "string",
       "enum": ["queued", "running", "succeeded", "failed", "canceled"]

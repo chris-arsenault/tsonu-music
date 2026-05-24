@@ -1397,12 +1397,12 @@ mod tests {
     fn validates_encode_event_contract() {
         let job = EncodeJob::queued(
             "job_so-we-sleep_01_encode_20260523".to_string(),
-            "album_so-we-sleep".to_string(),
-            "track_so-we-sleep_01".to_string(),
+            "song_so-we-sleep_01".to_string(),
+            "recording_so-we-sleep_01".to_string(),
             "2026-05-23T19:55:30Z".to_string(),
             ObjectRef {
                 bucket: "masters".to_string(),
-                key: "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav".to_string(),
+                key: "masters/recording_so-we-sleep_01/source.wav".to_string(),
                 version_id: None,
                 etag: None,
             },
@@ -1422,12 +1422,12 @@ mod tests {
     fn rejects_non_queued_encode_event() {
         let mut job = EncodeJob::queued(
             "job_so-we-sleep_01_encode_20260523".to_string(),
-            "album_so-we-sleep".to_string(),
-            "track_so-we-sleep_01".to_string(),
+            "song_so-we-sleep_01".to_string(),
+            "recording_so-we-sleep_01".to_string(),
             "2026-05-23T19:55:30Z".to_string(),
             ObjectRef {
                 bucket: "masters".to_string(),
-                key: "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav".to_string(),
+                key: "masters/recording_so-we-sleep_01/source.wav".to_string(),
                 version_id: None,
                 etag: None,
             },

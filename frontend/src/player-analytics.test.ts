@@ -86,8 +86,9 @@ describe('player analytics', () => {
         const { analytics, AwsRum, addSessionAttributes, recordEvent } = await loadAnalyticsWithRum();
 
         analytics.recordPlayStart({
-            albumId: 'album_so-we-sleep',
             releaseId: 'release_so-we-sleep_2026',
+            songId: 'song_so-we-sleep_01',
+            recordingId: 'recording_so-we-sleep_01',
             trackId: 'track_so-we-sleep_01',
             assetId: 'asset_so-we-sleep_01_hls',
             quality: 'aac-320',
@@ -116,8 +117,9 @@ describe('player analytics', () => {
             'play_start',
             expect.objectContaining({
                 eventVersion: 7,
-                albumId: 'album_so-we-sleep',
                 releaseId: 'release_so-we-sleep_2026',
+                songId: 'song_so-we-sleep_01',
+                recordingId: 'recording_so-we-sleep_01',
                 trackId: 'track_so-we-sleep_01',
                 assetId: 'asset_so-we-sleep_01_hls',
                 selectedQuality: 'aac-320',
@@ -131,28 +133,29 @@ describe('player analytics', () => {
         );
     });
 
-    test('deduplicates album and track impressions per page session', async () => {
+    test('deduplicates release and track impressions per page session', async () => {
         const { analytics, recordEvent } = await loadAnalyticsWithRum();
-        const albumContext = {
-            albumId: 'album_so-we-sleep' as const,
+        const releaseContext = {
             releaseId: 'release_so-we-sleep_2026' as const,
             assetId: 'asset_so-we-sleep_cover' as const,
         };
         const trackContext = {
-            ...albumContext,
+            ...releaseContext,
+            songId: 'song_so-we-sleep_01' as const,
+            recordingId: 'recording_so-we-sleep_01' as const,
             trackId: 'track_so-we-sleep_01' as const,
             assetId: 'asset_so-we-sleep_01_hls' as const,
             durationSeconds: 180,
         };
 
-        analytics.recordAlbumView(albumContext);
-        analytics.recordAlbumView(albumContext);
+        analytics.recordReleaseView(releaseContext);
+        analytics.recordReleaseView(releaseContext);
         analytics.recordTrackImpression(trackContext);
         analytics.recordTrackImpression(trackContext);
 
         await vi.waitFor(() => expect(recordEvent).toHaveBeenCalledTimes(2));
         expect(recordEvent.mock.calls.map(([eventName]) => eventName)).toEqual([
-            'album_view',
+            'release_view',
             'track_impression',
         ]);
     });
@@ -182,7 +185,6 @@ describe('player analytics', () => {
 
         const analytics = await import('./player-analytics');
         analytics.recordPlayPause({
-            albumId: 'album_so-we-sleep',
             releaseId: 'release_so-we-sleep_2026',
             trackId: 'track_so-we-sleep_01',
         });

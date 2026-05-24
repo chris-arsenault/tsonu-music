@@ -15,15 +15,15 @@ import InstagramIframe from './InstagramIframe';
 import CookieBanner from './CookieBanner';
 import { AuthProvider } from './auth-context';
 import { AdminRoute } from './admin/AdminRoute';
-import { AlbumPage, CatalogPage, TrackPage } from './music/CatalogPages';
+import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
 import { getArtworkUrl } from './catalog/catalog-client';
-import type { CatalogAlbumSummary } from './catalog/media-catalog';
+import type { CatalogReleaseSummary } from './catalog/media-catalog';
 import {
-    albumPath,
     decodePathPart,
     handleInternalLink,
+    releasePath,
     useCurrentRoute,
 } from './music/routes';
 
@@ -45,18 +45,22 @@ function renderPublicRoute(route: string) {
         return <CatalogPage />;
     }
 
-    if (parts[0] === 'albums' && parts[1]) {
+    if ((parts[0] === 'releases' || parts[0] === 'albums') && parts[1]) {
         const slug = decodePathPart(parts[1]) ?? '';
         if (slug === LAUNCH_ALBUM_SLUG) {
             return <SoWeSleepLaunchPage />;
         }
-        return <AlbumPage slug={slug} />;
+        return <ReleasePage slug={slug} />;
+    }
+
+    if (parts[0] === 'songs' && parts[1]) {
+        return <SongPage slug={decodePathPart(parts[1]) ?? ''} />;
     }
 
     if (parts[0] === 'tracks' && parts[1] && parts[2]) {
         return (
             <TrackPage
-                albumSlug={decodePathPart(parts[1]) ?? ''}
+                releaseSlug={decodePathPart(parts[1]) ?? ''}
                 trackSlug={decodePathPart(parts[2]) ?? ''}
             />
         );
@@ -70,9 +74,9 @@ function renderPublicRoute(route: string) {
  * ----------------------------------------------------------------- */
 function HomePage() {
     const player = useMusicPlayer();
-    const albums = player.catalog?.albums ?? [];
-    const featuredAlbum = albums[0];
-    const otherAlbums = albums.slice(1, 7);
+    const releases = player.catalog?.releases ?? [];
+    const featuredRelease = releases[0];
+    const otherReleases = releases.slice(1, 7);
 
     return (
         <div className="home">
@@ -92,8 +96,8 @@ function HomePage() {
                 <div className="featured__inner">
                     <a
                         className="featured__art"
-                        href={albumPath(LAUNCH_ALBUM_SLUG)}
-                        onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}
+                        href={releasePath(LAUNCH_ALBUM_SLUG)}
+                        onClick={(event) => handleInternalLink(event, releasePath(LAUNCH_ALBUM_SLUG))}
                         aria-label="Open So We Sleep"
                     >
                         <img src={albumCover} alt="So We Sleep cover art" />
@@ -114,23 +118,23 @@ function HomePage() {
                             <button
                                 type="button"
                                 className="button--primary"
-                                onClick={() => featuredAlbum ? player.playAlbum(featuredAlbum.albumId) : undefined}
-                                disabled={!featuredAlbum}
+                                onClick={() => featuredRelease ? player.playRelease(featuredRelease.releaseId) : undefined}
+                                disabled={!featuredRelease}
                             >
                                 <Play aria-hidden="true" /> Play Album
                             </button>
                             <a
-                                href={albumPath(LAUNCH_ALBUM_SLUG)}
-                                onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}
+                                href={releasePath(LAUNCH_ALBUM_SLUG)}
+                                onClick={(event) => handleInternalLink(event, releasePath(LAUNCH_ALBUM_SLUG))}
                             >
-                                Album Page
+                                Release Page
                             </a>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <CatalogueRibbon featured={featuredAlbum} others={otherAlbums} />
+            <CatalogRibbon featured={featuredRelease} others={otherReleases} />
 
             <section className="bio">
                 <div className="bio__inner">
@@ -175,49 +179,49 @@ function HomePage() {
     );
 }
 
-function CatalogueRibbon({
+function CatalogRibbon({
     featured,
     others,
 }: {
-    featured: CatalogAlbumSummary | undefined;
-    others: CatalogAlbumSummary[];
+    featured: CatalogReleaseSummary | undefined;
+    others: CatalogReleaseSummary[];
 }) {
     const { mediaBaseUrl } = useMusicPlayer();
-    const items = [featured, ...others].filter((album): album is CatalogAlbumSummary => Boolean(album));
+    const items = [featured, ...others].filter((release): release is CatalogReleaseSummary => Boolean(release));
 
     if (items.length === 0) {
         return null;
     }
 
     return (
-        <section className="ribbon" aria-label="Catalogue">
+        <section className="ribbon" aria-label="Catalog">
             <div className="ribbon__inner">
                 <div className="ribbon__head">
-                    <h2>Catalogue</h2>
+                    <h2>Catalog</h2>
                     <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>
                         Browse all
                     </a>
                 </div>
                 <div className="ribbon__grid">
-                    {items.map((album) => {
-                        const src = getArtworkUrl(mediaBaseUrl, album.artwork);
+                    {items.map((release) => {
+                        const src = getArtworkUrl(mediaBaseUrl, release.artwork);
                         return (
                             <a
-                                key={album.albumId}
+                                key={release.releaseId}
                                 className="ribbon-card"
-                                href={albumPath(album.slug)}
-                                onClick={(event) => handleInternalLink(event, albumPath(album.slug))}
+                                href={releasePath(release.slug)}
+                                onClick={(event) => handleInternalLink(event, releasePath(release.slug))}
                             >
                                 <div className="ribbon-card__art">
                                     {src
-                                        ? <img src={src} alt={album.artwork.altText} />
-                                        : <img src={albumCover} alt={album.artwork.altText} />}
+                                        ? <img src={src} alt={release.artwork.altText} />
+                                        : <img src={albumCover} alt={release.artwork.altText} />}
                                 </div>
                                 <div className="ribbon-card__body">
-                                    <span className="ribbon-card__kind">{album.releaseType}</span>
-                                    <h3 className="ribbon-card__title">{album.title}</h3>
+                                    <span className="ribbon-card__kind">{release.releaseKind}</span>
+                                    <h3 className="ribbon-card__title">{release.title}</h3>
                                     <span className="ribbon-card__meta">
-                                        {album.trackCount} tracks · {formatTime(album.totalDurationSeconds)}
+                                        {release.trackCount} tracks · {formatTime(release.totalDurationSeconds)}
                                     </span>
                                 </div>
                             </a>
@@ -234,9 +238,9 @@ function CatalogueRibbon({
  * ----------------------------------------------------------------- */
 function SoWeSleepLaunchPage() {
     const player = useMusicPlayer();
-    const featuredAlbum = player.catalog?.albums.find((album) => album.slug === LAUNCH_ALBUM_SLUG);
-    const trackCount = featuredAlbum?.trackCount ?? 10;
-    const totalDuration = featuredAlbum?.totalDurationSeconds ?? 0;
+    const featuredRelease = player.catalog?.releases.find((release) => release.slug === LAUNCH_ALBUM_SLUG);
+    const trackCount = featuredRelease?.trackCount ?? 10;
+    const totalDuration = featuredRelease?.totalDurationSeconds ?? 0;
 
     return (
         <div className="launch">
@@ -261,8 +265,8 @@ function SoWeSleepLaunchPage() {
                         <button
                             type="button"
                             className="button--primary"
-                            onClick={() => featuredAlbum ? player.playAlbum(featuredAlbum.albumId) : undefined}
-                            disabled={!featuredAlbum}
+                            onClick={() => featuredRelease ? player.playRelease(featuredRelease.releaseId) : undefined}
+                            disabled={!featuredRelease}
                         >
                             <Play aria-hidden="true" /> Play Album
                         </button>
@@ -389,9 +393,9 @@ function SoWeSleepLaunchPage() {
 
 function LaunchTracklist() {
     const player = useMusicPlayer();
-    const album = player.albumManifest?.slug === LAUNCH_ALBUM_SLUG ? player.albumManifest : undefined;
+    const release = player.releaseManifest?.slug === LAUNCH_ALBUM_SLUG ? player.releaseManifest : undefined;
 
-    if (!album) {
+    if (!release) {
         return (
             <p className="mono" style={{ color: 'var(--muted)', fontSize: '0.82rem', letterSpacing: '0.12em' }}>
                 Loading tracklist…
@@ -401,22 +405,22 @@ function LaunchTracklist() {
 
     return (
         <ol className="catalog-track-list">
-            {album.tracks.map((track) => {
+            {release.tracks.map((track) => {
                 const isActive = player.selectedTrack?.trackId === track.trackId;
                 return (
                     <li key={track.trackId}>
                         <button
                             type="button"
                             className="catalog-track-list__play"
-                            onClick={() => player.playTrack(album.albumId, track.trackId)}
+                            onClick={() => player.playTrack(release.releaseId, track.trackId)}
                             aria-label={`Play ${track.title}`}
                             title={`Play ${track.title}`}
                         >
                             <Play aria-hidden="true" />
                         </button>
                         <a
-                            href={`/tracks/${encodeURIComponent(album.slug)}/${encodeURIComponent(track.slug)}`}
-                            onClick={(event) => handleInternalLink(event, `/tracks/${encodeURIComponent(album.slug)}/${encodeURIComponent(track.slug)}`)}
+                            href={`/tracks/${encodeURIComponent(release.slug)}/${encodeURIComponent(track.slug)}`}
+                            onClick={(event) => handleInternalLink(event, `/tracks/${encodeURIComponent(release.slug)}/${encodeURIComponent(track.slug)}`)}
                             className={isActive ? 'is-active' : undefined}
                         >
                             <span>{String(track.trackNumber).padStart(2, '0')}</span>
@@ -449,13 +453,13 @@ function PublicApp() {
                             </a>
                         </li>
                         <li className="nav__item">
-                            <a href={albumPath(LAUNCH_ALBUM_SLUG)} onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}>
+                            <a href={releasePath(LAUNCH_ALBUM_SLUG)} onClick={(event) => handleInternalLink(event, releasePath(LAUNCH_ALBUM_SLUG))}>
                                 So We Sleep
                             </a>
                         </li>
                         <li className="nav__item">
                             <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>
-                                Catalogue
+                                Catalog
                             </a>
                         </li>
                         <li className="nav__item">

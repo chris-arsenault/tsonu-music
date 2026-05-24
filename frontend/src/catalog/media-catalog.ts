@@ -1,11 +1,13 @@
 export type StableId =
-    | `album_${string}`
+    | `song_${string}`
+    | `recording_${string}`
     | `release_${string}`
     | `track_${string}`
     | `asset_${string}`
     | `job_${string}`;
 
-export type ReleaseType = 'album' | 'ep' | 'single' | 'demo' | 'preview' | 'collection';
+export type ReleaseKind = 'album' | 'ep' | 'single' | 'demo' | 'preview' | 'collection' | 'prerelease';
+export type ReleaseStatus = 'official' | 'demo' | 'promo' | 'prerelease' | 'bootleg';
 export type Visibility = 'public' | 'unlisted';
 export type PlaybackQuality = 'aac-192' | 'aac-320' | 'flac-lossless';
 export type PlaybackFormatKind = 'hls-rendition' | 'direct' | 'download';
@@ -45,16 +47,17 @@ export interface PublishedCatalog {
         name: string;
         slug: string;
     };
-    albums: CatalogAlbumSummary[];
+    releases: CatalogReleaseSummary[];
+    songs: CatalogSongSummary[];
 }
 
-export interface CatalogAlbumSummary {
-    albumId: StableId;
+export interface CatalogReleaseSummary {
     releaseId: StableId;
     slug: string;
     title: string;
     subtitle?: string;
-    releaseType: ReleaseType;
+    releaseKind: ReleaseKind;
+    releaseStatus: ReleaseStatus;
     releaseDate: string;
     status: 'published';
     visibility: Visibility;
@@ -66,16 +69,24 @@ export interface CatalogAlbumSummary {
     links?: ExternalLink[];
 }
 
-export interface PublishedAlbumManifest {
+export interface CatalogSongSummary {
+    songId: StableId;
+    slug: string;
+    title: string;
+    artistName: string;
+    tags?: string[];
+}
+
+export interface PublishedReleaseManifest {
     schemaVersion: 1;
-    entityType: 'album';
-    albumId: StableId;
+    entityType: 'release';
     releaseId: StableId;
     slug: string;
     title: string;
     subtitle?: string;
     artistName: string;
-    releaseType: ReleaseType;
+    releaseKind: ReleaseKind;
+    releaseStatus: ReleaseStatus;
     releaseDate: string;
     status: 'published';
     visibility: Visibility;
@@ -85,21 +96,51 @@ export interface PublishedAlbumManifest {
     artwork: CatalogArtwork;
     credits?: CatalogCredit[];
     links?: ExternalLink[];
-    tracks: PublishedTrack[];
+    tracks: PublishedReleaseTrack[];
 }
 
-export interface PublishedTrack {
+export interface PublishedReleaseTrack {
     trackId: StableId;
+    songId: StableId;
+    recordingId: StableId;
     discNumber: number;
     trackNumber: number;
     slug: string;
     title: string;
+    songTitle: string;
+    recordingTitle: string;
+    versionTitle?: string;
     durationSeconds: number;
     explicit: boolean;
     isrc?: string;
     description?: string;
     credits?: CatalogCredit[];
     playback: TrackPlayback;
+}
+
+export interface PublishedSongManifest {
+    schemaVersion: 1;
+    entityType: 'song';
+    songId: StableId;
+    slug: string;
+    title: string;
+    artistName: string;
+    description?: string;
+    lyrics?: string;
+    credits?: CatalogCredit[];
+    tags?: string[];
+    placements: PublishedSongPlacement[];
+}
+
+export interface PublishedSongPlacement {
+    releaseId: StableId;
+    releaseSlug: string;
+    releaseTitle: string;
+    releaseKind: ReleaseKind;
+    trackId: StableId;
+    trackSlug: string;
+    recordingId: StableId;
+    trackNumber: number;
 }
 
 export interface TrackPlayback {

@@ -1,8 +1,9 @@
 import type {
-    CatalogAlbumSummary,
     CatalogArtwork,
-    PublishedAlbumManifest,
+    CatalogReleaseSummary,
     PublishedCatalog,
+    PublishedReleaseManifest,
+    PublishedSongManifest,
 } from './media-catalog';
 
 const ABSOLUTE_URL_PATTERN = /^https?:\/\//i;
@@ -50,14 +51,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function assertCatalog(value: unknown): asserts value is PublishedCatalog {
-    if (!isRecord(value) || value.entityType !== 'catalog' || !Array.isArray(value.albums)) {
+    if (!isRecord(value) || value.entityType !== 'catalog' || !Array.isArray(value.releases)) {
         throw new Error('Catalog response is not a published catalog.');
     }
 }
 
-function assertAlbumManifest(value: unknown): asserts value is PublishedAlbumManifest {
-    if (!isRecord(value) || value.entityType !== 'album' || !Array.isArray(value.tracks)) {
-        throw new Error('Album response is not a published album.');
+function assertReleaseManifest(value: unknown): asserts value is PublishedReleaseManifest {
+    if (!isRecord(value) || value.entityType !== 'release' || !Array.isArray(value.tracks)) {
+        throw new Error('Release response is not a published release.');
+    }
+}
+
+function assertSongManifest(value: unknown): asserts value is PublishedSongManifest {
+    if (!isRecord(value) || value.entityType !== 'song' || !Array.isArray(value.placements)) {
+        throw new Error('Song response is not a published song.');
     }
 }
 
@@ -70,35 +77,48 @@ export async function fetchPublishedCatalog(
     return catalog;
 }
 
-export async function fetchAlbumManifest(
+export async function fetchReleaseManifest(
     apiBaseUrl: string,
-    album: CatalogAlbumSummary,
+    release: CatalogReleaseSummary,
     signal: AbortSignal,
-): Promise<PublishedAlbumManifest> {
-    return fetchAlbumManifestPath(apiBaseUrl, album.manifestPath, signal);
+): Promise<PublishedReleaseManifest> {
+    return fetchReleaseManifestPath(apiBaseUrl, release.manifestPath, signal);
 }
 
-export async function fetchAlbumManifestBySlug(
+export async function fetchReleaseManifestBySlug(
     apiBaseUrl: string,
-    albumSlug: string,
+    releaseSlug: string,
     signal: AbortSignal,
-): Promise<PublishedAlbumManifest> {
-    return fetchAlbumManifestPath(
+): Promise<PublishedReleaseManifest> {
+    return fetchReleaseManifestPath(
         apiBaseUrl,
-        `/catalog/albums/${encodeURIComponent(albumSlug)}`,
+        `/catalog/releases/${encodeURIComponent(releaseSlug)}`,
         signal,
     );
 }
 
-async function fetchAlbumManifestPath(
+export async function fetchSongManifestBySlug(
+    apiBaseUrl: string,
+    songSlug: string,
+    signal: AbortSignal,
+): Promise<PublishedSongManifest> {
+    const manifest = await fetchJson<PublishedSongManifest>(
+        resolveApiUrl(apiBaseUrl, `/catalog/songs/${encodeURIComponent(songSlug)}`),
+        signal,
+    );
+    assertSongManifest(manifest);
+    return manifest;
+}
+
+async function fetchReleaseManifestPath(
     apiBaseUrl: string,
     manifestPath: string,
     signal: AbortSignal,
-): Promise<PublishedAlbumManifest> {
-    const manifest = await fetchJson<PublishedAlbumManifest>(
+): Promise<PublishedReleaseManifest> {
+    const manifest = await fetchJson<PublishedReleaseManifest>(
         resolveApiUrl(apiBaseUrl, manifestPath),
         signal,
     );
-    assertAlbumManifest(manifest);
+    assertReleaseManifest(manifest);
     return manifest;
 }

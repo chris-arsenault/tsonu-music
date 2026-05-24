@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/release-track.schema.json",
+  "title": "Tsonu Published Release Track",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "trackId",
+    "songId",
+    "recordingId",
+    "discNumber",
+    "trackNumber",
+    "slug",
+    "title",
+    "songTitle",
+    "recordingTitle",
+    "durationSeconds",
+    "explicit",
+    "playback"
+  ],
+  "properties": {
+    "trackId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "songId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "recordingId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "discNumber": { "type": "integer", "minimum": 1 },
+    "trackNumber": { "type": "integer", "minimum": 1 },
+    "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
+    "title": { "type": "string", "minLength": 1 },
+    "songTitle": { "type": "string", "minLength": 1 },
+    "recordingTitle": { "type": "string", "minLength": 1 },
+    "versionTitle": { "type": "string" },
+    "durationSeconds": { "type": "number", "minimum": 0 },
+    "explicit": { "type": "boolean" },
+    "isrc": { "type": "string" },
+    "description": { "type": "string" },
+    "credits": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/credit" }
+    },
+    "playback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hls", "formats"],
+      "properties": {
+        "hls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["assetId", "path", "mimeType"],
+          "properties": {
+            "assetId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+            "path": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+            "url": { "$ref": "common.defs.schema.json#/$defs/httpsUrl" },
+            "mimeType": { "const": "application/vnd.apple.mpegurl" },
+            "codecs": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        },
+        "formats": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["assetId", "kind", "quality", "path", "mimeType"],
+            "properties": {
+              "assetId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+              "kind": {
+                "type": "string",
+                "enum": ["hls-rendition", "direct", "download"]
+              },
+              "quality": {
+                "type": "string",
+                "enum": ["aac-192", "aac-320", "flac-lossless"]
+              },
+              "path": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+              "url": { "$ref": "common.defs.schema.json#/$defs/httpsUrl" },
+              "mimeType": { "type": "string", "minLength": 1 },
+              "bitrateKbps": { "type": "integer", "minimum": 1 },
+              "sampleRateHz": { "type": "integer", "minimum": 1 },
+              "bitDepth": { "type": "integer", "minimum": 1 },
+              "channels": { "type": "integer", "minimum": 1 },
+              "fileSizeBytes": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

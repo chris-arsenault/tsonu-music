@@ -1,39 +1,42 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://music.tsonu.com/schemas/draft-album.schema.json",
-  "title": "Tsonu Draft Album Manifest",
+  "$id": "https://music.tsonu.com/schemas/draft-release.schema.json",
+  "title": "Tsonu Draft Release",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schemaVersion",
     "entityType",
-    "albumId",
     "releaseId",
     "slug",
     "title",
     "artistName",
-    "releaseType",
+    "releaseKind",
+    "releaseStatus",
     "publishState",
     "updatedAt",
     "tracks"
   ],
   "properties": {
     "schemaVersion": { "const": 1 },
-    "entityType": { "const": "draftAlbum" },
-    "albumId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "entityType": { "const": "draftRelease" },
     "releaseId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
     "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
     "title": { "type": "string", "minLength": 1 },
     "subtitle": { "type": "string" },
     "artistName": { "type": "string", "minLength": 1 },
-    "releaseType": {
+    "releaseKind": {
       "type": "string",
-      "enum": ["album", "ep", "single", "demo", "preview", "collection"]
+      "enum": ["album", "ep", "single", "demo", "preview", "collection", "prerelease"]
+    },
+    "releaseStatus": {
+      "type": "string",
+      "enum": ["official", "demo", "promo", "prerelease", "bootleg"]
     },
     "releaseDate": { "$ref": "common.defs.schema.json#/$defs/isoDate" },
     "publishState": {
       "type": "string",
-      "enum": ["draft", "ready", "published", "archived"]
+      "enum": ["draft", "ready", "published", "withdrawn"]
     },
     "updatedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
     "description": { "type": "string" },
@@ -59,51 +62,27 @@
         "additionalProperties": false,
         "required": [
           "trackId",
+          "songId",
+          "recordingId",
           "discNumber",
           "trackNumber",
           "slug",
-          "title",
-          "durationSeconds",
-          "explicit",
-          "sourceMaster"
+          "title"
         ],
         "properties": {
           "trackId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+          "songId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+          "recordingId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
           "discNumber": { "type": "integer", "minimum": 1 },
           "trackNumber": { "type": "integer", "minimum": 1 },
           "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
           "title": { "type": "string", "minLength": 1 },
-          "durationSeconds": { "type": "number", "exclusiveMinimum": 0 },
           "explicit": { "type": "boolean" },
           "isrc": { "type": "string" },
           "description": { "type": "string" },
-          "sourceMaster": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["bucket", "key", "format", "uploadedAt"],
-            "properties": {
-              "bucket": { "type": "string", "minLength": 1 },
-              "key": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
-              "versionId": { "type": "string" },
-              "etag": { "type": "string" },
-              "format": {
-                "type": "string",
-                "enum": ["wav", "aiff", "flac"]
-              },
-              "uploadedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
-              "sampleRateHz": { "type": "integer", "minimum": 1 },
-              "bitDepth": { "type": "integer", "minimum": 1 },
-              "channels": { "type": "integer", "minimum": 1 }
-            }
-          },
-          "encodeJobIds": {
+          "credits": {
             "type": "array",
-            "items": { "$ref": "common.defs.schema.json#/$defs/stableId" },
-            "uniqueItems": true
-          },
-          "playback": {
-            "type": "object",
-            "additionalProperties": true
+            "items": { "$ref": "common.defs.schema.json#/$defs/credit" }
           }
         }
       }

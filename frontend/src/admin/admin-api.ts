@@ -1,17 +1,16 @@
-import { getRuntimeConfig } from '../runtime-config';
 import { getIdToken } from '../auth';
+import { getRuntimeConfig } from '../runtime-config';
 import type {
-    DraftAlbum,
-    DraftTrack,
+    DraftRelease,
+    DraftSong,
     EncodeJob,
     EncodeJobCreateResponse,
     ObjectList,
     PublishResponse,
     RumSummary,
-    WriteResult,
-    TrackWriteResponse,
     UploadUrlRequest,
     UploadUrlResponse,
+    WriteResult,
 } from './admin-types';
 
 interface ApiJsonResult<T> {
@@ -99,38 +98,35 @@ function jsonInit(method: string, body: unknown, headers?: HeadersInit): Request
     };
 }
 
-export async function listDraftAlbums(): Promise<ObjectList> {
-    return (await requestJson<ObjectList>('/admin/albums')).data;
+export async function listDraftSongs(): Promise<ObjectList> {
+    return (await requestJson<ObjectList>('/admin/songs')).data;
 }
 
-export async function getDraftAlbum(albumId: string): Promise<ApiJsonResult<DraftAlbum>> {
-    return requestJson<DraftAlbum>(`/admin/albums/${encodeURIComponent(albumId)}`);
+export async function getDraftSong(songId: string): Promise<ApiJsonResult<DraftSong>> {
+    return requestJson<DraftSong>(`/admin/songs/${encodeURIComponent(songId)}`);
 }
 
-export async function putDraftAlbum(album: DraftAlbum, eTag?: string): Promise<WriteResult> {
+export async function putDraftSong(song: DraftSong, eTag?: string): Promise<WriteResult> {
     const headers = eTag ? { 'If-Match': eTag } : { 'If-None-Match': '*' };
     return (await requestJson<WriteResult>(
-        `/admin/albums/${encodeURIComponent(album.albumId)}`,
-        jsonInit('PUT', album, headers),
+        `/admin/songs/${encodeURIComponent(song.songId)}`,
+        jsonInit('PUT', song, headers),
     )).data;
 }
 
-export async function putDraftTrack(albumId: string, track: DraftTrack, albumETag: string): Promise<TrackWriteResponse> {
-    return (await requestJson<TrackWriteResponse>(
-        `/admin/albums/${encodeURIComponent(albumId)}/tracks/${encodeURIComponent(track.trackId)}`,
-        jsonInit('PUT', track, { 'If-Match': albumETag }),
-    )).data;
+export async function listDraftReleases(): Promise<ObjectList> {
+    return (await requestJson<ObjectList>('/admin/releases')).data;
 }
 
-export async function deleteDraftTrack(albumId: string, trackId: string, albumETag: string): Promise<TrackWriteResponse> {
-    return (await requestJson<TrackWriteResponse>(
-        `/admin/albums/${encodeURIComponent(albumId)}/tracks/${encodeURIComponent(trackId)}`,
-        {
-            method: 'DELETE',
-            headers: {
-                'If-Match': albumETag,
-            },
-        },
+export async function getDraftRelease(releaseId: string): Promise<ApiJsonResult<DraftRelease>> {
+    return requestJson<DraftRelease>(`/admin/releases/${encodeURIComponent(releaseId)}`);
+}
+
+export async function putDraftRelease(release: DraftRelease, eTag?: string): Promise<WriteResult> {
+    const headers = eTag ? { 'If-Match': eTag } : { 'If-None-Match': '*' };
+    return (await requestJson<WriteResult>(
+        `/admin/releases/${encodeURIComponent(release.releaseId)}`,
+        jsonInit('PUT', release, headers),
     )).data;
 }
 
@@ -159,21 +155,21 @@ export async function uploadMasterFile(upload: UploadUrlResponse, file: File): P
 }
 
 export async function createEncodeJob(request: {
-    albumId: string;
-    trackId: string;
+    songId: string;
+    recordingId: string;
     includeLossless?: boolean;
     requestedBy?: string;
 }): Promise<EncodeJobCreateResponse> {
     return (await requestJson<EncodeJobCreateResponse>('/admin/encode-jobs', jsonInit('POST', request))).data;
 }
 
-export async function publishAlbum(albumId: string, request: {
+export async function publishRelease(releaseId: string, request: {
     visibility?: 'public' | 'unlisted';
     trackJobIds?: Record<string, string>;
     publishedAt?: string;
 }): Promise<PublishResponse> {
     return (await requestJson<PublishResponse>(
-        `/admin/publish/${encodeURIComponent(albumId)}`,
+        `/admin/publish/${encodeURIComponent(releaseId)}`,
         jsonInit('POST', request),
     )).data;
 }

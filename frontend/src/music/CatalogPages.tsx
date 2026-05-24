@@ -1,47 +1,57 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play } from 'lucide-react';
-import { fetchAlbumManifest, fetchAlbumManifestBySlug, getArtworkUrl } from '../catalog/catalog-client';
-import type { CatalogAlbumSummary, PublishedAlbumManifest, PublishedTrack } from '../catalog/media-catalog';
+import { fetchReleaseManifest, fetchReleaseManifestBySlug, fetchSongManifestBySlug, getArtworkUrl } from '../catalog/catalog-client';
+import type { CatalogReleaseSummary, PublishedReleaseManifest, PublishedReleaseTrack, PublishedSongManifest } from '../catalog/media-catalog';
 import {
     formatTime,
     useMusicPlayer,
 } from './MusicPlayerContext';
-import { albumPath, handleInternalLink, trackPath } from './routes';
+import { handleInternalLink, releasePath, songPath, trackPath } from './routes';
 
-interface AlbumPageProps {
+interface ReleasePageProps {
+    slug: string;
+}
+
+interface SongPageProps {
     slug: string;
 }
 
 interface TrackPageProps {
-    albumSlug: string;
+    releaseSlug: string;
     trackSlug: string;
 }
 
-interface AlbumLoadState {
-    album?: PublishedAlbumManifest;
+interface ReleaseLoadState {
+    release?: PublishedReleaseManifest;
     error?: string;
     loading: boolean;
 }
 
-function formatReleaseType(value: string): string {
+interface SongLoadState {
+    song?: PublishedSongManifest;
+    error?: string;
+    loading: boolean;
+}
+
+function formatReleaseKind(value: string): string {
     return value.slice(0, 1).toUpperCase() + value.slice(1);
 }
 
-function albumDescription(album: PublishedAlbumManifest | CatalogAlbumSummary): string {
-    if ('description' in album && album.description) {
-        return album.description;
+function releaseDescription(release: PublishedReleaseManifest | CatalogReleaseSummary): string {
+    if ('description' in release && release.description) {
+        return release.description;
     }
 
-    return `${formatReleaseType(album.releaseType)} by Tsonu.`;
+    return `${formatReleaseKind(release.releaseKind)} by Tsonu.`;
 }
 
-function useAlbumBySlug(slug: string | undefined): AlbumLoadState {
+function useReleaseBySlug(slug: string | undefined): ReleaseLoadState {
     const { catalog, catalogApiBaseUrl } = useMusicPlayer();
     const summary = useMemo(
-        () => catalog?.albums.find((album) => album.slug === slug),
+        () => catalog?.releases.find((release) => release.slug === slug),
         [catalog, slug],
     );
-    const [state, setState] = useState<AlbumLoadState>({ loading: false });
+    const [state, setState] = useState<ReleaseLoadState>({ loading: false });
 
     useEffect(() => {
         if (!catalog) {
@@ -50,17 +60,17 @@ function useAlbumBySlug(slug: string | undefined): AlbumLoadState {
         }
 
         if (!slug) {
-            setState({ loading: false, error: 'Album not found.' });
+            setState({ loading: false, error: 'Release not found.' });
             return undefined;
         }
 
         const controller = new AbortController();
         setState({ loading: true });
         const request = summary
-            ? fetchAlbumManifest(catalogApiBaseUrl, summary, controller.signal)
-            : fetchAlbumManifestBySlug(catalogApiBaseUrl, slug, controller.signal);
+            ? fetchReleaseManifest(catalogApiBaseUrl, summary, controller.signal)
+            : fetchReleaseManifestBySlug(catalogApiBaseUrl, slug, controller.signal);
         request
-            .then((album) => setState({ album, loading: false }))
+            .then((release) => setState({ release, loading: false }))
             .catch((error: unknown) => {
                 if (controller.signal.aborted) {
                     return;
@@ -72,7 +82,37 @@ function useAlbumBySlug(slug: string | undefined): AlbumLoadState {
             });
 
         return () => controller.abort();
-    }, [catalog, catalogApiBaseUrl, summary]);
+    }, [catalog, catalogApiBaseUrl, slug, summary]);
+
+    return state;
+}
+
+function useSongBySlug(slug: string | undefined): SongLoadState {
+    const { catalogApiBaseUrl } = useMusicPlayer();
+    const [state, setState] = useState<SongLoadState>({ loading: false });
+
+    useEffect(() => {
+        if (!slug) {
+            setState({ loading: false, error: 'Song not found.' });
+            return undefined;
+        }
+
+        const controller = new AbortController();
+        setState({ loading: true });
+        fetchSongManifestBySlug(catalogApiBaseUrl, slug, controller.signal)
+            .then((song) => setState({ song, loading: false }))
+            .catch((error: unknown) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                setState({
+                    loading: false,
+                    error: error instanceof Error ? error.message : String(error),
+                });
+            });
+
+        return () => controller.abort();
+    }, [catalogApiBaseUrl, slug]);
 
     return state;
 }
@@ -86,31 +126,31 @@ function PageStatus({ error }: { error?: string }) {
     );
 }
 
-function AlbumArtwork({ album, className }: { album: PublishedAlbumManifest | CatalogAlbumSummary; className: string }) {
+function ReleaseArtwork({ release, className }: { release: PublishedReleaseManifest | CatalogReleaseSummary; className: string }) {
     const { mediaBaseUrl } = useMusicPlayer();
-    const src = getArtworkUrl(mediaBaseUrl, album.artwork);
-    return src ? <img className={className} src={src} alt={album.artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
+    const src = getArtworkUrl(mediaBaseUrl, release.artwork);
+    return src ? <img className={className} src={src} alt={release.artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
 }
 
-function TrackRows({ album, activeTrack }: { album: PublishedAlbumManifest; activeTrack?: PublishedTrack }) {
+function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest; activeTrack?: PublishedReleaseTrack }) {
     const player = useMusicPlayer();
 
     return (
         <ol className="catalog-track-list">
-            {album.tracks.map((track) => (
+            {release.tracks.map((track) => (
                 <li key={track.trackId}>
                     <button
                         type="button"
                         className="catalog-track-list__play"
-                        onClick={() => player.playTrack(album.albumId, track.trackId)}
+                        onClick={() => player.playTrack(release.releaseId, track.trackId)}
                         aria-label={`Play ${track.title}`}
                         title={`Play ${track.title}`}
                     >
                         <Play aria-hidden="true" />
                     </button>
                     <a
-                        href={trackPath(album.slug, track.slug)}
-                        onClick={(event) => handleInternalLink(event, trackPath(album.slug, track.slug))}
+                        href={trackPath(release.slug, track.slug)}
+                        onClick={(event) => handleInternalLink(event, trackPath(release.slug, track.slug))}
                         className={activeTrack?.trackId === track.trackId ? 'is-active' : undefined}
                     >
                         <span>{track.trackNumber}</span>
@@ -139,28 +179,28 @@ export function CatalogPage() {
             <header className="catalog-header">
                 <p className="section-eyebrow">Catalog</p>
                 <h1>Tsonu Music</h1>
-                <p>Albums, previews, demos, and non-platform releases in one first-party catalog.</p>
+                <p>Releases, previews, demos, and non-platform music in one first-party catalog.</p>
             </header>
 
-            <section className="catalog-grid" aria-label="Albums">
-                {player.catalog.albums.map((album) => (
-                    <article className="catalog-album-card" key={album.albumId}>
+            <section className="catalog-grid" aria-label="Releases">
+                {player.catalog.releases.map((release) => (
+                    <article className="catalog-album-card" key={release.releaseId}>
                         <a
-                            href={albumPath(album.slug)}
-                            onClick={(event) => handleInternalLink(event, albumPath(album.slug))}
+                            href={releasePath(release.slug)}
+                            onClick={(event) => handleInternalLink(event, releasePath(release.slug))}
                             className="catalog-album-card__art"
                         >
-                            <AlbumArtwork album={album} className="catalog-album-card__image" />
+                            <ReleaseArtwork release={release} className="catalog-album-card__image" />
                         </a>
                         <div className="catalog-album-card__body">
-                            <p>{formatReleaseType(album.releaseType)} - {album.releaseDate}</p>
+                            <p>{formatReleaseKind(release.releaseKind)} - {release.releaseDate}</p>
                             <h2>
-                                <a href={albumPath(album.slug)} onClick={(event) => handleInternalLink(event, albumPath(album.slug))}>
-                                    {album.title}
+                                <a href={releasePath(release.slug)} onClick={(event) => handleInternalLink(event, releasePath(release.slug))}>
+                                    {release.title}
                                 </a>
                             </h2>
-                            <span>{album.trackCount} tracks - {formatTime(album.totalDurationSeconds)}</span>
-                            <button type="button" onClick={() => player.playAlbum(album.albumId)}>
+                            <span>{release.trackCount} tracks - {formatTime(release.totalDurationSeconds)}</span>
+                            <button type="button" onClick={() => player.playRelease(release.releaseId)}>
                                 <Play aria-hidden="true" /> Play
                             </button>
                         </div>
@@ -171,38 +211,38 @@ export function CatalogPage() {
     );
 }
 
-export function AlbumPage({ slug }: AlbumPageProps) {
+export function ReleasePage({ slug }: ReleasePageProps) {
     const player = useMusicPlayer();
-    const state = useAlbumBySlug(slug);
+    const state = useReleaseBySlug(slug);
 
     if (state.error) {
         return <PageStatus error={state.error} />;
     }
 
-    if (state.loading || !state.album) {
+    if (state.loading || !state.release) {
         return <PageStatus />;
     }
 
-    const album = state.album;
+    const release = state.release;
 
     return (
         <main className="music-page">
             <section className="album-page-hero">
-                <AlbumArtwork album={album} className="album-page-hero__art" />
+                <ReleaseArtwork release={release} className="album-page-hero__art" />
                 <div className="album-page-hero__copy">
-                    <p className="section-eyebrow">{formatReleaseType(album.releaseType)}</p>
-                    <h1>{album.title}</h1>
-                    {album.subtitle ? <p className="album-page-hero__subtitle">{album.subtitle}</p> : null}
-                    <p>{albumDescription(album)}</p>
+                    <p className="section-eyebrow">{formatReleaseKind(release.releaseKind)}</p>
+                    <h1>{release.title}</h1>
+                    {release.subtitle ? <p className="album-page-hero__subtitle">{release.subtitle}</p> : null}
+                    <p>{releaseDescription(release)}</p>
                     <div className="album-page-hero__meta">
-                        <span><CalendarDays aria-hidden="true" /> {album.releaseDate}</span>
-                        <span><Disc3 aria-hidden="true" /> {album.tracks.length} tracks</span>
+                        <span><CalendarDays aria-hidden="true" /> {release.releaseDate}</span>
+                        <span><Disc3 aria-hidden="true" /> {release.tracks.length} tracks</span>
                     </div>
                     <div className="album-page-hero__actions">
-                        <button type="button" onClick={() => player.playAlbum(album.albumId)}>
-                            <Play aria-hidden="true" /> Play Album
+                        <button type="button" onClick={() => player.playRelease(release.releaseId)}>
+                            <Play aria-hidden="true" /> Play Release
                         </button>
-                        {album.links?.map((link) => (
+                        {release.links?.map((link) => (
                             <a key={link.url} href={link.url}>
                                 <ExternalLink aria-hidden="true" /> {link.label}
                             </a>
@@ -211,27 +251,27 @@ export function AlbumPage({ slug }: AlbumPageProps) {
                 </div>
             </section>
 
-            <section className="album-page-tracks" aria-label={`${album.title} tracks`}>
-                <TrackRows album={album} activeTrack={player.selectedTrack} />
+            <section className="album-page-tracks" aria-label={`${release.title} tracks`}>
+                <TrackRows release={release} activeTrack={player.selectedTrack} />
             </section>
         </main>
     );
 }
 
-export function TrackPage({ albumSlug, trackSlug }: TrackPageProps) {
+export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     const player = useMusicPlayer();
-    const state = useAlbumBySlug(albumSlug);
+    const state = useReleaseBySlug(releaseSlug);
 
     if (state.error) {
         return <PageStatus error={state.error} />;
     }
 
-    if (state.loading || !state.album) {
+    if (state.loading || !state.release) {
         return <PageStatus />;
     }
 
-    const album = state.album;
-    const track = album.tracks.find((candidate) => candidate.slug === trackSlug);
+    const release = state.release;
+    const track = release.tracks.find((candidate) => candidate.slug === trackSlug);
 
     if (!track) {
         return <PageStatus error="Track not found." />;
@@ -240,29 +280,75 @@ export function TrackPage({ albumSlug, trackSlug }: TrackPageProps) {
     return (
         <main className="music-page">
             <section className="track-page-hero">
-                <AlbumArtwork album={album} className="track-page-hero__art" />
+                <ReleaseArtwork release={release} className="track-page-hero__art" />
                 <div className="track-page-hero__copy">
-                    <p className="section-eyebrow">{album.title}</p>
+                    <p className="section-eyebrow">{release.title}</p>
                     <h1>{track.title}</h1>
-                    {track.description ? <p>{track.description}</p> : <p>{albumDescription(album)}</p>}
+                    {track.description ? <p>{track.description}</p> : <p>{releaseDescription(release)}</p>}
                     <div className="album-page-hero__meta">
                         <span>{formatTime(track.durationSeconds)}</span>
                         <span>Track {track.trackNumber}</span>
                     </div>
                     <div className="album-page-hero__actions">
-                        <button type="button" onClick={() => player.playTrack(album.albumId, track.trackId)}>
+                        <button type="button" onClick={() => player.playTrack(release.releaseId, track.trackId)}>
                             <Play aria-hidden="true" /> Play Track
                         </button>
-                        <a href={albumPath(album.slug)} onClick={(event) => handleInternalLink(event, albumPath(album.slug))}>
-                            <Disc3 aria-hidden="true" /> Album
+                        <a href={releasePath(release.slug)} onClick={(event) => handleInternalLink(event, releasePath(release.slug))}>
+                            <Disc3 aria-hidden="true" /> Release
                         </a>
                     </div>
                 </div>
             </section>
 
-            <section className="album-page-tracks" aria-label={`${album.title} tracks`}>
-                <TrackRows album={album} activeTrack={track} />
+            <section className="album-page-tracks" aria-label={`${release.title} tracks`}>
+                <TrackRows release={release} activeTrack={track} />
             </section>
+        </main>
+    );
+}
+
+export function SongPage({ slug }: SongPageProps) {
+    const state = useSongBySlug(slug);
+
+    if (state.error) {
+        return <PageStatus error={state.error} />;
+    }
+
+    if (state.loading || !state.song) {
+        return <PageStatus />;
+    }
+
+    const song = state.song;
+
+    return (
+        <main className="music-page">
+            <header className="catalog-header">
+                <p className="section-eyebrow">Song</p>
+                <h1>{song.title}</h1>
+                {song.description ? <p>{song.description}</p> : null}
+            </header>
+            <section className="album-page-tracks" aria-label={`${song.title} placements`}>
+                <ol className="catalog-track-list">
+                    {song.placements.map((placement) => (
+                        <li key={`${placement.releaseId}/${placement.trackId}`}>
+                            <span className="catalog-track-list__play"><Disc3 aria-hidden="true" /></span>
+                            <a
+                                href={trackPath(placement.releaseSlug, placement.trackSlug)}
+                                onClick={(event) => handleInternalLink(event, trackPath(placement.releaseSlug, placement.trackSlug))}
+                            >
+                                <span>{placement.trackNumber}</span>
+                                <strong>{placement.releaseTitle}</strong>
+                                <span>{formatReleaseKind(placement.releaseKind)}</span>
+                            </a>
+                        </li>
+                    ))}
+                </ol>
+            </section>
+            <p>
+                <a href={songPath(song.slug)} onClick={(event) => handleInternalLink(event, songPath(song.slug))}>
+                    {song.artistName}
+                </a>
+            </p>
         </main>
     );
 }

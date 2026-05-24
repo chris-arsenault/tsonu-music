@@ -34,11 +34,11 @@ async fn upsert_encode_job_document(
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO music_encode_jobs
-            (job_id, album_id, track_id, status, document, requested_at, started_at, finished_at)
+            (job_id, song_id, recording_id, status, document, requested_at, started_at, finished_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (job_id) DO UPDATE SET
-             album_id = EXCLUDED.album_id,
-             track_id = EXCLUDED.track_id,
+             song_id = EXCLUDED.song_id,
+             recording_id = EXCLUDED.recording_id,
              status = EXCLUDED.status,
              document = EXCLUDED.document,
              requested_at = EXCLUDED.requested_at,
@@ -47,8 +47,8 @@ async fn upsert_encode_job_document(
              updated_at = now()",
     )
     .bind(&job.job_id)
-    .bind(&job.album_id)
-    .bind(&job.track_id)
+    .bind(&job.song_id)
+    .bind(&job.recording_id)
     .bind(job_status(&job.status))
     .bind(Json(document))
     .bind(parse_optional_rfc3339(Some(&job.requested_at)))

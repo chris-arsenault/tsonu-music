@@ -8,24 +8,23 @@ import {
     type ReactNode,
 } from 'react';
 import {
-    fetchAlbumManifest,
-    fetchAlbumManifestBySlug,
     fetchPublishedCatalog,
+    fetchReleaseManifest,
+    fetchReleaseManifestBySlug,
     getArtworkUrl,
     resolveMediaUrl,
 } from '../catalog/catalog-client';
 import type {
-    CatalogAlbumSummary,
+    CatalogReleaseSummary,
     PlaybackFormat,
     PlaybackQuality,
-    PublishedAlbumManifest,
     PublishedCatalog,
-    PublishedTrack,
+    PublishedReleaseManifest,
+    PublishedReleaseTrack,
     StableId,
 } from '../catalog/media-catalog';
 import {
     getPlaybackSessionId,
-    recordAlbumView,
     recordPlayComplete,
     recordPlayError,
     recordPlayPause,
@@ -33,6 +32,7 @@ import {
     recordPlaySeek,
     recordPlayStart,
     recordQualityChanged,
+    recordReleaseView,
     recordTrackImpression,
     type PlayerEventContext,
 } from '../player-analytics';
@@ -58,9 +58,9 @@ export interface MusicPlayerContextValue {
     mediaBaseUrl: string;
     catalogApiBaseUrl: string;
     catalog?: PublishedCatalog;
-    selectedAlbumSummary?: CatalogAlbumSummary;
-    albumManifest?: PublishedAlbumManifest;
-    selectedTrack?: PublishedTrack;
+    selectedReleaseSummary?: CatalogReleaseSummary;
+    releaseManifest?: PublishedReleaseManifest;
+    selectedTrack?: PublishedReleaseTrack;
     selectedQuality: QualitySelection;
     hlsFormats: PlaybackFormat[];
     loadState: LoadState;
@@ -72,9 +72,9 @@ export interface MusicPlayerContextValue {
     artworkSrc: string;
     canGoBack: boolean;
     canGoForward: boolean;
-    playAlbum: (albumId: StableId) => void;
-    playTrack: (albumId: StableId, trackId: StableId) => void;
-    selectAlbum: (albumId: StableId) => void;
+    playRelease: (releaseId: StableId) => void;
+    playTrack: (releaseId: StableId, trackId: StableId) => void;
+    selectRelease: (releaseId: StableId) => void;
     selectTrack: (trackId: StableId) => void;
     selectTrackOffset: (offset: number) => void;
     setQuality: (value: string) => void;
@@ -118,13 +118,13 @@ function isPlaybackQuality(value: string): value is PlaybackQuality {
     return value === 'aac-192' || value === 'aac-320' || value === 'flac-lossless';
 }
 
-function getHlsFormats(track: PublishedTrack | undefined): PlaybackFormat[] {
+function getHlsFormats(track: PublishedReleaseTrack | undefined): PlaybackFormat[] {
     return track?.playback.formats.filter(isHlsRendition) ?? [];
 }
 
 function getPlaybackSource(
     mediaBaseUrl: string,
-    track: PublishedTrack,
+    track: PublishedReleaseTrack,
     selectedQuality: QualitySelection,
 ): PlaybackSource {
     const selectedFormat = selectedQuality === 'auto'
@@ -154,16 +154,16 @@ function getMediaDuration(audio: HTMLAudioElement, fallbackDurationSeconds: numb
     return fallbackDurationSeconds;
 }
 
-function findAlbumSummary(
+function findReleaseSummary(
     catalog: PublishedCatalog | undefined,
-    albumId: StableId | undefined,
-): CatalogAlbumSummary | undefined {
-    return catalog?.albums.find((album) => album.albumId === albumId);
+    releaseId: StableId | undefined,
+): CatalogReleaseSummary | undefined {
+    return catalog?.releases.find((release) => release.releaseId === releaseId);
 }
 
 function initialRouteTarget(catalog: PublishedCatalog): {
-    albumId?: StableId;
-    albumSlug?: string;
+    releaseId?: StableId;
+    releaseSlug?: string;
     trackSlug?: string;
 } {
     if (typeof window === 'undefined') {
@@ -176,19 +176,19 @@ function initialRouteTarget(catalog: PublishedCatalog): {
         .split('/')
         .filter(Boolean);
 
-    if (parts[0] === 'albums' && parts[1]) {
-        const albumSlug = decodeURIComponent(parts[1]);
+    if ((parts[0] === 'releases' || parts[0] === 'albums') && parts[1]) {
+        const releaseSlug = decodeURIComponent(parts[1]);
         return {
-            albumSlug,
-            albumId: catalog.albums.find((album) => album.slug === albumSlug)?.albumId,
+            releaseSlug,
+            releaseId: catalog.releases.find((release) => release.slug === releaseSlug)?.releaseId,
         };
     }
 
     if (parts[0] === 'tracks' && parts[1] && parts[2]) {
-        const albumSlug = decodeURIComponent(parts[1]);
+        const releaseSlug = decodeURIComponent(parts[1]);
         return {
-            albumSlug,
-            albumId: catalog.albums.find((album) => album.slug === albumSlug)?.albumId,
+            releaseSlug,
+            releaseId: catalog.releases.find((release) => release.slug === releaseSlug)?.releaseId,
             trackSlug: decodeURIComponent(parts[2]),
         };
     }
@@ -209,9 +209,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const initialRouteAppliedRef = useRef(false);
 
     const [catalog, setCatalog] = useState<PublishedCatalog>();
-    const [selectedAlbumId, setSelectedAlbumId] = useState<StableId>();
-    const [selectedAlbumSlug, setSelectedAlbumSlug] = useState<string>();
-    const [albumManifest, setAlbumManifest] = useState<PublishedAlbumManifest>();
+    const [selectedReleaseId, setSelectedReleaseId] = useState<StableId>();
+    const [selectedReleaseSlug, setSelectedReleaseSlug] = useState<string>();
+    const [releaseManifest, setReleaseManifest] = useState<PublishedReleaseManifest>();
     const [selectedTrackId, setSelectedTrackId] = useState<StableId>();
     const [selectedQuality, setSelectedQuality] = useState<QualitySelection>('auto');
     const [loadState, setLoadState] = useState<LoadState>('loading');
@@ -222,16 +222,16 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const [duration, setDuration] = useState(0);
     const [artworkSrc, setArtworkSrc] = useState(fallbackArtworkSrc);
 
-    const selectedAlbumSummary = useMemo(
+    const selectedReleaseSummary = useMemo(
         () => (
-            findAlbumSummary(catalog, selectedAlbumId) ??
-            catalog?.albums.find((album) => album.slug === selectedAlbumSlug)
+            findReleaseSummary(catalog, selectedReleaseId) ??
+            catalog?.releases.find((release) => release.slug === selectedReleaseSlug)
         ),
-        [catalog, selectedAlbumId, selectedAlbumSlug],
+        [catalog, selectedReleaseId, selectedReleaseSlug],
     );
     const selectedTrack = useMemo(
-        () => albumManifest?.tracks.find((track) => track.trackId === selectedTrackId),
-        [albumManifest, selectedTrackId],
+        () => releaseManifest?.tracks.find((track) => track.trackId === selectedTrackId),
+        [releaseManifest, selectedTrackId],
     );
     const hlsFormats = useMemo(() => getHlsFormats(selectedTrack), [selectedTrack]);
     const selectedSource = useMemo(
@@ -247,15 +247,15 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         fetchPublishedCatalog(catalogApiBaseUrl, controller.signal)
             .then((publishedCatalog) => {
                 const target = initialRouteTarget(publishedCatalog);
-                if (publishedCatalog.albums.length === 0 && !target.albumSlug) {
-                    throw new Error('Published catalog has no albums.');
+                if (publishedCatalog.releases.length === 0 && !target.releaseSlug) {
+                    throw new Error('Published catalog has no releases.');
                 }
 
                 initialRouteAppliedRef.current = true;
                 pendingRouteTrackSlugRef.current = target.trackSlug;
                 setCatalog(publishedCatalog);
-                setSelectedAlbumSlug(target.albumSlug);
-                setSelectedAlbumId(target.albumId ?? publishedCatalog.albums[0]?.albumId);
+                setSelectedReleaseSlug(target.releaseSlug);
+                setSelectedReleaseId(target.releaseId ?? publishedCatalog.releases[0]?.releaseId);
             })
             .catch((error: unknown) => {
                 if (controller.signal.aborted) {
@@ -270,16 +270,16 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     }, [catalogApiBaseUrl]);
 
     useEffect(() => {
-        if (!catalog || selectedAlbumId || initialRouteAppliedRef.current) {
+        if (!catalog || selectedReleaseId || initialRouteAppliedRef.current) {
             return;
         }
 
-        setSelectedAlbumId(catalog.albums[0]?.albumId);
-    }, [catalog, selectedAlbumId]);
+        setSelectedReleaseId(catalog.releases[0]?.releaseId);
+    }, [catalog, selectedReleaseId]);
 
     useEffect(() => {
-        const albumSlug = selectedAlbumSlug;
-        if (!selectedAlbumSummary && !albumSlug) {
+        const releaseSlug = selectedReleaseSlug;
+        if (!selectedReleaseSummary && !releaseSlug) {
             return undefined;
         }
 
@@ -288,9 +288,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         setLoadError(undefined);
         setPlaybackError(undefined);
 
-        const request = selectedAlbumSummary
-            ? fetchAlbumManifest(catalogApiBaseUrl, selectedAlbumSummary, controller.signal)
-            : fetchAlbumManifestBySlug(catalogApiBaseUrl, albumSlug, controller.signal);
+        const request = selectedReleaseSummary
+            ? fetchReleaseManifest(catalogApiBaseUrl, selectedReleaseSummary, controller.signal)
+            : fetchReleaseManifestBySlug(catalogApiBaseUrl, releaseSlug, controller.signal);
 
         request
             .then((manifest) => {
@@ -304,9 +304,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
                     ? manifest.tracks.find((track) => track.slug === routeTrackSlug)?.trackId
                     : undefined;
 
-                setAlbumManifest(manifest);
-                setSelectedAlbumId(manifest.albumId);
-                setSelectedAlbumSlug(manifest.slug);
+                setReleaseManifest(manifest);
+                setSelectedReleaseId(manifest.releaseId);
+                setSelectedReleaseSlug(manifest.slug);
                 setSelectedTrackId((currentTrackId) => (
                     routeTrackId ??
                     (manifest.tracks.some((track) => track.trackId === currentTrackId)
@@ -328,31 +328,31 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             });
 
         return () => controller.abort();
-    }, [catalogApiBaseUrl, selectedAlbumSlug, selectedAlbumSummary]);
+    }, [catalogApiBaseUrl, selectedReleaseSlug, selectedReleaseSummary]);
 
     useEffect(() => {
-        if (!albumManifest) {
+        if (!releaseManifest) {
             return;
         }
 
-        setArtworkSrc(getArtworkUrl(mediaBaseUrl, albumManifest.artwork) ?? fallbackArtworkSrc);
-        recordAlbumView({
-            albumId: albumManifest.albumId,
-            releaseId: albumManifest.releaseId,
-            assetId: albumManifest.artwork.assetId,
+        setArtworkSrc(getArtworkUrl(mediaBaseUrl, releaseManifest.artwork) ?? fallbackArtworkSrc);
+        recordReleaseView({
+            releaseId: releaseManifest.releaseId,
+            assetId: releaseManifest.artwork.assetId,
             positionSeconds: 0,
         });
-        albumManifest.tracks.forEach((track) => {
+        releaseManifest.tracks.forEach((track) => {
             recordTrackImpression({
-                albumId: albumManifest.albumId,
-                releaseId: albumManifest.releaseId,
+                releaseId: releaseManifest.releaseId,
+                songId: track.songId,
+                recordingId: track.recordingId,
                 trackId: track.trackId,
                 assetId: track.playback.hls.assetId,
                 positionSeconds: 0,
                 durationSeconds: track.durationSeconds,
             });
         });
-    }, [albumManifest, fallbackArtworkSrc, mediaBaseUrl]);
+    }, [releaseManifest, fallbackArtworkSrc, mediaBaseUrl]);
 
     useEffect(() => {
         setCurrentTime(0);
@@ -362,7 +362,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
 
     useEffect(() => {
         const audio = audioRef.current;
-        if (!audio || !selectedSource || !albumManifest || !selectedTrack) {
+        if (!audio || !selectedSource || !releaseManifest || !selectedTrack) {
             return undefined;
         }
 
@@ -464,19 +464,20 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             removedNativeListener?.();
             hls?.destroy();
         };
-    }, [albumManifest, selectedSource, selectedTrack]);
+    }, [releaseManifest, selectedSource, selectedTrack]);
 
     function createEventContext(
         positionSeconds = audioRef.current?.currentTime ?? currentTime,
         source: PlaybackSource | undefined = selectedSource,
     ): PlayerEventContext | undefined {
-        if (!albumManifest || !selectedTrack || !source) {
+        if (!releaseManifest || !selectedTrack || !source) {
             return undefined;
         }
 
         return {
-            albumId: albumManifest.albumId,
-            releaseId: albumManifest.releaseId,
+            releaseId: releaseManifest.releaseId,
+            songId: selectedTrack.songId,
+            recordingId: selectedTrack.recordingId,
             trackId: selectedTrack.trackId,
             assetId: source.assetId,
             quality: source.quality,
@@ -505,8 +506,8 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         setCurrentTime(0);
     }
 
-    function selectAlbum(albumId: StableId): void {
-        if (albumId === selectedAlbumId) {
+    function selectRelease(releaseId: StableId): void {
+        if (releaseId === selectedReleaseId) {
             return;
         }
 
@@ -517,9 +518,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             skipPlayStart: false,
         };
         suppressPauseUntilRef.current = Date.now() + 500;
-        setSelectedAlbumId(albumId);
-        setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
-        setAlbumManifest(undefined);
+        setSelectedReleaseId(releaseId);
+        setSelectedReleaseSlug(findReleaseSummary(catalog, releaseId)?.slug);
+        setReleaseManifest(undefined);
         setSelectedTrackId(undefined);
         setSelectedQuality('auto');
         setCurrentTime(0);
@@ -534,24 +535,24 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         queueTrackChange(trackId, Boolean(audio && !audio.paused));
     }
 
-    function playAlbum(albumId: StableId): void {
-        if (albumId !== selectedAlbumId) {
+    function playRelease(releaseId: StableId): void {
+        if (releaseId !== selectedReleaseId) {
             pendingRestoreRef.current = {
                 positionSeconds: 0,
                 shouldPlay: true,
                 skipPlayStart: false,
             };
             suppressPauseUntilRef.current = Date.now() + 500;
-            setSelectedAlbumId(albumId);
-            setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
-            setAlbumManifest(undefined);
+            setSelectedReleaseId(releaseId);
+            setSelectedReleaseSlug(findReleaseSummary(catalog, releaseId)?.slug);
+            setReleaseManifest(undefined);
             setSelectedTrackId(undefined);
             setSelectedQuality('auto');
             setCurrentTime(0);
             return;
         }
 
-        if (!albumManifest) {
+        if (!releaseManifest) {
             pendingRestoreRef.current = {
                 positionSeconds: 0,
                 shouldPlay: true,
@@ -560,24 +561,24 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             return;
         }
 
-        const firstTrack = albumManifest?.tracks[0];
+        const firstTrack = releaseManifest?.tracks[0];
         if (firstTrack) {
-            playTrack(albumId, firstTrack.trackId);
+            playTrack(releaseId, firstTrack.trackId);
         }
     }
 
-    function playTrack(albumId: StableId, trackId: StableId): void {
+    function playTrack(releaseId: StableId, trackId: StableId): void {
         const audio = audioRef.current;
-        if (albumId !== selectedAlbumId) {
+        if (releaseId !== selectedReleaseId) {
             pendingRestoreRef.current = {
                 positionSeconds: 0,
                 shouldPlay: true,
                 skipPlayStart: false,
             };
             suppressPauseUntilRef.current = Date.now() + 500;
-            setSelectedAlbumId(albumId);
-            setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
-            setAlbumManifest(undefined);
+            setSelectedReleaseId(releaseId);
+            setSelectedReleaseSlug(findReleaseSummary(catalog, releaseId)?.slug);
+            setReleaseManifest(undefined);
             setSelectedTrackId(trackId);
             setSelectedQuality('auto');
             setCurrentTime(0);
@@ -597,12 +598,12 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     }
 
     function selectTrackOffset(offset: number): void {
-        if (!albumManifest || !selectedTrack) {
+        if (!releaseManifest || !selectedTrack) {
             return;
         }
 
-        const currentIndex = albumManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId);
-        const nextTrack = albumManifest.tracks[currentIndex + offset];
+        const currentIndex = releaseManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId);
+        const nextTrack = releaseManifest.tracks[currentIndex + offset];
         if (nextTrack) {
             selectTrack(nextTrack.trackId);
         }
@@ -750,12 +751,12 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             recordPlayComplete(context);
         }
 
-        if (!albumManifest || !selectedTrack) {
+        if (!releaseManifest || !selectedTrack) {
             return;
         }
 
-        const currentIndex = albumManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId);
-        const nextTrack = albumManifest.tracks[currentIndex + 1];
+        const currentIndex = releaseManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId);
+        const nextTrack = releaseManifest.tracks[currentIndex + 1];
         if (nextTrack) {
             pendingRestoreRef.current = {
                 positionSeconds: 0,
@@ -767,18 +768,18 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         }
     }
 
-    const currentTrackIndex = albumManifest && selectedTrack
-        ? albumManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId)
+    const currentTrackIndex = releaseManifest && selectedTrack
+        ? releaseManifest.tracks.findIndex((track) => track.trackId === selectedTrack.trackId)
         : -1;
     const canGoBack = currentTrackIndex > 0;
-    const canGoForward = Boolean(albumManifest && currentTrackIndex >= 0 && currentTrackIndex < albumManifest.tracks.length - 1);
+    const canGoForward = Boolean(releaseManifest && currentTrackIndex >= 0 && currentTrackIndex < releaseManifest.tracks.length - 1);
 
     const value: MusicPlayerContextValue = {
         mediaBaseUrl,
         catalogApiBaseUrl,
         catalog,
-        selectedAlbumSummary,
-        albumManifest,
+        selectedReleaseSummary,
+        releaseManifest,
         selectedTrack,
         selectedQuality,
         hlsFormats,
@@ -791,9 +792,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         artworkSrc,
         canGoBack,
         canGoForward,
-        playAlbum,
+        playRelease,
         playTrack,
-        selectAlbum,
+        selectRelease,
         selectTrack,
         selectTrackOffset,
         setQuality,

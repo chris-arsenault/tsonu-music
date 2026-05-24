@@ -2,12 +2,16 @@ import { useEffect, useState, type MouseEvent } from 'react';
 
 const NAVIGATION_EVENT = 'tsonu:navigation';
 
-export function albumPath(slug: string): string {
-    return `/albums/${encodeURIComponent(slug)}`;
+export function releasePath(slug: string): string {
+    return `/releases/${encodeURIComponent(slug)}`;
 }
 
-export function trackPath(albumSlug: string, trackSlug: string): string {
-    return `/tracks/${encodeURIComponent(albumSlug)}/${encodeURIComponent(trackSlug)}`;
+export function songPath(slug: string): string {
+    return `/songs/${encodeURIComponent(slug)}`;
+}
+
+export function trackPath(releaseSlug: string, trackSlug: string): string {
+    return `/tracks/${encodeURIComponent(releaseSlug)}/${encodeURIComponent(trackSlug)}`;
 }
 
 export function decodePathPart(value: string | undefined): string | undefined {

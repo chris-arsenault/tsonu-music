@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/release.schema.json",
+  "title": "Tsonu Published Release",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "entityType",
+    "releaseId",
+    "slug",
+    "title",
+    "artistName",
+    "releaseKind",
+    "releaseStatus",
+    "releaseDate",
+    "status",
+    "visibility",
+    "publishedAt",
+    "artwork",
+    "tracks"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "entityType": { "const": "release" },
+    "releaseId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
+    "title": { "type": "string", "minLength": 1 },
+    "subtitle": { "type": "string" },
+    "artistName": { "type": "string", "minLength": 1 },
+    "releaseKind": {
+      "type": "string",
+      "enum": ["album", "ep", "single", "demo", "preview", "collection", "prerelease"]
+    },
+    "releaseStatus": {
+      "type": "string",
+      "enum": ["official", "demo", "promo", "prerelease", "bootleg"]
+    },
+    "releaseDate": { "$ref": "common.defs.schema.json#/$defs/isoDate" },
+    "status": { "const": "published" },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted"]
+    },
+    "publishedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "description": { "type": "string" },
+    "copyright": { "type": "string" },
+    "artwork": { "$ref": "common.defs.schema.json#/$defs/artwork" },
+    "credits": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/credit" }
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/externalLink" }
+    },
+    "tracks": {
+      "type": "array",
+      "items": { "$ref": "release-track.schema.json" }
+    }
+  }
+}

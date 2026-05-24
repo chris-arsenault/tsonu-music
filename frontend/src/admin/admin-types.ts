@@ -1,50 +1,82 @@
-import type { ExternalLink, ReleaseType, StableId, Visibility } from '../catalog/media-catalog';
+import type { ExternalLink, ReleaseKind, ReleaseStatus, StableId, Visibility } from '../catalog/media-catalog';
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
 export interface DraftSourceMaster {
     bucket: string;
     key: string;
-    format?: string;
+    format?: 'wav' | 'aiff' | 'flac';
+    uploadedAt?: string;
     versionId?: string;
     etag?: string;
+    sampleRateHz?: number;
     bitDepth?: number;
+    channels?: number;
 }
 
-export interface DraftTrack {
-    trackId: StableId;
-    discNumber: number;
-    trackNumber: number;
+export interface DraftRecording {
+    recordingId: StableId;
     slug: string;
     title: string;
-    durationSeconds: number;
+    versionTitle?: string;
+    versionType: 'studio_master' | 'album_master' | 'single_master' | 'demo' | 'preview' | 'live' | 'alternate' | 'remaster';
+    artistName?: string;
+    durationSeconds?: number;
     explicit: boolean;
     isrc?: string;
     description?: string;
-    credits?: JsonValue;
     sourceMaster?: DraftSourceMaster;
     encodeJobIds?: StableId[];
 }
 
-export interface DraftAlbum {
+export interface DraftSong {
     schemaVersion: 1;
-    entityType: 'draftAlbum';
-    albumId: StableId;
+    entityType: 'draftSong';
+    songId: StableId;
+    slug: string;
+    title: string;
+    artistName: string;
+    description?: string;
+    lyrics?: string;
+    credits?: JsonValue;
+    tags?: string[];
+    updatedAt?: string;
+    recordings: DraftRecording[];
+}
+
+export interface DraftReleaseTrack {
+    trackId: StableId;
+    songId: StableId;
+    recordingId: StableId;
+    discNumber: number;
+    trackNumber: number;
+    slug: string;
+    title: string;
+    explicit?: boolean;
+    isrc?: string;
+    description?: string;
+    credits?: JsonValue;
+}
+
+export interface DraftRelease {
+    schemaVersion: 1;
+    entityType: 'draftRelease';
     releaseId: StableId;
     slug: string;
     title: string;
     subtitle?: string;
     artistName: string;
-    releaseType: ReleaseType;
+    releaseKind: ReleaseKind;
+    releaseStatus: ReleaseStatus;
     releaseDate?: string;
-    publishState: 'draft' | 'ready' | 'published';
+    publishState: 'draft' | 'ready' | 'published' | 'withdrawn';
     description?: string;
     copyright?: string;
     artwork?: JsonValue;
     credits?: JsonValue;
     links?: ExternalLink[];
     tags?: string[];
-    tracks: DraftTrack[];
+    tracks: DraftReleaseTrack[];
     updatedAt?: string;
 }
 
@@ -67,16 +99,8 @@ export interface WriteResult {
     versionId?: string;
 }
 
-export interface TrackWriteResponse {
-    albumId: StableId;
-    trackId: StableId;
-    created: boolean;
-    write: WriteResult;
-}
-
 export interface UploadUrlRequest {
-    albumId: StableId;
-    trackId: StableId;
+    recordingId: StableId;
     filename: string;
     contentType?: string;
     expiresInSeconds?: number;
@@ -100,8 +124,8 @@ export interface EncodeJob {
     schemaVersion: 1;
     entityType: 'encodeJob';
     jobId: StableId;
-    albumId: StableId;
-    trackId: StableId;
+    songId: StableId;
+    recordingId: StableId;
     status: EncodeStatus;
     requestedAt: string;
     startedAt?: string;
@@ -148,14 +172,13 @@ export interface EncodeJobCreateResponse {
 }
 
 export interface PublishResponse {
-    albumId: StableId;
     releaseId: StableId;
     manifestPath: string;
     visibility: Visibility;
     jobIds: StableId[];
     copiedObjectCount: number;
     copiedKeys: string[];
-    albumWrite: WriteResult;
+    releaseWrite: WriteResult;
     draftWrite: WriteResult;
     invalidation: {
         distributionId: string;
@@ -185,16 +208,18 @@ export interface RumSummary {
         eventType: string;
         count: number;
     }>;
-    albums: Array<{
-        albumId: StableId;
+    releases: Array<{
+        releaseId: StableId;
         totalEvents: number;
         playStarts: number;
         playCompletes: number;
         playerErrors: number;
     }>;
     tracks: Array<{
-        albumId: StableId;
+        releaseId: StableId;
         trackId: StableId;
+        songId?: StableId;
+        recordingId?: StableId;
         totalEvents: number;
         playStarts: number;
         playCompletes: number;
@@ -202,7 +227,9 @@ export interface RumSummary {
     }>;
     recentErrors: Array<{
         timestamp?: string;
-        albumId?: StableId;
+        releaseId?: StableId;
+        songId?: StableId;
+        recordingId?: StableId;
         trackId?: StableId;
         errorName?: string;
         errorMessage?: string;

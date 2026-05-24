@@ -7,7 +7,7 @@ use aws_sdk_lambda::types::InvocationType;
 use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::Client as S3Client;
-use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
 mod db;
 use encode_contract::{
     build_job_id, encode_job_key as contract_encode_job_key, planned_ffmpeg_args, planned_output,
@@ -32,8 +32,9 @@ pub use db::connect_pool_from_env;
 
 const ARTIST_NAME: &str = "Tsonu";
 const ARTIST_SLUG: &str = "tsonu";
-const DRAFT_ALBUM_PREFIX: &str = "draft/albums/";
-const PUBLIC_ALBUM_PREFIX: &str = "albums/";
+const DRAFT_SONG_PREFIX: &str = "draft/songs/";
+const DRAFT_RELEASE_PREFIX: &str = "draft/releases/";
+const PUBLIC_RECORDING_PREFIX: &str = "recordings/";
 const DEFAULT_UPLOAD_URL_EXPIRY_SECONDS: u64 = 900;
 const MAX_UPLOAD_URL_EXPIRY_SECONDS: u64 = 3600;
 const DEFAULT_RUM_SUMMARY_HOURS: u32 = 24;
@@ -42,6 +43,7 @@ const MAX_RUM_QUERY_RESULTS: i32 = 10_000;
 const RUM_QUERY_POLL_ATTEMPTS: usize = 12;
 const RUM_QUERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PLAYER_RUM_EVENT_NAMES: &[&str] = &[
+    "release_view",
     "album_view",
     "track_impression",
     "play_start",
@@ -154,8 +156,7 @@ impl AppState {
         &self,
         request: UploadUrlRequest,
     ) -> Result<UploadUrlResponse, ApiError> {
-        validate_stable_id("album", &request.album_id, "albumId")?;
-        validate_stable_id("track", &request.track_id, "trackId")?;
+        validate_stable_id("recording", &request.recording_id, "recordingId")?;
         validate_filename(&request.filename)?;
 
         let upload_format =
@@ -171,11 +172,7 @@ impl AppState {
             ));
         }
 
-        let key = master_key(
-            &request.album_id,
-            &request.track_id,
-            upload_format.extension,
-        );
+        let key = master_key(&request.recording_id, upload_format.extension);
         let presigning_config = PresigningConfig::expires_in(Duration::from_secs(
             expires_in_seconds,
         ))
@@ -210,6 +207,7 @@ impl AppState {
                 bucket: self.masters_bucket.clone(),
                 key,
                 format: upload_format.format.to_string(),
+                uploaded_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
             },
         })
     }
@@ -218,38 +216,43 @@ impl AppState {
         &self,
         request: EncodeJobRequest,
     ) -> Result<EncodeJobCreateResponse, ApiError> {
-        validate_stable_id("album", &request.album_id, "albumId")?;
-        validate_stable_id("track", &request.track_id, "trackId")?;
+        validate_stable_id("song", &request.song_id, "songId")?;
+        validate_stable_id("recording", &request.recording_id, "recordingId")?;
 
         if let Some(job_id) = &request.job_id {
             validate_stable_id("job", job_id, "jobId")?;
         }
 
-        let album_object = db::get_draft_album(&self.db, &request.album_id).await?;
-        let album: DraftAlbum = serde_json::from_str(&album_object.text).map_err(|err| {
-            error!(album_id = request.album_id, error = %err, "Stored draft album cannot be parsed for encode job");
-            ApiError::internal("invalid_stored_album", "stored draft album cannot be parsed")
+        let song_object = db::get_draft_song(&self.db, &request.song_id).await?;
+        let song: DraftSong = serde_json::from_str(&song_object.text).map_err(|err| {
+            error!(song_id = request.song_id, error = %err, "Stored draft song cannot be parsed for encode job");
+            ApiError::internal("invalid_stored_song", "stored draft song cannot be parsed")
         })?;
 
-        if album.album_id != request.album_id {
+        if song.song_id != request.song_id {
             return Err(ApiError::bad_request(
-                "album_id_mismatch",
-                "draft album albumId does not match request albumId",
+                "song_id_mismatch",
+                "draft song songId does not match request songId",
             ));
         }
 
-        let track = album
-            .tracks
+        let recording = song
+            .recordings
             .iter()
-            .find(|track| track.track_id == request.track_id)
-            .ok_or_else(|| ApiError::not_found("track not found in draft album"))?;
+            .find(|recording| recording.recording_id == request.recording_id)
+            .ok_or_else(|| ApiError::not_found("recording not found in draft song"))?;
 
-        validate_source_master(
-            &track.source_master,
-            &self.masters_bucket,
-            &request.album_id,
-            &request.track_id,
-        )?;
+        let source_master = recording.source_master.as_ref().ok_or_else(|| {
+            ApiError::bad_request(
+                "missing_source_master",
+                format!(
+                    "recording {} does not have a sourceMaster",
+                    recording.recording_id
+                ),
+            )
+        })?;
+
+        validate_source_master(source_master, &self.masters_bucket, &request.recording_id)?;
 
         let now = Utc::now();
         let requested_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -260,14 +263,15 @@ impl AppState {
         let job_id = request
             .job_id
             .clone()
-            .unwrap_or_else(|| build_job_id(&request.track_id, &timestamp));
+            .unwrap_or_else(|| build_job_id(&request.recording_id, &timestamp));
         validate_stable_id("job", &job_id, "jobId")?;
 
         let include_lossless = request.include_lossless.unwrap_or(false);
         let output = planned_output(&job_id, self.media_bucket.clone(), include_lossless);
         let prepared = build_encode_job_event(
             request,
-            track,
+            recording,
+            source_master,
             job_id,
             requested_at,
             output,
@@ -324,44 +328,64 @@ impl AppState {
         })
     }
 
-    async fn publish_album(
+    async fn publish_release(
         &self,
-        album_id: String,
+        release_id: String,
         request: PublishRequest,
     ) -> Result<PublishResponse, ApiError> {
-        let album_object = db::get_draft_album(&self.db, &album_id).await?;
-        let draft: DraftAlbum = serde_json::from_str(&album_object.text).map_err(|err| {
-            error!(album_id, error = %err, "Stored draft album cannot be parsed for publishing");
+        let release_object = db::get_draft_release(&self.db, &release_id).await?;
+        let draft: DraftRelease = serde_json::from_str(&release_object.text).map_err(|err| {
+            error!(release_id, error = %err, "Stored draft release cannot be parsed for publishing");
             ApiError::internal(
-                "invalid_stored_album",
-                "stored draft album cannot be parsed",
+                "invalid_stored_release",
+                "stored draft release cannot be parsed",
             )
         })?;
 
-        validate_publishable_album(&draft, &album_id)?;
+        validate_publishable_release(&draft, &release_id)?;
         let visibility = request.visibility.unwrap_or(Visibility::Public);
         let published_at = request
             .published_at
             .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
 
         let mut published_tracks = Vec::with_capacity(draft.tracks.len());
+        let mut published_songs = Vec::<PublishedSong>::new();
         let mut copied_keys = Vec::new();
         let mut job_ids = Vec::with_capacity(draft.tracks.len());
 
         for track in &draft.tracks {
-            let job_id = select_publish_job_id(track, &request.track_job_ids)?;
+            let song_object = db::get_draft_song(&self.db, &track.song_id).await?;
+            let song: DraftSong = serde_json::from_str(&song_object.text).map_err(|err| {
+                error!(song_id = track.song_id, error = %err, "Stored draft song cannot be parsed for publishing");
+                ApiError::internal("invalid_stored_song", "stored draft song cannot be parsed")
+            })?;
+            let recording = song
+                .recordings
+                .iter()
+                .find(|recording| recording.recording_id == track.recording_id)
+                .ok_or_else(|| {
+                    ApiError::not_found(format!("recording not found: {}", track.recording_id))
+                })?;
+            let job_id = select_publish_job_id(track, recording, &request.track_job_ids)?;
             validate_stable_id("job", &job_id, "jobId")?;
             let job = db::get_encode_job(&self.db, &job_id).await?;
-            validate_publish_job(&job, &draft, track, &self.media_bucket)?;
+            validate_publish_job(&job, &song, recording, &self.media_bucket)?;
 
-            let public_prefix = public_track_media_prefix(&draft.slug, &track.slug, &job.job_id);
+            let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
             let job_copied_keys = self
                 .copy_encode_output_to_public_prefix(&job, &public_prefix)
                 .await?;
             copied_keys.extend(job_copied_keys);
 
-            let published_track = build_published_track(track, &job, &public_prefix)?;
+            let published_track =
+                build_published_track(track, &song, recording, &job, &public_prefix)?;
             published_tracks.push(published_track);
+            if !published_songs
+                .iter()
+                .any(|existing| existing.song_id == song.song_id)
+            {
+                published_songs.push(build_published_song(&song));
+            }
             job_ids.push(job.job_id);
         }
 
@@ -371,33 +395,38 @@ impl AppState {
             .map(|track| track.duration_seconds)
             .sum::<f64>();
 
-        let published_album =
-            build_published_album(&draft, visibility, published_at, published_tracks)?;
-        let album_write =
-            db::replace_publication(&self.db, &published_album, total_duration_seconds).await?;
+        let published_release =
+            build_published_release(&draft, visibility, published_at, published_tracks)?;
+        let release_write = db::replace_publication(
+            &self.db,
+            &published_release,
+            &published_songs,
+            total_duration_seconds,
+        )
+        .await?;
 
         let draft_write = self
-            .mark_draft_album_published(&album_id, &album_object)
+            .mark_draft_release_published(&release_id, &release_object)
             .await?;
 
         let invalidation_paths = vec![
             "/music".to_string(),
-            format!("/albums/{}", published_album.slug),
-            format!("/tracks/{}/*", published_album.slug),
+            format!("/releases/{}", published_release.slug),
+            format!("/catalog/releases/{}", published_release.slug),
+            format!("/catalog/songs/*"),
         ];
         let invalidation_id = self
-            .invalidate_manifest_paths(&album_id, invalidation_paths.clone())
+            .invalidate_manifest_paths(&release_id, invalidation_paths.clone())
             .await?;
 
         Ok(PublishResponse {
-            album_id,
-            release_id: published_album.release_id,
-            manifest_path: published_album.manifest_path,
-            visibility: published_album.visibility,
+            release_id,
+            manifest_path: published_release.manifest_path,
+            visibility: published_release.visibility,
             job_ids,
             copied_object_count: copied_keys.len(),
             copied_keys,
-            album_write,
+            release_write,
             draft_write,
             invalidation: CloudFrontInvalidationResult {
                 distribution_id: self.frontend_distribution_id.clone(),
@@ -632,20 +661,23 @@ impl AppState {
         Ok(keys)
     }
 
-    async fn mark_draft_album_published(
+    async fn mark_draft_release_published(
         &self,
-        album_id: &str,
+        release_id: &str,
         source: &db::DbJsonObject,
     ) -> Result<WriteResult, ApiError> {
         let mut document: Value = serde_json::from_str(&source.text).map_err(|err| {
-            error!(album_id, error = %err, "Stored draft album is invalid JSON");
-            ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
+            error!(release_id, error = %err, "Stored draft release is invalid JSON");
+            ApiError::internal(
+                "invalid_stored_json",
+                "stored draft release is invalid JSON",
+            )
         })?;
 
         let object = document.as_object_mut().ok_or_else(|| {
             ApiError::internal(
-                "invalid_stored_album",
-                "stored draft album is not an object",
+                "invalid_stored_release",
+                "stored draft release is not an object",
             )
         })?;
         object.insert(
@@ -657,12 +689,19 @@ impl AppState {
             Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
         );
 
-        db::put_draft_album(&self.db, album_id, &document, source.e_tag.as_deref(), None).await
+        db::put_draft_release(
+            &self.db,
+            release_id,
+            &document,
+            source.e_tag.as_deref(),
+            None,
+        )
+        .await
     }
 
     async fn invalidate_manifest_paths(
         &self,
-        album_id: &str,
+        release_id: &str,
         paths: Vec<String>,
     ) -> Result<Option<String>, ApiError> {
         let invalidation_paths = Paths::builder()
@@ -670,14 +709,14 @@ impl AppState {
             .set_items(Some(paths))
             .build()
             .map_err(|err| {
-                error!(album_id, error = %err, "Failed to build CloudFront invalidation paths");
+                error!(release_id, error = %err, "Failed to build CloudFront invalidation paths");
                 ApiError::internal(
                     "cloudfront_invalidation_build_failed",
                     "failed to build CloudFront invalidation request",
                 )
             })?;
         let caller_reference = format!(
-            "publish-{album_id}-{}",
+            "publish-{release_id}-{}",
             Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
         );
         let batch = InvalidationBatch::builder()
@@ -685,7 +724,7 @@ impl AppState {
             .caller_reference(caller_reference)
             .build()
             .map_err(|err| {
-                error!(album_id, error = %err, "Failed to build CloudFront invalidation batch");
+                error!(release_id, error = %err, "Failed to build CloudFront invalidation batch");
                 ApiError::internal(
                     "cloudfront_invalidation_build_failed",
                     "failed to build CloudFront invalidation request",
@@ -700,7 +739,7 @@ impl AppState {
             .send()
             .await
             .map_err(|err| {
-                error!(album_id, error = %err, "Failed to create CloudFront invalidation");
+                error!(release_id, error = %err, "Failed to create CloudFront invalidation");
                 ApiError::bad_gateway(
                     "cloudfront_invalidation_failed",
                     "published metadata was written, but CloudFront invalidation failed",
@@ -765,28 +804,35 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
         (&Method::GET, ApiPath::PublicCatalog | ApiPath::AdminCatalog) => {
             json_response(StatusCode::OK, db::get_public_catalog(&state.db).await?)
         }
-        (&Method::GET, ApiPath::PublicAlbum { slug }) => {
-            validate_slug(&slug, "albumSlug")?;
-            let album = db::get_public_album_by_slug(&state.db, &slug).await?;
-            raw_json_response(StatusCode::OK, album.text, album.e_tag.as_deref(), None)
+        (&Method::GET, ApiPath::PublicRelease { slug }) => {
+            validate_slug(&slug, "releaseSlug")?;
+            let release = db::get_public_release_by_slug(&state.db, &slug).await?;
+            raw_json_response(StatusCode::OK, release.text, release.e_tag.as_deref(), None)
         }
-        (&Method::GET, ApiPath::AdminAlbums) => {
-            json_response(StatusCode::OK, db::list_draft_albums(&state.db).await?)
+        (&Method::GET, ApiPath::PublicSong { slug }) => {
+            validate_slug(&slug, "songSlug")?;
+            json_response(
+                StatusCode::OK,
+                db::get_public_song_by_slug(&state.db, &slug).await?,
+            )
         }
-        (&Method::GET, ApiPath::AdminAlbum { album_id }) => {
-            validate_stable_id("album", &album_id, "albumId")?;
-            let album = db::get_draft_album(&state.db, &album_id).await?;
-            raw_json_response(StatusCode::OK, album.text, album.e_tag.as_deref(), None)
+        (&Method::GET, ApiPath::AdminSongs) => {
+            json_response(StatusCode::OK, db::list_draft_songs(&state.db).await?)
         }
-        (&Method::PUT, ApiPath::AdminAlbum { album_id }) => {
-            validate_stable_id("album", &album_id, "albumId")?;
+        (&Method::GET, ApiPath::AdminSong { song_id }) => {
+            validate_stable_id("song", &song_id, "songId")?;
+            let song = db::get_draft_song(&state.db, &song_id).await?;
+            raw_json_response(StatusCode::OK, song.text, song.e_tag.as_deref(), None)
+        }
+        (&Method::PUT, ApiPath::AdminSong { song_id }) => {
+            validate_stable_id("song", &song_id, "songId")?;
             let preconditions = write_preconditions(request.headers())?;
             let mut document: Value = parse_json_body(request.body())?;
-            validate_draft_album_document(&album_id, &document)?;
+            validate_draft_song_document(&song_id, &document)?;
             normalize_updated_at(&mut document);
-            let result = db::put_draft_album(
+            let result = db::put_draft_song(
                 &state.db,
-                &album_id,
+                &song_id,
                 &document,
                 preconditions.if_match.as_deref(),
                 preconditions.if_none_match.as_deref(),
@@ -794,70 +840,29 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             .await?;
             json_response(StatusCode::OK, result)
         }
-        (&Method::PUT, ApiPath::AdminTrack { album_id, track_id }) => {
-            validate_stable_id("album", &album_id, "albumId")?;
-            validate_stable_id("track", &track_id, "trackId")?;
-            let preconditions = required_if_match(request.headers())?;
-            let track: Value = parse_json_body(request.body())?;
-            let album = db::get_draft_album(&state.db, &album_id).await?;
-            let mut document: Value = serde_json::from_str(&album.text).map_err(|err| {
-                error!(album_id, error = %err, "Stored draft album is invalid JSON");
-                ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
-            })?;
-
-            let created = upsert_track_document(&mut document, &album_id, &track_id, track)?;
-            let result = db::put_draft_album(
-                &state.db,
-                &album_id,
-                &document,
-                preconditions.if_match.as_deref(),
-                preconditions.if_none_match.as_deref(),
-            )
-            .await?;
-
-            json_response(
-                if created {
-                    StatusCode::CREATED
-                } else {
-                    StatusCode::OK
-                },
-                TrackWriteResponse {
-                    album_id,
-                    track_id,
-                    created,
-                    write: result,
-                },
-            )
+        (&Method::GET, ApiPath::AdminReleases) => {
+            json_response(StatusCode::OK, db::list_draft_releases(&state.db).await?)
         }
-        (&Method::DELETE, ApiPath::AdminTrack { album_id, track_id }) => {
-            validate_stable_id("album", &album_id, "albumId")?;
-            validate_stable_id("track", &track_id, "trackId")?;
-            let preconditions = required_if_match(request.headers())?;
-            let album = db::get_draft_album(&state.db, &album_id).await?;
-            let mut document: Value = serde_json::from_str(&album.text).map_err(|err| {
-                error!(album_id, error = %err, "Stored draft album is invalid JSON");
-                ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
-            })?;
-
-            remove_track_document(&mut document, &album_id, &track_id)?;
-            let result = db::put_draft_album(
+        (&Method::GET, ApiPath::AdminRelease { release_id }) => {
+            validate_stable_id("release", &release_id, "releaseId")?;
+            let release = db::get_draft_release(&state.db, &release_id).await?;
+            raw_json_response(StatusCode::OK, release.text, release.e_tag.as_deref(), None)
+        }
+        (&Method::PUT, ApiPath::AdminRelease { release_id }) => {
+            validate_stable_id("release", &release_id, "releaseId")?;
+            let preconditions = write_preconditions(request.headers())?;
+            let mut document: Value = parse_json_body(request.body())?;
+            validate_draft_release_document(&release_id, &document)?;
+            normalize_updated_at(&mut document);
+            let result = db::put_draft_release(
                 &state.db,
-                &album_id,
+                &release_id,
                 &document,
                 preconditions.if_match.as_deref(),
                 preconditions.if_none_match.as_deref(),
             )
             .await?;
-
-            json_response(
-                StatusCode::OK,
-                TrackWriteResponse {
-                    album_id,
-                    track_id,
-                    created: false,
-                    write: result,
-                },
-            )
+            json_response(StatusCode::OK, result)
         }
         (&Method::GET, ApiPath::AdminJobs) => {
             json_response(StatusCode::OK, db::list_encode_jobs(&state.db).await?)
@@ -884,12 +889,12 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
                 state.create_encode_job(request).await?,
             )
         }
-        (&Method::POST, ApiPath::AdminPublish { album_id }) => {
-            validate_stable_id("album", &album_id, "albumId")?;
+        (&Method::POST, ApiPath::AdminPublish { release_id }) => {
+            validate_stable_id("release", &release_id, "releaseId")?;
             let request = parse_optional_json_body::<PublishRequest>(request.body())?;
             json_response(
                 StatusCode::OK,
-                state.publish_album(album_id, request).await?,
+                state.publish_release(release_id, request).await?,
             )
         }
         (_, ApiPath::NotFound) => Err(ApiError::not_found("route not found")),
@@ -907,17 +912,23 @@ fn parse_path(path: &str) -> ApiPath {
     match parts.as_slice() {
         ["health"] => ApiPath::Health,
         ["catalog"] => ApiPath::PublicCatalog,
-        ["catalog", "albums", slug] => ApiPath::PublicAlbum {
+        ["catalog", "releases", slug] => ApiPath::PublicRelease {
+            slug: (*slug).to_string(),
+        },
+        ["catalog", "albums", slug] => ApiPath::PublicRelease {
+            slug: (*slug).to_string(),
+        },
+        ["catalog", "songs", slug] => ApiPath::PublicSong {
             slug: (*slug).to_string(),
         },
         ["admin", "catalog"] => ApiPath::AdminCatalog,
-        ["admin", "albums"] => ApiPath::AdminAlbums,
-        ["admin", "albums", album_id] => ApiPath::AdminAlbum {
-            album_id: (*album_id).to_string(),
+        ["admin", "songs"] => ApiPath::AdminSongs,
+        ["admin", "songs", song_id] => ApiPath::AdminSong {
+            song_id: (*song_id).to_string(),
         },
-        ["admin", "albums", album_id, "tracks", track_id] => ApiPath::AdminTrack {
-            album_id: (*album_id).to_string(),
-            track_id: (*track_id).to_string(),
+        ["admin", "releases"] => ApiPath::AdminReleases,
+        ["admin", "releases", release_id] => ApiPath::AdminRelease {
+            release_id: (*release_id).to_string(),
         },
         ["admin", "jobs"] => ApiPath::AdminJobs,
         ["admin", "jobs", job_id] => ApiPath::AdminJob {
@@ -926,8 +937,8 @@ fn parse_path(path: &str) -> ApiPath {
         ["admin", "rum", "summary"] => ApiPath::AdminRumSummary,
         ["admin", "upload-url"] => ApiPath::AdminUploadUrl,
         ["admin", "encode-jobs"] => ApiPath::AdminEncodeJobs,
-        ["admin", "publish", album_id] => ApiPath::AdminPublish {
-            album_id: (*album_id).to_string(),
+        ["admin", "publish", release_id] => ApiPath::AdminPublish {
+            release_id: (*release_id).to_string(),
         },
         _ => ApiPath::NotFound,
     }
@@ -1048,7 +1059,7 @@ fn build_player_rum_query() -> String {
         .join(", ");
 
     format!(
-        "fields @timestamp, event_type, event_details.albumId as albumId, event_details.releaseId as releaseId, event_details.trackId as trackId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
+        "fields @timestamp, event_type, event_details.releaseId as releaseId, event_details.albumId as albumId, event_details.songId as songId, event_details.recordingId as recordingId, event_details.trackId as trackId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
     )
 }
 
@@ -1061,7 +1072,7 @@ fn build_rum_summary(
     rows: Vec<HashMap<String, String>>,
 ) -> RumSummaryResponse {
     let mut event_counts = HashMap::<String, u64>::new();
-    let mut album_counts = HashMap::<String, RumAggregate>::new();
+    let mut release_counts = HashMap::<String, RumAggregate>::new();
     let mut track_counts = HashMap::<String, RumTrackAggregate>::new();
     let mut playback_sessions = HashSet::<String>::new();
     let mut recent_errors = Vec::<RumRecentError>::new();
@@ -1080,19 +1091,23 @@ fn build_rum_summary(
             playback_sessions.insert(session_id.to_string());
         }
 
-        if let Some(album_id) = query_row_value(row, "albumId") {
-            album_counts
-                .entry(album_id.to_string())
+        if let Some(release_id) =
+            query_row_value(row, "releaseId").or_else(|| query_row_value(row, "albumId"))
+        {
+            release_counts
+                .entry(release_id.to_string())
                 .or_default()
                 .record(event_type);
 
             if let Some(track_id) = query_row_value(row, "trackId") {
-                let track_key = format!("{album_id}/{track_id}");
+                let track_key = format!("{release_id}/{track_id}");
                 track_counts
                     .entry(track_key)
                     .or_insert_with(|| RumTrackAggregate {
-                        album_id: album_id.to_string(),
+                        release_id: release_id.to_string(),
                         track_id: track_id.to_string(),
+                        song_id: query_row_value(row, "songId").map(str::to_string),
+                        recording_id: query_row_value(row, "recordingId").map(str::to_string),
                         counts: RumAggregate::default(),
                     })
                     .counts
@@ -1103,7 +1118,11 @@ fn build_rum_summary(
         if event_type == "play_error" && recent_errors.len() < 10 {
             recent_errors.push(RumRecentError {
                 timestamp: query_row_value(row, "@timestamp").map(str::to_string),
-                album_id: query_row_value(row, "albumId").map(str::to_string),
+                release_id: query_row_value(row, "releaseId")
+                    .or_else(|| query_row_value(row, "albumId"))
+                    .map(str::to_string),
+                song_id: query_row_value(row, "songId").map(str::to_string),
+                recording_id: query_row_value(row, "recordingId").map(str::to_string),
                 track_id: query_row_value(row, "trackId").map(str::to_string),
                 error_name: query_row_value(row, "errorName").map(str::to_string),
                 error_message: query_row_value(row, "errorMessage").map(str::to_string),
@@ -1111,28 +1130,30 @@ fn build_rum_summary(
         }
     }
 
-    let mut albums = album_counts
+    let mut releases = release_counts
         .into_iter()
-        .map(|(album_id, counts)| RumAlbumSummary {
-            album_id,
+        .map(|(release_id, counts)| RumReleaseSummary {
+            release_id,
             total_events: counts.total_events,
             play_starts: counts.play_starts,
             play_completes: counts.play_completes,
             player_errors: counts.player_errors,
         })
         .collect::<Vec<_>>();
-    albums.sort_by(|left, right| {
+    releases.sort_by(|left, right| {
         right
             .total_events
             .cmp(&left.total_events)
-            .then_with(|| left.album_id.cmp(&right.album_id))
+            .then_with(|| left.release_id.cmp(&right.release_id))
     });
 
     let mut tracks = track_counts
         .into_values()
         .map(|track| RumTrackSummary {
-            album_id: track.album_id,
+            release_id: track.release_id,
             track_id: track.track_id,
+            song_id: track.song_id,
+            recording_id: track.recording_id,
             total_events: track.counts.total_events,
             play_starts: track.counts.play_starts,
             play_completes: track.counts.play_completes,
@@ -1144,7 +1165,7 @@ fn build_rum_summary(
             .play_starts
             .cmp(&left.play_starts)
             .then_with(|| right.total_events.cmp(&left.total_events))
-            .then_with(|| left.album_id.cmp(&right.album_id))
+            .then_with(|| left.release_id.cmp(&right.release_id))
             .then_with(|| left.track_id.cmp(&right.track_id))
     });
 
@@ -1177,7 +1198,7 @@ fn build_rum_summary(
         progress_50: event_count(&event_counts, "play_progress_50"),
         progress_75: event_count(&event_counts, "play_progress_75"),
         events,
-        albums,
+        releases,
         tracks,
         recent_errors,
     }
@@ -1234,17 +1255,6 @@ fn write_preconditions(headers: &HeaderMap) -> Result<WritePreconditions, ApiErr
     })
 }
 
-fn required_if_match(headers: &HeaderMap) -> Result<WritePreconditions, ApiError> {
-    let if_match = optional_header(headers, "if-match")?.ok_or_else(|| {
-        ApiError::precondition_required("send If-Match: <album etag> when editing tracks")
-    })?;
-
-    Ok(WritePreconditions {
-        if_match: Some(if_match),
-        if_none_match: None,
-    })
-}
-
 fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<String>, ApiError> {
     headers
         .get(name)
@@ -1259,21 +1269,39 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
         .transpose()
 }
 
-fn validate_draft_album_document(album_id: &str, document: &Value) -> Result<(), ApiError> {
+fn validate_draft_song_document(song_id: &str, document: &Value) -> Result<(), ApiError> {
+    let object = document.as_object().ok_or_else(|| {
+        ApiError::bad_request("invalid_song", "draft song document must be a JSON object")
+    })?;
+
+    require_string_field(object.get("entityType"), "entityType", "draftSong")?;
+    require_string_field(object.get("songId"), "songId", song_id)?;
+
+    if !object.get("recordings").is_some_and(Value::is_array) {
+        return Err(ApiError::bad_request(
+            "invalid_song",
+            "draft song document must include a recordings array",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_draft_release_document(release_id: &str, document: &Value) -> Result<(), ApiError> {
     let object = document.as_object().ok_or_else(|| {
         ApiError::bad_request(
-            "invalid_album",
-            "draft album document must be a JSON object",
+            "invalid_release",
+            "draft release document must be a JSON object",
         )
     })?;
 
-    require_string_field(object.get("entityType"), "entityType", "draftAlbum")?;
-    require_string_field(object.get("albumId"), "albumId", album_id)?;
+    require_string_field(object.get("entityType"), "entityType", "draftRelease")?;
+    require_string_field(object.get("releaseId"), "releaseId", release_id)?;
 
     if !object.get("tracks").is_some_and(Value::is_array) {
         return Err(ApiError::bad_request(
-            "invalid_album",
-            "draft album document must include a tracks array",
+            "invalid_release",
+            "draft release document must include a tracks array",
         ));
     }
 
@@ -1283,21 +1311,20 @@ fn validate_draft_album_document(album_id: &str, document: &Value) -> Result<(),
 fn validate_source_master(
     source_master: &DraftSourceMaster,
     masters_bucket: &str,
-    album_id: &str,
-    track_id: &str,
+    recording_id: &str,
 ) -> Result<(), ApiError> {
     if source_master.bucket != masters_bucket {
         return Err(ApiError::bad_request(
             "invalid_source_master_bucket",
-            "track sourceMaster bucket does not match the configured masters bucket",
+            "recording sourceMaster bucket does not match the configured masters bucket",
         ));
     }
 
-    let expected_prefix = format!("masters/{album_id}/{track_id}/source.");
+    let expected_prefix = format!("masters/{recording_id}/source.");
     if !source_master.key.starts_with(&expected_prefix) {
         return Err(ApiError::bad_request(
             "invalid_source_master_key",
-            format!("track sourceMaster key must start with {expected_prefix}"),
+            format!("recording sourceMaster key must start with {expected_prefix}"),
         ));
     }
 
@@ -1309,66 +1336,96 @@ fn validate_source_master(
     if !matches!(format, "wav" | "aif" | "aiff" | "flac") {
         return Err(ApiError::bad_request(
             "unsupported_source_master_format",
-            "track sourceMaster key must end with wav, aif, aiff, or flac",
+            "recording sourceMaster key must end with wav, aif, aiff, or flac",
         ));
+    }
+
+    if let Some(declared_format) = &source_master.format {
+        let expected_format = if matches!(format, "aif" | "aiff") {
+            "aiff"
+        } else {
+            format
+        };
+        if declared_format != expected_format {
+            return Err(ApiError::bad_request(
+                "source_master_format_mismatch",
+                format!("recording sourceMaster format must be {expected_format}"),
+            ));
+        }
+    }
+
+    if source_master.sample_rate_hz == Some(0) || source_master.channels == Some(0) {
+        return Err(ApiError::bad_request(
+            "invalid_source_master_metadata",
+            "recording sourceMaster sampleRateHz and channels must be positive when provided",
+        ));
+    }
+
+    if let Some(uploaded_at) = &source_master.uploaded_at {
+        DateTime::parse_from_rfc3339(uploaded_at).map_err(|err| {
+            ApiError::bad_request(
+                "invalid_source_master_uploaded_at",
+                format!("recording sourceMaster uploadedAt must be RFC3339: {err}"),
+            )
+        })?;
     }
 
     Ok(())
 }
 
-fn validate_publishable_album(album: &DraftAlbum, album_id: &str) -> Result<(), ApiError> {
-    if album.schema_version != 1 {
+fn validate_publishable_release(release: &DraftRelease, release_id: &str) -> Result<(), ApiError> {
+    if release.schema_version != 1 {
         return Err(ApiError::bad_request(
-            "invalid_album_schema_version",
-            "draft album schemaVersion must be 1",
+            "invalid_release_schema_version",
+            "draft release schemaVersion must be 1",
         ));
     }
 
-    if album.entity_type != "draftAlbum" {
+    if release.entity_type != "draftRelease" {
         return Err(ApiError::bad_request(
-            "invalid_album_entity_type",
-            "draft album entityType must be draftAlbum",
+            "invalid_release_entity_type",
+            "draft release entityType must be draftRelease",
         ));
     }
 
-    if album.album_id != album_id {
+    if release.release_id != release_id {
         return Err(ApiError::bad_request(
-            "album_id_mismatch",
-            "draft album albumId does not match request albumId",
+            "release_id_mismatch",
+            "draft release releaseId does not match request releaseId",
         ));
     }
 
-    if !matches!(album.publish_state.as_str(), "ready" | "published") {
+    if !matches!(release.publish_state.as_str(), "ready" | "published") {
         return Err(ApiError::bad_request(
-            "album_not_ready",
-            "draft album publishState must be ready or published before publishing",
+            "release_not_ready",
+            "draft release publishState must be ready or published before publishing",
         ));
     }
 
-    if album.release_date.as_deref().is_none_or(str::is_empty) {
+    if release.release_date.as_deref().is_none_or(str::is_empty) {
         return Err(ApiError::bad_request(
             "missing_release_date",
-            "published albums require releaseDate",
+            "published releases require releaseDate",
         ));
     }
 
-    if album.artwork.is_none() {
+    if release.artwork.is_none() {
         return Err(ApiError::bad_request(
             "missing_artwork",
-            "published albums require artwork",
+            "published releases require artwork",
         ));
     }
 
-    if album.tracks.is_empty() {
+    if release.tracks.is_empty() {
         return Err(ApiError::bad_request(
             "missing_tracks",
-            "published albums require at least one track",
+            "published releases require at least one track",
         ));
     }
 
     let mut track_ids = HashSet::new();
     let mut track_positions = HashSet::new();
-    for track in &album.tracks {
+    for track in &release.tracks {
         if !track_ids.insert(&track.track_id) {
             return Err(ApiError::bad_request(
                 "duplicate_track_id",
@@ -1386,12 +1443,9 @@ fn validate_publishable_album(album: &DraftAlbum, album_id: &str) -> Result<(), 
             ));
         }
 
-        if track.duration_seconds <= 0.0 {
-            return Err(ApiError::bad_request(
-                "invalid_track_duration",
-                format!("track {} durationSeconds must be positive", track.track_id),
-            ));
-        }
+        validate_stable_id("track", &track.track_id, "trackId")?;
+        validate_stable_id("song", &track.song_id, "songId")?;
+        validate_stable_id("recording", &track.recording_id, "recordingId")?;
     }
 
     Ok(())
@@ -1399,10 +1453,20 @@ fn validate_publishable_album(album: &DraftAlbum, album_id: &str) -> Result<(), 
 
 fn validate_publish_job(
     job: &EncodeJob,
-    album: &DraftAlbum,
-    track: &DraftTrack,
+    song: &DraftSong,
+    recording: &DraftRecording,
     media_bucket: &str,
 ) -> Result<(), ApiError> {
+    let source_master = recording.source_master.as_ref().ok_or_else(|| {
+        ApiError::bad_request(
+            "missing_source_master",
+            format!(
+                "recording {} does not have a sourceMaster",
+                recording.recording_id
+            ),
+        )
+    })?;
+
     if job.status != EncodeStatus::Succeeded {
         return Err(ApiError::bad_request(
             "encode_job_not_succeeded",
@@ -1410,17 +1474,17 @@ fn validate_publish_job(
         ));
     }
 
-    if job.album_id != album.album_id || job.track_id != track.track_id {
+    if job.song_id != song.song_id || job.recording_id != recording.recording_id {
         return Err(ApiError::bad_request(
             "encode_job_mismatch",
             format!(
-                "encode job {} does not match album {} track {}",
-                job.job_id, album.album_id, track.track_id
+                "encode job {} does not match song {} recording {}",
+                job.job_id, song.song_id, recording.recording_id
             ),
         ));
     }
 
-    if job.input.bucket != track.source_master.bucket || job.input.key != track.source_master.key {
+    if job.input.bucket != source_master.bucket || job.input.key != source_master.key {
         return Err(ApiError::bad_request(
             "encode_job_source_mismatch",
             format!(
@@ -1510,54 +1574,74 @@ fn validate_publish_job(
 }
 
 fn select_publish_job_id(
-    track: &DraftTrack,
+    track: &DraftReleaseTrack,
+    recording: &DraftRecording,
     overrides: &HashMap<String, String>,
 ) -> Result<String, ApiError> {
-    if let Some(job_id) = overrides.get(&track.track_id) {
+    if let Some(job_id) = overrides
+        .get(&track.track_id)
+        .or_else(|| overrides.get(&track.recording_id))
+    {
         return Ok(job_id.clone());
     }
 
-    track.encode_job_ids.last().cloned().ok_or_else(|| {
+    recording.encode_job_ids.last().cloned().ok_or_else(|| {
         ApiError::bad_request(
             "missing_encode_job",
             format!(
-                "track {} has no encodeJobIds and no publish override",
-                track.track_id
+                "track {} recording {} has no encode job history",
+                track.track_id, track.recording_id
             ),
         )
     })
 }
 
-fn build_published_album(
-    draft: &DraftAlbum,
+fn build_published_song(draft: &DraftSong) -> PublishedSong {
+    PublishedSong {
+        schema_version: 1,
+        entity_type: SongEntityType::Song,
+        song_id: draft.song_id.clone(),
+        slug: draft.slug.clone(),
+        title: draft.title.clone(),
+        artist_name: draft.artist_name.clone(),
+        description: draft.description.clone(),
+        lyrics: draft.lyrics.clone(),
+        credits: draft.credits.clone(),
+        tags: draft.tags.clone(),
+        placements: Vec::new(),
+    }
+}
+
+fn build_published_release(
+    draft: &DraftRelease,
     visibility: Visibility,
     published_at: String,
-    tracks: Vec<PublishedTrack>,
-) -> Result<PublishedAlbum, ApiError> {
-    Ok(PublishedAlbum {
+    tracks: Vec<PublishedReleaseTrack>,
+) -> Result<PublishedRelease, ApiError> {
+    Ok(PublishedRelease {
         schema_version: 1,
-        entity_type: AlbumEntityType::Album,
-        album_id: draft.album_id.clone(),
+        entity_type: ReleaseEntityType::Release,
         release_id: draft.release_id.clone(),
         slug: draft.slug.clone(),
         title: draft.title.clone(),
         subtitle: draft.subtitle.clone(),
         artist_name: draft.artist_name.clone(),
-        release_type: draft.release_type.clone(),
+        release_kind: draft.release_kind.clone(),
+        release_status: draft.release_status.clone(),
         release_date: draft.release_date.clone().ok_or_else(|| {
             ApiError::bad_request(
                 "missing_release_date",
-                "published albums require releaseDate",
+                "published releases require releaseDate",
             )
         })?,
         status: PublishedStatus::Published,
         visibility,
         published_at,
-        manifest_path: published_album_api_path(&draft.slug),
+        manifest_path: published_release_api_path(&draft.slug),
         description: draft.description.clone(),
         copyright: draft.copyright.clone(),
         artwork: draft.artwork.clone().ok_or_else(|| {
-            ApiError::bad_request("missing_artwork", "published albums require artwork")
+            ApiError::bad_request("missing_artwork", "published releases require artwork")
         })?,
         credits: draft.credits.clone(),
         links: draft.links.clone(),
@@ -1567,10 +1651,12 @@ fn build_published_album(
 }
 
 fn build_published_track(
-    track: &DraftTrack,
+    track: &DraftReleaseTrack,
+    song: &DraftSong,
+    recording: &DraftRecording,
     job: &EncodeJob,
     public_prefix: &str,
-) -> Result<PublishedTrack, ApiError> {
+) -> Result<PublishedReleaseTrack, ApiError> {
     let metadata = job.metadata.as_ref().ok_or_else(|| {
         ApiError::bad_request(
             "missing_encode_metadata",
@@ -1615,19 +1701,27 @@ fn build_published_track(
             quality: PlaybackQuality::FlacLossless,
             bitrate_kbps: None,
             metadata,
-            bit_depth: track.source_master.bit_depth,
+            bit_depth: recording
+                .source_master
+                .as_ref()
+                .and_then(|source_master| source_master.bit_depth),
         })?);
     }
 
-    Ok(PublishedTrack {
+    Ok(PublishedReleaseTrack {
         track_id: track.track_id.clone(),
+        song_id: track.song_id.clone(),
+        recording_id: track.recording_id.clone(),
         disc_number: track.disc_number,
         track_number: track.track_number,
         slug: track.slug.clone(),
         title: track.title.clone(),
+        song_title: song.title.clone(),
+        recording_title: recording.title.clone(),
+        version_title: recording.version_title.clone(),
         duration_seconds: metadata.duration_seconds,
-        explicit: track.explicit,
-        isrc: track.isrc.clone(),
+        explicit: track.explicit.unwrap_or(recording.explicit),
+        isrc: track.isrc.clone().or_else(|| recording.isrc.clone()),
         description: track.description.clone(),
         credits: track.credits.clone(),
         playback: TrackPlayback {
@@ -1728,12 +1822,12 @@ fn ensure_trailing_slash(value: &str) -> String {
     format!("{}/", value.trim_end_matches('/'))
 }
 
-fn public_track_media_prefix(album_slug: &str, track_slug: &str, job_id: &str) -> String {
-    format!("{PUBLIC_ALBUM_PREFIX}{album_slug}/tracks/{track_slug}/{job_id}")
+fn public_recording_media_prefix(recording_id: &str, job_id: &str) -> String {
+    format!("{PUBLIC_RECORDING_PREFIX}{recording_id}/{job_id}")
 }
 
-fn published_album_api_path(album_slug: &str) -> String {
-    format!("/catalog/albums/{album_slug}")
+fn published_release_api_path(release_slug: &str) -> String {
+    format!("/catalog/releases/{release_slug}")
 }
 
 struct PreparedEncodeJob {
@@ -1744,7 +1838,8 @@ struct PreparedEncodeJob {
 
 fn build_encode_job_event(
     request: EncodeJobRequest,
-    track: &DraftTrack,
+    _recording: &DraftRecording,
+    source_master: &DraftSourceMaster,
     job_id: String,
     requested_at: String,
     output: encode_contract::EncodeOutput,
@@ -1752,20 +1847,20 @@ fn build_encode_job_event(
 ) -> PreparedEncodeJob {
     let mut job = EncodeJob::queued(
         job_id.clone(),
-        request.album_id.clone(),
-        request.track_id.clone(),
+        request.song_id.clone(),
+        request.recording_id.clone(),
         requested_at,
         ObjectRef {
-            bucket: track.source_master.bucket.clone(),
-            key: track.source_master.key.clone(),
-            version_id: track.source_master.version_id.clone(),
-            etag: track.source_master.etag.clone(),
+            bucket: source_master.bucket.clone(),
+            key: source_master.key.clone(),
+            version_id: source_master.version_id.clone(),
+            etag: source_master.etag.clone(),
         },
         output,
     );
     job.ffmpeg = Some(encode_contract::FfmpegDetails {
         version: None,
-        args: planned_ffmpeg_args(&track.source_master.key, &job.output, include_lossless),
+        args: planned_ffmpeg_args(&source_master.key, &job.output, include_lossless),
     });
 
     let job_key = contract_encode_job_key(&job_id);
@@ -1781,68 +1876,6 @@ fn build_encode_job_event(
         job_key,
         event,
     }
-}
-
-fn upsert_track_document(
-    album: &mut Value,
-    album_id: &str,
-    track_id: &str,
-    track: Value,
-) -> Result<bool, ApiError> {
-    validate_draft_album_document(album_id, album)?;
-
-    let track_object = track.as_object().ok_or_else(|| {
-        ApiError::bad_request("invalid_track", "track payload must be a JSON object")
-    })?;
-    require_string_field(track_object.get("trackId"), "trackId", track_id)?;
-
-    let tracks = album
-        .get_mut("tracks")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| ApiError::bad_request("invalid_album", "tracks must be an array"))?;
-
-    if let Some(existing) = tracks.iter_mut().find(|existing| {
-        existing
-            .get("trackId")
-            .and_then(Value::as_str)
-            .is_some_and(|existing_id| existing_id == track_id)
-    }) {
-        *existing = track;
-        normalize_updated_at(album);
-        return Ok(false);
-    } else {
-        tracks.push(track);
-    }
-
-    normalize_updated_at(album);
-    Ok(true)
-}
-
-fn remove_track_document(
-    album: &mut Value,
-    album_id: &str,
-    track_id: &str,
-) -> Result<(), ApiError> {
-    validate_draft_album_document(album_id, album)?;
-
-    let tracks = album
-        .get_mut("tracks")
-        .and_then(Value::as_array_mut)
-        .ok_or_else(|| ApiError::bad_request("invalid_album", "tracks must be an array"))?;
-    let original_len = tracks.len();
-    tracks.retain(|track| {
-        track
-            .get("trackId")
-            .and_then(Value::as_str)
-            .is_none_or(|existing_id| existing_id != track_id)
-    });
-
-    if tracks.len() == original_len {
-        return Err(ApiError::not_found("track not found"));
-    }
-
-    normalize_updated_at(album);
-    Ok(())
 }
 
 fn normalize_updated_at(document: &mut Value) {
@@ -2026,12 +2059,16 @@ fn infer_upload_format(
     Ok(format)
 }
 
-fn master_key(album_id: &str, track_id: &str, extension: &str) -> String {
-    format!("masters/{album_id}/{track_id}/source.{extension}")
+fn master_key(recording_id: &str, extension: &str) -> String {
+    format!("masters/{recording_id}/source.{extension}")
 }
 
-fn draft_album_key(album_id: &str) -> String {
-    format!("{DRAFT_ALBUM_PREFIX}{album_id}.json")
+fn draft_song_key(song_id: &str) -> String {
+    format!("{DRAFT_SONG_PREFIX}{song_id}.json")
+}
+
+fn draft_release_key(release_id: &str) -> String {
+    format!("{DRAFT_RELEASE_PREFIX}{release_id}.json")
 }
 
 fn encode_job_key(job_id: &str) -> String {
@@ -2055,17 +2092,19 @@ fn required_env(name: &'static str) -> Result<String, ConfigError> {
 enum ApiPath {
     Health,
     PublicCatalog,
-    PublicAlbum { slug: String },
+    PublicRelease { slug: String },
+    PublicSong { slug: String },
     AdminCatalog,
-    AdminAlbums,
-    AdminAlbum { album_id: String },
-    AdminTrack { album_id: String, track_id: String },
+    AdminSongs,
+    AdminSong { song_id: String },
+    AdminReleases,
+    AdminRelease { release_id: String },
     AdminJobs,
     AdminJob { job_id: String },
     AdminRumSummary,
     AdminUploadUrl,
     AdminEncodeJobs,
-    AdminPublish { album_id: String },
+    AdminPublish { release_id: String },
     NotFound,
 }
 
@@ -2165,8 +2204,7 @@ struct UploadFormat<'a> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UploadUrlRequest {
-    album_id: String,
-    track_id: String,
+    recording_id: String,
     filename: String,
     #[serde(default)]
     content_type: Option<String>,
@@ -2193,17 +2231,19 @@ struct UploadHeaders {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SourceMasterDraft {
     bucket: String,
     key: String,
     format: String,
+    uploaded_at: String,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct EncodeJobRequest {
-    album_id: String,
-    track_id: String,
+    song_id: String,
+    recording_id: String,
     #[serde(default)]
     job_id: Option<String>,
     #[serde(default)]
@@ -2235,14 +2275,13 @@ struct PublishRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublishResponse {
-    album_id: String,
     release_id: String,
     manifest_path: String,
     visibility: Visibility,
     job_ids: Vec<String>,
     copied_object_count: usize,
     copied_keys: Vec<String>,
-    album_write: WriteResult,
+    release_write: WriteResult,
     draft_write: WriteResult,
     invalidation: CloudFrontInvalidationResult,
 }
@@ -2272,7 +2311,7 @@ struct RumSummaryResponse {
     progress_50: u64,
     progress_75: u64,
     events: Vec<RumEventCount>,
-    albums: Vec<RumAlbumSummary>,
+    releases: Vec<RumReleaseSummary>,
     tracks: Vec<RumTrackSummary>,
     recent_errors: Vec<RumRecentError>,
 }
@@ -2286,8 +2325,8 @@ struct RumEventCount {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct RumAlbumSummary {
-    album_id: String,
+struct RumReleaseSummary {
+    release_id: String,
     total_events: u64,
     play_starts: u64,
     play_completes: u64,
@@ -2297,8 +2336,12 @@ struct RumAlbumSummary {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct RumTrackSummary {
-    album_id: String,
+    release_id: String,
     track_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    song_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recording_id: Option<String>,
     total_events: u64,
     play_starts: u64,
     play_completes: u64,
@@ -2311,7 +2354,11 @@ struct RumRecentError {
     #[serde(skip_serializing_if = "Option::is_none")]
     timestamp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    album_id: Option<String>,
+    release_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    song_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recording_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     track_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2342,8 +2389,10 @@ impl RumAggregate {
 
 #[derive(Debug)]
 struct RumTrackAggregate {
-    album_id: String,
+    release_id: String,
     track_id: String,
+    song_id: Option<String>,
+    recording_id: Option<String>,
     counts: RumAggregate,
 }
 
@@ -2358,17 +2407,61 @@ struct CloudFrontInvalidationResult {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DraftAlbum {
+struct DraftSong {
     schema_version: u8,
     entity_type: String,
-    album_id: String,
+    song_id: String,
+    slug: String,
+    title: String,
+    artist_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    lyrics: Option<String>,
+    #[serde(default)]
+    credits: Option<Value>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    recordings: Vec<DraftRecording>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftRecording {
+    recording_id: String,
+    slug: String,
+    title: String,
+    #[serde(default)]
+    version_title: Option<String>,
+    version_type: String,
+    #[serde(default)]
+    artist_name: Option<String>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    explicit: bool,
+    #[serde(default)]
+    isrc: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    source_master: Option<DraftSourceMaster>,
+    #[serde(default)]
+    encode_job_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DraftRelease {
+    schema_version: u8,
+    entity_type: String,
     release_id: String,
     slug: String,
     title: String,
     #[serde(default)]
     subtitle: Option<String>,
     artist_name: String,
-    release_type: String,
+    release_kind: String,
+    release_status: String,
     #[serde(default)]
     release_date: Option<String>,
     publish_state: String,
@@ -2384,28 +2477,27 @@ struct DraftAlbum {
     links: Option<Vec<ExternalLink>>,
     #[serde(default)]
     tags: Option<Vec<String>>,
-    tracks: Vec<DraftTrack>,
+    tracks: Vec<DraftReleaseTrack>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DraftTrack {
+struct DraftReleaseTrack {
     track_id: String,
+    song_id: String,
+    recording_id: String,
     disc_number: u32,
     track_number: u32,
     slug: String,
     title: String,
-    duration_seconds: f64,
-    explicit: bool,
+    #[serde(default)]
+    explicit: Option<bool>,
     #[serde(default)]
     isrc: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
     credits: Option<Value>,
-    source_master: DraftSourceMaster,
-    #[serde(default)]
-    encode_job_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2418,7 +2510,15 @@ struct DraftSourceMaster {
     #[serde(default, rename = "etag")]
     etag: Option<String>,
     #[serde(default)]
+    format: Option<String>,
+    #[serde(default)]
+    uploaded_at: Option<String>,
+    #[serde(default)]
+    sample_rate_hz: Option<u32>,
+    #[serde(default)]
     bit_depth: Option<u32>,
+    #[serde(default)]
+    channels: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -2437,8 +2537,14 @@ enum PublishedStatus {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-enum AlbumEntityType {
-    Album,
+enum ReleaseEntityType {
+    Release,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum SongEntityType {
+    Song,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -2454,19 +2560,19 @@ struct ExternalLink {
     url: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct PublishedAlbum {
+struct PublishedRelease {
     schema_version: u8,
-    entity_type: AlbumEntityType,
-    album_id: String,
+    entity_type: ReleaseEntityType,
     release_id: String,
     slug: String,
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     subtitle: Option<String>,
     artist_name: String,
-    release_type: String,
+    release_kind: String,
+    release_status: String,
     release_date: String,
     status: PublishedStatus,
     visibility: Visibility,
@@ -2484,17 +2590,23 @@ struct PublishedAlbum {
     links: Option<Vec<ExternalLink>>,
     #[serde(skip_serializing)]
     tags: Option<Vec<String>>,
-    tracks: Vec<PublishedTrack>,
+    tracks: Vec<PublishedReleaseTrack>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct PublishedTrack {
+struct PublishedReleaseTrack {
     track_id: String,
+    song_id: String,
+    recording_id: String,
     disc_number: u32,
     track_number: u32,
     slug: String,
     title: String,
+    song_title: String,
+    recording_title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_title: Option<String>,
     duration_seconds: f64,
     explicit: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2506,14 +2618,14 @@ struct PublishedTrack {
     playback: TrackPlayback,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct TrackPlayback {
     hls: PlaybackHls,
     formats: Vec<PlaybackFormat>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct PlaybackHls {
     asset_id: String,
@@ -2522,7 +2634,7 @@ struct PlaybackHls {
     codecs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 struct PlaybackFormat {
     asset_id: String,
@@ -2542,14 +2654,14 @@ struct PlaybackFormat {
     file_size_bytes: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum PlaybackFormatKind {
     HlsRendition,
     Download,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 enum PlaybackQuality {
     Aac192,
@@ -2559,12 +2671,46 @@ enum PlaybackQuality {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+struct PublishedSong {
+    schema_version: u8,
+    entity_type: SongEntityType,
+    song_id: String,
+    slug: String,
+    title: String,
+    artist_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lyrics: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credits: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<String>>,
+    placements: Vec<PublishedSongPlacement>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct PublishedSongPlacement {
+    release_id: String,
+    release_slug: String,
+    release_title: String,
+    release_kind: String,
+    track_id: String,
+    track_slug: String,
+    recording_id: String,
+    track_number: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 struct PublishedCatalog {
     schema_version: u8,
     entity_type: CatalogEntityType,
     generated_at: String,
     artist: CatalogArtist,
-    albums: Vec<PublishedCatalogAlbum>,
+    releases: Vec<PublishedCatalogRelease>,
+    songs: Vec<PublishedCatalogSong>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -2576,14 +2722,14 @@ struct CatalogArtist {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-struct PublishedCatalogAlbum {
-    album_id: String,
+struct PublishedCatalogRelease {
     release_id: String,
     slug: String,
     title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     subtitle: Option<String>,
-    release_type: String,
+    release_kind: String,
+    release_status: String,
     release_date: String,
     status: PublishedStatus,
     visibility: Visibility,
@@ -2597,6 +2743,17 @@ struct PublishedCatalogAlbum {
     links: Option<Vec<ExternalLink>>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct PublishedCatalogSong {
+    song_id: String,
+    slug: String,
+    title: String,
+    artist_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<Vec<String>>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WriteResult {
@@ -2606,15 +2763,6 @@ struct WriteResult {
     e_tag: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     version_id: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackWriteResponse {
-    album_id: String,
-    track_id: String,
-    created: bool,
-    write: WriteResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -2642,18 +2790,18 @@ mod tests {
     fn parses_admin_paths() {
         assert_eq!(parse_path("/health"), ApiPath::Health);
         assert_eq!(parse_path("/admin/catalog"), ApiPath::AdminCatalog);
-        assert_eq!(parse_path("/admin/albums"), ApiPath::AdminAlbums);
+        assert_eq!(parse_path("/admin/songs"), ApiPath::AdminSongs);
         assert_eq!(
-            parse_path("/admin/albums/album_so-we-sleep"),
-            ApiPath::AdminAlbum {
-                album_id: "album_so-we-sleep".to_string()
+            parse_path("/admin/songs/song_opening-dream"),
+            ApiPath::AdminSong {
+                song_id: "song_opening-dream".to_string()
             }
         );
+        assert_eq!(parse_path("/admin/releases"), ApiPath::AdminReleases);
         assert_eq!(
-            parse_path("/admin/albums/album_so-we-sleep/tracks/track_so-we-sleep_01"),
-            ApiPath::AdminTrack {
-                album_id: "album_so-we-sleep".to_string(),
-                track_id: "track_so-we-sleep_01".to_string()
+            parse_path("/admin/releases/release_so-we-sleep"),
+            ApiPath::AdminRelease {
+                release_id: "release_so-we-sleep".to_string()
             }
         );
         assert_eq!(
@@ -2664,20 +2812,24 @@ mod tests {
         );
         assert_eq!(parse_path("/admin/rum/summary"), ApiPath::AdminRumSummary);
         assert_eq!(
-            parse_path("/admin/publish/album_so-we-sleep"),
+            parse_path("/admin/publish/release_so-we-sleep"),
             ApiPath::AdminPublish {
-                album_id: "album_so-we-sleep".to_string()
+                release_id: "release_so-we-sleep".to_string()
             }
         );
     }
 
     #[test]
     fn validates_manifest_stable_ids() {
-        assert!(validate_stable_id("album", "album_so-we-sleep", "albumId").is_ok());
+        assert!(validate_stable_id("song", "song_opening-dream", "songId").is_ok());
+        assert!(
+            validate_stable_id("recording", "recording_opening-dream_demo", "recordingId").is_ok()
+        );
+        assert!(validate_stable_id("release", "release_so-we-sleep", "releaseId").is_ok());
         assert!(validate_stable_id("track", "track_so-we-sleep_01", "trackId").is_ok());
-        assert!(validate_stable_id("album", "track_so-we-sleep_01", "albumId").is_err());
-        assert!(validate_stable_id("album", "album_No", "albumId").is_err());
-        assert!(validate_stable_id("album", "album_ab", "albumId").is_err());
+        assert!(validate_stable_id("song", "track_so-we-sleep_01", "songId").is_err());
+        assert!(validate_stable_id("song", "song_No", "songId").is_err());
+        assert!(validate_stable_id("song", "song_ab", "songId").is_err());
     }
 
     #[test]
@@ -2716,42 +2868,45 @@ mod tests {
     fn validates_canonical_source_master_keys() {
         let source = DraftSourceMaster {
             bucket: "tsonu-music-masters".to_string(),
-            key: "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav".to_string(),
+            key: "masters/recording_opening-dream_demo/source.wav".to_string(),
             version_id: None,
             etag: None,
+            format: Some("wav".to_string()),
+            uploaded_at: None,
+            sample_rate_hz: None,
             bit_depth: None,
+            channels: None,
         };
 
         assert!(validate_source_master(
             &source,
             "tsonu-music-masters",
-            "album_so-we-sleep",
-            "track_so-we-sleep_01"
+            "recording_opening-dream_demo"
         )
         .is_ok());
 
         let wrong_key = DraftSourceMaster {
-            key: "masters/album_so-we-sleep/track_so-we-sleep_02/source.wav".to_string(),
+            key: "masters/recording_opening-dream_album/source.wav".to_string(),
             ..source
         };
         assert!(validate_source_master(
             &wrong_key,
             "tsonu-music-masters",
-            "album_so-we-sleep",
-            "track_so-we-sleep_01"
+            "recording_opening-dream_demo"
         )
         .is_err());
     }
 
     #[test]
     fn selects_publish_override_or_latest_job() {
-        let track = sample_draft_track(vec![
+        let track = sample_release_track();
+        let recording = sample_recording(vec![
             "job_so-we-sleep_01_encode_20260523".to_string(),
             "job_so-we-sleep_01_encode_20260524".to_string(),
         ]);
 
         assert_eq!(
-            select_publish_job_id(&track, &HashMap::new()).unwrap(),
+            select_publish_job_id(&track, &recording, &HashMap::new()).unwrap(),
             "job_so-we-sleep_01_encode_20260524"
         );
 
@@ -2760,7 +2915,7 @@ mod tests {
             "job_so-we-sleep_01_encode_manual".to_string(),
         )]);
         assert_eq!(
-            select_publish_job_id(&track, &overrides).unwrap(),
+            select_publish_job_id(&track, &recording, &overrides).unwrap(),
             "job_so-we-sleep_01_encode_manual"
         );
     }
@@ -2768,37 +2923,41 @@ mod tests {
     #[test]
     fn maps_draft_encode_paths_to_public_job_prefix() {
         assert_eq!(
-            public_track_media_prefix(
-                "so-we-sleep",
-                "opening-dream",
+            public_recording_media_prefix(
+                "recording_opening-dream_demo",
                 "job_so-we-sleep_01_encode_20260523"
             ),
-            "albums/so-we-sleep/tracks/opening-dream/job_so-we-sleep_01_encode_20260523"
+            "recordings/recording_opening-dream_demo/job_so-we-sleep_01_encode_20260523"
         );
         assert_eq!(
             public_key_for_draft_object(
                 "draft/encodes/job_x",
-                "albums/so-we-sleep/tracks/opening-dream/job_x",
+                "recordings/recording_opening-dream_demo/job_x",
                 "draft/encodes/job_x/hls/192k/segment_00001.ts"
             )
             .unwrap(),
-            "albums/so-we-sleep/tracks/opening-dream/job_x/hls/192k/segment_00001.ts"
+            "recordings/recording_opening-dream_demo/job_x/hls/192k/segment_00001.ts"
         );
     }
 
     #[test]
     fn builds_published_track_from_succeeded_encode_job() {
-        let track = sample_draft_track(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
+        let song = sample_draft_song();
+        let recording = sample_recording(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
+        let track = sample_release_track();
         let job = sample_succeeded_job();
-        let public_prefix = public_track_media_prefix(&"so-we-sleep", &track.slug, &job.job_id);
+        let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
 
-        let published = build_published_track(&track, &job, &public_prefix).unwrap();
+        let published =
+            build_published_track(&track, &song, &recording, &job, &public_prefix).unwrap();
 
         assert_eq!(published.duration_seconds, 181.25);
         assert_eq!(
             published.playback.hls.path,
-            "albums/so-we-sleep/tracks/opening-dream/job_so-we-sleep_01_encode_20260523/hls/master.m3u8"
+            "recordings/recording_opening-dream_demo/job_so-we-sleep_01_encode_20260523/hls/master.m3u8"
         );
+        assert_eq!(published.song_id, "song_opening-dream");
+        assert_eq!(published.recording_id, "recording_opening-dream_demo");
         assert_eq!(published.playback.formats.len(), 3);
         assert!(published
             .playback
@@ -2809,13 +2968,16 @@ mod tests {
     }
 
     #[test]
-    fn serializes_published_album_without_private_publish_fields() {
-        let draft = sample_draft_album();
-        let track = sample_draft_track(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
+    fn serializes_published_release_without_private_publish_fields() {
+        let draft = sample_draft_release();
+        let song = sample_draft_song();
+        let recording = sample_recording(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
+        let track = sample_release_track();
         let job = sample_succeeded_job();
-        let public_prefix = public_track_media_prefix(&draft.slug, &track.slug, &job.job_id);
-        let published_track = build_published_track(&track, &job, &public_prefix).unwrap();
-        let album = build_published_album(
+        let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
+        let published_track =
+            build_published_track(&track, &song, &recording, &job, &public_prefix).unwrap();
+        let release = build_published_release(
             &draft,
             Visibility::Public,
             "2026-05-23T12:00:00Z".to_string(),
@@ -2823,7 +2985,7 @@ mod tests {
         )
         .unwrap();
 
-        let value = serde_json::to_value(album).unwrap();
+        let value = serde_json::to_value(release).unwrap();
 
         assert!(value.get("manifestPath").is_none());
         assert!(value.get("tags").is_none());
@@ -2832,29 +2994,25 @@ mod tests {
     }
 
     #[test]
-    fn upserts_track_without_replacing_album_fields() {
-        let mut album = json!({
+    fn validates_draft_documents() {
+        let song = json!({
             "schemaVersion": 1,
-            "entityType": "draftAlbum",
-            "albumId": "album_so-we-sleep",
-            "tracks": [
-                { "trackId": "track_so-we-sleep_01", "title": "Old" }
-            ],
+            "entityType": "draftSong",
+            "songId": "song_opening-dream",
+            "recordings": [],
             "updatedAt": "2026-05-23T00:00:00Z"
         });
-        let track = json!({ "trackId": "track_so-we-sleep_01", "title": "New" });
+        let release = json!({
+            "schemaVersion": 1,
+            "entityType": "draftRelease",
+            "releaseId": "release_so-we-sleep",
+            "tracks": [],
+            "updatedAt": "2026-05-23T00:00:00Z"
+        });
 
-        let created = upsert_track_document(
-            &mut album,
-            "album_so-we-sleep",
-            "track_so-we-sleep_01",
-            track,
-        )
-        .unwrap();
-
-        assert!(!created);
-        assert_eq!(album["tracks"][0]["title"], "New");
-        assert_eq!(album["albumId"], "album_so-we-sleep");
+        assert!(validate_draft_song_document("song_opening-dream", &song).is_ok());
+        assert!(validate_draft_release_document("release_so-we-sleep", &release).is_ok());
+        assert!(validate_draft_song_document("song_other", &song).is_err());
     }
 
     #[test]
@@ -2875,13 +3033,15 @@ mod tests {
 
     #[test]
     fn builds_encode_job_event_with_lossless_outputs_and_source_identity() {
-        let mut track = sample_draft_track(vec![]);
-        track.source_master.version_id = Some("source-version".to_string());
-        track.source_master.etag = Some("\"source-etag\"".to_string());
+        let mut recording = sample_recording(vec![]);
+        let source_master = recording.source_master.as_mut().unwrap();
+        source_master.version_id = Some("source-version".to_string());
+        source_master.etag = Some("\"source-etag\"".to_string());
+        let source_master = recording.source_master.as_ref().unwrap();
 
         let request = EncodeJobRequest {
-            album_id: "album_so-we-sleep".to_string(),
-            track_id: "track_so-we-sleep_01".to_string(),
+            song_id: "song_opening-dream".to_string(),
+            recording_id: "recording_opening-dream_demo".to_string(),
             job_id: Some("job_so-we-sleep_01_encode_manual".to_string()),
             include_lossless: Some(true),
             requested_by: Some("admin@example.com".to_string()),
@@ -2894,7 +3054,8 @@ mod tests {
 
         let prepared = build_encode_job_event(
             request,
-            &track,
+            &recording,
+            source_master,
             "job_so-we-sleep_01_encode_manual".to_string(),
             "2026-05-24T00:00:00Z".to_string(),
             output,
@@ -2926,26 +3087,44 @@ mod tests {
         let ffmpeg_args = &prepared.job.ffmpeg.as_ref().unwrap().args;
         assert!(ffmpeg_args
             .iter()
-            .any(|arg| arg == "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav"));
+            .any(|arg| arg == "masters/recording_opening-dream_demo/source.wav"));
         assert!(ffmpeg_args
             .iter()
             .any(|arg| arg.ends_with("/lossless.flac")));
     }
 
-    fn sample_draft_album() -> DraftAlbum {
-        DraftAlbum {
+    fn sample_draft_song() -> DraftSong {
+        DraftSong {
             schema_version: 1,
-            entity_type: "draftAlbum".to_string(),
-            album_id: "album_so-we-sleep".to_string(),
-            release_id: "release_so-we-sleep_2026".to_string(),
+            entity_type: "draftSong".to_string(),
+            song_id: "song_opening-dream".to_string(),
+            slug: "opening-dream".to_string(),
+            title: "Opening Dream".to_string(),
+            artist_name: "Tsonu".to_string(),
+            description: None,
+            lyrics: None,
+            credits: None,
+            tags: Some(vec!["demo".to_string()]),
+            recordings: vec![sample_recording(vec![
+                "job_so-we-sleep_01_encode_20260523".to_string()
+            ])],
+        }
+    }
+
+    fn sample_draft_release() -> DraftRelease {
+        DraftRelease {
+            schema_version: 1,
+            entity_type: "draftRelease".to_string(),
+            release_id: "release_so-we-sleep".to_string(),
             slug: "so-we-sleep".to_string(),
             title: "So We Sleep".to_string(),
             subtitle: None,
             artist_name: "Tsonu".to_string(),
-            release_type: "album".to_string(),
+            release_kind: "album".to_string(),
+            release_status: "official".to_string(),
             release_date: Some("2026-01-01".to_string()),
             publish_state: "ready".to_string(),
-            description: Some("Debut album by Tsonu.".to_string()),
+            description: Some("Debut release by Tsonu.".to_string()),
             copyright: None,
             artwork: Some(json!({
                 "assetId": "asset_so-we-sleep_cover",
@@ -2962,31 +3141,49 @@ mod tests {
             credits: None,
             links: None,
             tags: Some(vec!["album".to_string()]),
-            tracks: vec![sample_draft_track(vec![
-                "job_so-we-sleep_01_encode_20260523".to_string(),
-            ])],
+            tracks: vec![sample_release_track()],
         }
     }
 
-    fn sample_draft_track(encode_job_ids: Vec<String>) -> DraftTrack {
-        DraftTrack {
+    fn sample_release_track() -> DraftReleaseTrack {
+        DraftReleaseTrack {
             track_id: "track_so-we-sleep_01".to_string(),
+            song_id: "song_opening-dream".to_string(),
+            recording_id: "recording_opening-dream_demo".to_string(),
             disc_number: 1,
             track_number: 1,
             slug: "opening-dream".to_string(),
             title: "Opening Dream".to_string(),
-            duration_seconds: 180.0,
-            explicit: false,
+            explicit: None,
             isrc: None,
             description: None,
             credits: None,
-            source_master: DraftSourceMaster {
+        }
+    }
+
+    fn sample_recording(encode_job_ids: Vec<String>) -> DraftRecording {
+        DraftRecording {
+            recording_id: "recording_opening-dream_demo".to_string(),
+            slug: "opening-dream-demo".to_string(),
+            title: "Opening Dream Demo".to_string(),
+            version_title: Some("Demo".to_string()),
+            version_type: "demo".to_string(),
+            artist_name: None,
+            duration_seconds: Some(180.0),
+            explicit: false,
+            isrc: None,
+            description: None,
+            source_master: Some(DraftSourceMaster {
                 bucket: "tsonu-music-masters".to_string(),
-                key: "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav".to_string(),
+                key: "masters/recording_opening-dream_demo/source.wav".to_string(),
                 version_id: None,
                 etag: None,
+                format: Some("wav".to_string()),
+                uploaded_at: None,
+                sample_rate_hz: None,
                 bit_depth: Some(24),
-            },
+                channels: None,
+            }),
             encode_job_ids,
         }
     }
@@ -3000,12 +3197,12 @@ mod tests {
         }
         let mut job = EncodeJob::queued(
             job_id.to_string(),
-            "album_so-we-sleep".to_string(),
-            "track_so-we-sleep_01".to_string(),
+            "song_opening-dream".to_string(),
+            "recording_opening-dream_demo".to_string(),
             "2026-05-23T00:00:00Z".to_string(),
             ObjectRef {
                 bucket: "tsonu-music-masters".to_string(),
-                key: "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav".to_string(),
+                key: "masters/recording_opening-dream_demo/source.wav".to_string(),
                 version_id: None,
                 etag: None,
             },
