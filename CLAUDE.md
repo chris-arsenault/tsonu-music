@@ -1,4 +1,4 @@
-# Claude Guide
+# Agent Guide
 
 Marketing site and first-party streaming surface for the band **Tsonu**. The
 public React app renders catalog, album, and track pages with a bottom sticky
