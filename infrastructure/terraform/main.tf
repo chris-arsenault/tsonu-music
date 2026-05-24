@@ -76,8 +76,8 @@ module "frontend" {
         applicationRegion    = data.aws_region.current.region
         applicationVersion   = local.frontend_application_version
         endpoint             = "https://dataplane.rum.${data.aws_region.current.region}.amazonaws.com"
-        identityPoolId       = aws_cognito_identity_pool.rum.id
-        guestRoleArn         = aws_iam_role.rum_unauthenticated.arn
+        identityPoolId       = module.ctx.rum.identity_pool_id
+        guestRoleArn         = module.ctx.rum.guest_role_arn
         sessionSampleRate    = local.rum_session_sample_rate
         allowCookies         = local.rum_allow_cookies
         telemetries          = local.rum_telemetries

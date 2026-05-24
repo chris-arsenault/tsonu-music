@@ -94,11 +94,11 @@ output "rum_log_group_name" {
 }
 
 output "rum_identity_pool_id" {
-  description = "Cognito identity pool ID used by the browser RUM client."
-  value       = aws_cognito_identity_pool.rum.id
+  description = "Shared Cognito identity pool ID used by the browser RUM client."
+  value       = module.ctx.rum.identity_pool_id
 }
 
 output "rum_unauthenticated_role_arn" {
-  description = "IAM role ARN assumed by unauthenticated browser RUM clients."
-  value       = aws_iam_role.rum_unauthenticated.arn
+  description = "Shared IAM role ARN assumed by unauthenticated browser RUM clients."
+  value       = module.ctx.rum.guest_role_arn
 }
