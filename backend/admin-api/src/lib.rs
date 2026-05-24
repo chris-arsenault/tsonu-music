@@ -135,6 +135,17 @@ impl AppState {
                     "access-control-expose-headers",
                     HeaderValue::from_static("ETag, X-S3-Version-Id"),
                 );
+                headers.insert(
+                    "access-control-allow-headers",
+                    HeaderValue::from_static(
+                        "Authorization, Content-Type, If-Match, If-None-Match",
+                    ),
+                );
+                headers.insert(
+                    "access-control-allow-methods",
+                    HeaderValue::from_static("GET, HEAD, POST, PUT, DELETE, OPTIONS"),
+                );
+                headers.insert("access-control-max-age", HeaderValue::from_static("600"));
             }
         }
     }
@@ -745,6 +756,7 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
     info!(method = method.as_str(), path, "Admin API request");
 
     match (method, parse_path(path)) {
+        (&Method::OPTIONS, _) => empty_response(StatusCode::NO_CONTENT),
         (&Method::GET, ApiPath::Health) => json_response(
             StatusCode::OK,
             json!({ "ok": true, "mediaBaseUrl": state.media_base_url }),

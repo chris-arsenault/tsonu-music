@@ -68,8 +68,10 @@ module "frontend" {
   site_directory = "${path.module}/../../frontend/build"
   runtime_config = {
     app = {
-      adminApiBaseUrl = "https://${local.admin_api_hostname}"
-      mediaBaseUrl    = "https://${local.media_hostname}"
+      adminApiBaseUrl   = "https://${local.admin_api_hostname}"
+      cognitoClientId   = module.cognito_app.client_id
+      cognitoUserPoolId = module.ctx.cognito_user_pool_id
+      mediaBaseUrl      = "https://${local.media_hostname}"
       rum = {
         enabled              = true
         applicationId        = aws_rum_app_monitor.player.app_monitor_id

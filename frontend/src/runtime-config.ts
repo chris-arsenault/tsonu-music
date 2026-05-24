@@ -14,6 +14,8 @@ export interface RumRuntimeConfig {
 
 export interface AppRuntimeConfig {
     adminApiBaseUrl: string;
+    cognitoClientId?: string;
+    cognitoUserPoolId?: string;
     mediaBaseUrl: string;
     rum: RumRuntimeConfig;
 }
@@ -28,6 +30,8 @@ declare global {
 
 const DEFAULT_RUNTIME_CONFIG: AppRuntimeConfig = {
     adminApiBaseUrl: 'https://api.music.tsonu.com',
+    cognitoClientId: import.meta.env.VITE_COGNITO_CLIENT_ID,
+    cognitoUserPoolId: import.meta.env.VITE_COGNITO_USER_POOL_ID,
     mediaBaseUrl: 'https://media.tsonu.com',
     rum: {
         enabled: false,
@@ -96,6 +100,8 @@ export function getRuntimeConfig(): AppRuntimeConfig {
 
     return {
         adminApiBaseUrl: optionalString(appConfig.adminApiBaseUrl) ?? DEFAULT_RUNTIME_CONFIG.adminApiBaseUrl,
+        cognitoClientId: optionalString(appConfig.cognitoClientId) ?? DEFAULT_RUNTIME_CONFIG.cognitoClientId,
+        cognitoUserPoolId: optionalString(appConfig.cognitoUserPoolId) ?? DEFAULT_RUNTIME_CONFIG.cognitoUserPoolId,
         mediaBaseUrl: optionalString(appConfig.mediaBaseUrl) ?? DEFAULT_RUNTIME_CONFIG.mediaBaseUrl,
         rum: readRumConfig(appConfig.rum),
     };

@@ -7,6 +7,8 @@ import {
     FileAudio,
     ListMusic,
     LoaderCircle,
+    LogOut,
+    Music2,
     Plus,
     RefreshCw,
     Rocket,
@@ -15,8 +17,10 @@ import {
     Trash2,
     Upload,
 } from 'lucide-react';
+import { NavLink, useLocation } from 'react-router-dom';
 import type { ReleaseType, StableId, Visibility } from '../catalog/media-catalog';
 import { getRuntimeConfig } from '../runtime-config';
+import { useAuth } from '../use-auth';
 import {
     AdminApiError,
     createEncodeJob,
@@ -311,6 +315,8 @@ function publishChecks(album: DraftAlbum | undefined, jobDetails: Record<string,
 }
 
 export default function AdminApp() {
+    const { signOut } = useAuth();
+    const location = useLocation();
     const runtimeConfig = useMemo(() => getRuntimeConfig(), []);
     const [albumList, setAlbumList] = useState<ObjectList>();
     const [jobList, setJobList] = useState<ObjectList>();
@@ -603,6 +609,7 @@ export default function AdminApp() {
 
     const albumObjects = albumList?.objects ?? [];
     const jobObjects = jobList?.objects ?? [];
+    const adminRoute = location.pathname.replace(/^\/admin\/?/, '').split('/')[0] || 'albums';
 
     return (
         <div className="admin-shell">
@@ -611,11 +618,26 @@ export default function AdminApp() {
                     <p className="admin-kicker">Catalog Operations</p>
                     <h1>Tsonu Streaming Admin</h1>
                 </div>
-                <div className="admin-topbar__meta">
-                    <span>{runtimeConfig.adminApiBaseUrl}</span>
-                    {busy ? <span className="admin-busy"><LoaderCircle /> {busy}</span> : null}
+                <div className="admin-topbar__actions">
+                    <div className="admin-topbar__meta">
+                        <span>{runtimeConfig.adminApiBaseUrl}</span>
+                        {busy ? <span className="admin-busy"><LoaderCircle /> {busy}</span> : null}
+                    </div>
+                    <button className="admin-icon-button" type="button" title="Sign out" onClick={signOut}>
+                        <LogOut aria-hidden="true" />
+                    </button>
                 </div>
             </header>
+
+            <nav className="admin-nav" aria-label="Admin sections">
+                <NavLink to="/admin/albums" className={({ isActive }) => isActive || adminRoute === 'albums' ? 'active' : undefined}>
+                    <ListMusic aria-hidden="true" /> Albums
+                </NavLink>
+                <NavLink to="/admin/songs"><Music2 aria-hidden="true" /> Songs</NavLink>
+                <NavLink to="/admin/encoding"><FileAudio aria-hidden="true" /> Encoding</NavLink>
+                <NavLink to="/admin/publish"><Rocket aria-hidden="true" /> Publish</NavLink>
+                <NavLink to="/admin/stats"><BarChart3 aria-hidden="true" /> Stats</NavLink>
+            </nav>
 
             {error ? <div className="admin-alert admin-alert--error">{error}</div> : null}
             {notice ? <div className="admin-alert admin-alert--notice">{notice}</div> : null}
@@ -643,6 +665,7 @@ export default function AdminApp() {
             </section>
 
             <main className="admin-grid">
+                {adminRoute === 'albums' ? (
                 <section className="admin-panel admin-panel--album">
                     <div className="admin-panel__header">
                         <div>
@@ -742,7 +765,9 @@ export default function AdminApp() {
                         </div>
                     </div>
                 </section>
+                ) : null}
 
+                {adminRoute === 'songs' ? (
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
@@ -821,7 +846,9 @@ export default function AdminApp() {
                         </div>
                     ) : null}
                 </section>
+                ) : null}
 
+                {adminRoute === 'encoding' ? (
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
@@ -870,7 +897,9 @@ export default function AdminApp() {
                         </div>
                     </div>
                 </section>
+                ) : null}
 
+                {adminRoute === 'encoding' ? (
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
@@ -903,7 +932,9 @@ export default function AdminApp() {
                         <pre className="admin-json-preview">{JSON.stringify(selectedJob, null, 2)}</pre>
                     ) : null}
                 </section>
+                ) : null}
 
+                {adminRoute === 'songs' || adminRoute === 'publish' ? (
                 <section className="admin-panel admin-panel--preview">
                     <div className="admin-panel__header">
                         <div>
@@ -938,7 +969,9 @@ export default function AdminApp() {
                         ))}
                     </div>
                 </section>
+                ) : null}
 
+                {adminRoute === 'publish' ? (
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
@@ -975,7 +1008,9 @@ export default function AdminApp() {
                         </div>
                     ) : null}
                 </section>
+                ) : null}
 
+                {adminRoute === 'albums' ? (
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
@@ -997,7 +1032,9 @@ export default function AdminApp() {
                         })}
                     </div>
                 </section>
+                ) : null}
 
+                {adminRoute === 'stats' ? (
                 <section className="admin-panel admin-panel--rum">
                     <div className="admin-panel__header">
                         <div>
@@ -1063,6 +1100,7 @@ export default function AdminApp() {
                         </>
                     ) : null}
                 </section>
+                ) : null}
             </main>
         </div>
     );

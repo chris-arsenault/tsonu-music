@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from '../runtime-config';
+import { getIdToken } from '../auth';
 import type {
     DraftAlbum,
     DraftTrack,
@@ -62,11 +63,17 @@ async function readError(response: Response): Promise<AdminApiError> {
 
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<ApiJsonResult<T>> {
     const headers = new Headers(init.headers);
+    const token = await getIdToken();
+
+    if (!token) {
+        throw new AdminApiError('Not authenticated.', 401, 'not_authenticated');
+    }
+
     headers.set('Accept', 'application/json');
+    headers.set('Authorization', `Bearer ${token}`);
 
     const response = await fetch(adminUrl(path), {
         ...init,
-        credentials: 'include',
         headers,
     });
 

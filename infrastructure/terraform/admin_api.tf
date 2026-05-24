@@ -157,6 +157,12 @@ module "admin_api" {
       binary = "${path.module}/../../backend/target/lambda/admin-api/bootstrap"
       routes = [
         {
+          priority      = 239
+          paths         = ["/admin", "/admin/*"]
+          methods       = ["OPTIONS"]
+          authenticated = false
+        },
+        {
           priority      = 240
           paths         = ["/health"]
           methods       = ["GET", "HEAD"]

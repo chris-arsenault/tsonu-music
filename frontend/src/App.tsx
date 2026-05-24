@@ -10,10 +10,12 @@ import {
     FaApple,
 } from 'react-icons/fa';
 import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
 import InstagramIframe from './InstagramIframe';
 import CookieBanner from './CookieBanner';
-import AdminApp from './admin/AdminApp';
+import { AuthProvider } from './auth-context';
+import { AdminRoute } from './admin/AdminRoute';
 import { AlbumPage, CatalogPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
@@ -462,6 +464,11 @@ function PublicApp() {
                                 Connect
                             </a>
                         </li>
+                        <li className="nav__item">
+                            <a href="/admin">
+                                Admin
+                            </a>
+                        </li>
                     </ul>
                 </nav>
 
@@ -478,11 +485,16 @@ function PublicApp() {
 }
 
 function App() {
-    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
-        return <AdminApp />;
-    }
-
-    return <PublicApp />;
+    return (
+        <AuthProvider>
+            <BrowserRouter>
+                <Routes>
+                    <Route path="/admin/*" element={<AdminRoute />} />
+                    <Route path="*" element={<PublicApp />} />
+                </Routes>
+            </BrowserRouter>
+        </AuthProvider>
+    );
 }
 
 export default App;

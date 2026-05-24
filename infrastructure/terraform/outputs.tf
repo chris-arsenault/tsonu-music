@@ -58,6 +58,11 @@ output "admin_api_lambda_name" {
   value       = module.admin_api.function_names["api"]
 }
 
+output "cognito_client_id" {
+  description = "Cognito app client ID used by the Tsonu admin frontend."
+  value       = module.cognito_app.client_id
+}
+
 output "encoder_lambda_name" {
   description = "Lambda function name for one-track-at-a-time audio encoding."
   value       = aws_lambda_function.encoder.function_name

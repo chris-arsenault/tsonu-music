@@ -116,6 +116,123 @@
     white-space: nowrap;
 }
 
+.admin-topbar__actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.admin-nav {
+    position: sticky;
+    top: 67px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.65rem 1.75rem;
+    background: rgba(11, 12, 14, 0.92);
+    border-bottom: 1px solid var(--admin-border);
+    overflow-x: auto;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}
+
+.admin-nav a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.45rem;
+    min-height: 2.2rem;
+    padding: 0 0.85rem;
+    border: 1px solid transparent;
+    border-radius: 2px;
+    color: var(--admin-muted);
+    font-family: var(--admin-font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.admin-nav a svg {
+    width: 0.9rem;
+    height: 0.9rem;
+}
+
+.admin-nav a:hover,
+.admin-nav a.active {
+    color: var(--admin-moss-bright);
+    border-color: rgba(143, 191, 106, 0.35);
+    background: rgba(143, 191, 106, 0.08);
+}
+
+.admin-login-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 1.25rem;
+    background:
+        radial-gradient(ellipse 60% 30% at 100% 0%, rgba(143, 191, 106, 0.05), transparent 70%),
+        var(--admin-bg);
+    color: var(--admin-text);
+    font-family: var(--admin-font-ui);
+}
+
+.admin-login-form {
+    display: grid;
+    gap: 1rem;
+    width: min(100%, 380px);
+    padding: 1.4rem;
+    border: 1px solid var(--admin-border);
+    border-radius: 3px;
+    background: var(--admin-panel);
+}
+
+.admin-login-form__header {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding-bottom: 0.9rem;
+    border-bottom: 1px solid var(--admin-border);
+}
+
+.admin-login-form__header > svg {
+    color: var(--admin-gold);
+    width: 1.35rem;
+    height: 1.35rem;
+}
+
+.admin-login-form h1 {
+    margin: 0;
+    font-family: var(--admin-font-display);
+    font-size: 1.35rem;
+    font-style: italic;
+    font-weight: 400;
+}
+
+.admin-login-form .admin-alert {
+    margin: 0;
+}
+
+.admin-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--admin-moss-bright);
+    font-family: var(--admin-font-mono);
+    font-size: 0.78rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.admin-loading svg {
+    width: 1rem;
+    height: 1rem;
+    animation: admin-spin 1s linear infinite;
+}
+
 .admin-busy {
     display: inline-flex;
     align-items: center;
@@ -911,6 +1028,15 @@
     .admin-rum-controls {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .admin-topbar__actions {
+        align-items: stretch;
+    }
+
+    .admin-nav {
+        top: 128px;
+        padding-inline: 0.75rem;
     }
 
     .admin-grid {
