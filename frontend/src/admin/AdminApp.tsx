@@ -17,10 +17,10 @@ import {
     Trash2,
     Upload,
 } from 'lucide-react';
-import { NavLink, useLocation } from 'react-router-dom';
 import type { ReleaseType, StableId, Visibility } from '../catalog/media-catalog';
 import { getRuntimeConfig } from '../runtime-config';
 import { useAuth } from '../use-auth';
+import { handleInternalLink, useCurrentRoute } from '../music/routes';
 import {
     AdminApiError,
     createEncodeJob,
@@ -68,6 +68,9 @@ const DEFAULT_ARTWORK_WIDTH = 3000;
 const DEFAULT_ARTWORK_HEIGHT = 3000;
 const RELEASE_TYPES: ReleaseType[] = ['album', 'ep', 'single', 'demo', 'preview', 'collection'];
 const PUBLISH_STATES: DraftAlbum['publishState'][] = ['draft', 'ready', 'published'];
+const ADMIN_ROUTES = ['albums', 'songs', 'encoding', 'publish', 'stats'] as const;
+
+type AdminSection = typeof ADMIN_ROUTES[number];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -102,6 +105,12 @@ function albumIdFromKey(key: string): string {
 
 function jobIdFromKey(key: string): string {
     return key.replace(/^jobs\//, '').replace(/^draft\/jobs\//, '').replace(/\.json$/, '');
+}
+
+function adminSectionFromRoute(route: string): AdminSection {
+    const pathname = route.split(/[?#]/)[0] || '/admin';
+    const section = pathname.replace(/^\/admin\/?/, '').split('/')[0];
+    return ADMIN_ROUTES.includes(section as AdminSection) ? section as AdminSection : 'albums';
 }
 
 function newDraftAlbum(albumId: StableId): DraftAlbum {
@@ -316,7 +325,7 @@ function publishChecks(album: DraftAlbum | undefined, jobDetails: Record<string,
 
 export default function AdminApp() {
     const { signOut } = useAuth();
-    const location = useLocation();
+    const route = useCurrentRoute();
     const runtimeConfig = useMemo(() => getRuntimeConfig(), []);
     const [albumList, setAlbumList] = useState<ObjectList>();
     const [jobList, setJobList] = useState<ObjectList>();
@@ -609,7 +618,7 @@ export default function AdminApp() {
 
     const albumObjects = albumList?.objects ?? [];
     const jobObjects = jobList?.objects ?? [];
-    const adminRoute = location.pathname.replace(/^\/admin\/?/, '').split('/')[0] || 'albums';
+    const adminRoute = adminSectionFromRoute(route);
 
     return (
         <div className="admin-shell">
@@ -630,13 +639,21 @@ export default function AdminApp() {
             </header>
 
             <nav className="admin-nav" aria-label="Admin sections">
-                <NavLink to="/admin/albums" className={({ isActive }) => isActive || adminRoute === 'albums' ? 'active' : undefined}>
+                <a href="/admin/albums" onClick={(event) => handleInternalLink(event, '/admin/albums')} className={adminRoute === 'albums' ? 'active' : undefined}>
                     <ListMusic aria-hidden="true" /> Albums
-                </NavLink>
-                <NavLink to="/admin/songs"><Music2 aria-hidden="true" /> Songs</NavLink>
-                <NavLink to="/admin/encoding"><FileAudio aria-hidden="true" /> Encoding</NavLink>
-                <NavLink to="/admin/publish"><Rocket aria-hidden="true" /> Publish</NavLink>
-                <NavLink to="/admin/stats"><BarChart3 aria-hidden="true" /> Stats</NavLink>
+                </a>
+                <a href="/admin/songs" onClick={(event) => handleInternalLink(event, '/admin/songs')} className={adminRoute === 'songs' ? 'active' : undefined}>
+                    <Music2 aria-hidden="true" /> Songs
+                </a>
+                <a href="/admin/encoding" onClick={(event) => handleInternalLink(event, '/admin/encoding')} className={adminRoute === 'encoding' ? 'active' : undefined}>
+                    <FileAudio aria-hidden="true" /> Encoding
+                </a>
+                <a href="/admin/publish" onClick={(event) => handleInternalLink(event, '/admin/publish')} className={adminRoute === 'publish' ? 'active' : undefined}>
+                    <Rocket aria-hidden="true" /> Publish
+                </a>
+                <a href="/admin/stats" onClick={(event) => handleInternalLink(event, '/admin/stats')} className={adminRoute === 'stats' ? 'active' : undefined}>
+                    <BarChart3 aria-hidden="true" /> Stats
+                </a>
             </nav>
 
             {error ? <div className="admin-alert admin-alert--error">{error}</div> : null}

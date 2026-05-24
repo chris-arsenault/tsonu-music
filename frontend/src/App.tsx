@@ -10,7 +10,6 @@ import {
     FaApple,
 } from 'react-icons/fa';
 import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
 
 import InstagramIframe from './InstagramIframe';
 import CookieBanner from './CookieBanner';
@@ -465,7 +464,7 @@ function PublicApp() {
                             </a>
                         </li>
                         <li className="nav__item">
-                            <a href="/admin">
+                            <a href="/admin" onClick={(event) => handleInternalLink(event, '/admin')}>
                                 Admin
                             </a>
                         </li>
@@ -484,17 +483,19 @@ function PublicApp() {
     );
 }
 
+function AppContent() {
+    const route = useCurrentRoute();
+    const pathname = route.split(/[?#]/)[0] || '/';
+
+    if (pathname.startsWith('/admin')) {
+        return <AdminRoute />;
+    }
+
+    return <PublicApp />;
+}
+
 function App() {
-    return (
-        <AuthProvider>
-            <BrowserRouter>
-                <Routes>
-                    <Route path="/admin/*" element={<AdminRoute />} />
-                    <Route path="*" element={<PublicApp />} />
-                </Routes>
-            </BrowserRouter>
-        </AuthProvider>
-    );
+    return <AuthProvider><AppContent /></AuthProvider>;
 }
 
 export default App;
