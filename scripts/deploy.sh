@@ -23,6 +23,11 @@ cd "${ROOT_DIR}"
 echo "Building ffmpeg Lambda layer..."
 "${ROOT_DIR}/scripts/build-ffmpeg-layer.sh"
 
+# Run database migrations before Terraform consumes the migrated schema through
+# the public catalog and OpenGraph query paths.
+echo "Running migrations..."
+db-migrate
+
 # Deploy infrastructure
 echo "Deploying infrastructure..."
 terraform -chdir="${TF_DIR}" init -reconfigure \

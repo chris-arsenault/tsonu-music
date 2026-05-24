@@ -6,11 +6,11 @@ use aws_sdk_lambda::primitives::Blob;
 use aws_sdk_lambda::types::InvocationType;
 use aws_sdk_lambda::Client as LambdaClient;
 use aws_sdk_s3::presigning::PresigningConfig;
-use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+mod db;
 use encode_contract::{
-    build_job_id, draft_job_key as contract_draft_job_key, planned_ffmpeg_args, planned_output,
+    build_job_id, encode_job_key as contract_encode_job_key, planned_ffmpeg_args, planned_output,
     AssetRef, EncodeJob, EncodeJobEvent, EncodeMetadata, EncodeStatus, ObjectRef,
     ACTION_ENCODE_TRACK, DRAFT_ENCODE_PREFIX,
 };
@@ -18,6 +18,7 @@ use lambda_http::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use lambda_http::{Body, Error, Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::error::Error as StdError;
@@ -27,11 +28,11 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{error, info};
 
-const CATALOG_KEY: &str = "catalog.json";
+pub use db::connect_pool_from_env;
+
 const ARTIST_NAME: &str = "Tsonu";
 const ARTIST_SLUG: &str = "tsonu";
 const DRAFT_ALBUM_PREFIX: &str = "draft/albums/";
-const DRAFT_JOB_PREFIX: &str = "draft/jobs/";
 const PUBLIC_ALBUM_PREFIX: &str = "albums/";
 const DEFAULT_UPLOAD_URL_EXPIRY_SECONDS: u64 = 900;
 const MAX_UPLOAD_URL_EXPIRY_SECONDS: u64 = 3600;
@@ -65,6 +66,7 @@ const DEFAULT_ALLOWED_ORIGINS: &[&str] = &[
 
 #[derive(Clone)]
 pub struct AppState {
+    db: PgPool,
     s3: S3Client,
     cloudfront: CloudFrontClient,
     cloudwatch_logs: CloudWatchLogsClient,
@@ -73,19 +75,21 @@ pub struct AppState {
     masters_bucket: String,
     media_bucket: String,
     media_base_url: String,
-    media_cdn_distribution_id: String,
+    frontend_distribution_id: String,
     rum_log_group_name: String,
     allowed_origins: Vec<String>,
 }
 
 impl AppState {
     pub fn from_env(
+        db: PgPool,
         s3: S3Client,
         cloudfront: CloudFrontClient,
         cloudwatch_logs: CloudWatchLogsClient,
         lambda: LambdaClient,
     ) -> Result<Self, ConfigError> {
         Ok(Self {
+            db,
             s3,
             cloudfront,
             cloudwatch_logs,
@@ -94,7 +98,7 @@ impl AppState {
             masters_bucket: required_env("MASTERS_BUCKET")?,
             media_bucket: required_env("MEDIA_BUCKET")?,
             media_base_url: required_env("MEDIA_BASE_URL")?,
-            media_cdn_distribution_id: required_env("MEDIA_CDN_DISTRIBUTION_ID")?,
+            frontend_distribution_id: required_env("FRONTEND_DISTRIBUTION_ID")?,
             rum_log_group_name: required_env("RUM_LOG_GROUP_NAME")?,
             allowed_origins: env::var("ALLOWED_ORIGINS")
                 .ok()
@@ -133,112 +137,6 @@ impl AppState {
                 );
             }
         }
-    }
-
-    async fn get_media_object(&self, key: &str) -> Result<S3TextObject, ApiError> {
-        let output = self
-            .s3
-            .get_object()
-            .bucket(&self.media_bucket)
-            .key(key)
-            .send()
-            .await
-            .map_err(|err| map_s3_read_error(key, err))?;
-
-        let e_tag = output.e_tag().map(str::to_string);
-        let version_id = output.version_id().map(str::to_string);
-        let body = output.body.collect().await.map_err(|err| {
-            error!(key, error = %err, "Failed to read S3 response body");
-            ApiError::internal("s3_body_read_failed", "failed to read S3 object body")
-        })?;
-        let text = String::from_utf8(body.into_bytes().to_vec()).map_err(|err| {
-            error!(key, error = %err, "S3 object is not UTF-8 JSON");
-            ApiError::internal("invalid_stored_json", "stored manifest is not UTF-8 JSON")
-        })?;
-
-        Ok(S3TextObject {
-            key: key.to_string(),
-            text,
-            e_tag,
-            version_id,
-        })
-    }
-
-    async fn put_media_json(
-        &self,
-        key: &str,
-        document: &Value,
-        preconditions: WritePreconditions,
-    ) -> Result<S3WriteResult, ApiError> {
-        let body = serde_json::to_vec_pretty(document).map_err(|err| {
-            error!(key, error = %err, "Failed to serialize manifest");
-            ApiError::internal("json_serialize_failed", "failed to serialize manifest")
-        })?;
-
-        let mut request = self
-            .s3
-            .put_object()
-            .bucket(&self.media_bucket)
-            .key(key)
-            .content_type("application/json; charset=utf-8")
-            .body(ByteStream::from(body));
-
-        if let Some(if_match) = preconditions.if_match {
-            request = request.if_match(if_match);
-        }
-
-        if let Some(if_none_match) = preconditions.if_none_match {
-            request = request.if_none_match(if_none_match);
-        }
-
-        let output = request
-            .send()
-            .await
-            .map_err(|err| map_s3_write_error(key, err))?;
-
-        Ok(S3WriteResult {
-            bucket: self.media_bucket.clone(),
-            key: key.to_string(),
-            e_tag: output.e_tag().map(str::to_string),
-            version_id: output.version_id().map(str::to_string),
-        })
-    }
-
-    async fn list_media_prefix(&self, prefix: &str) -> Result<ObjectList, ApiError> {
-        let output = self
-            .s3
-            .list_objects_v2()
-            .bucket(&self.media_bucket)
-            .prefix(prefix)
-            .send()
-            .await
-            .map_err(|err| {
-                error!(prefix, error = %err, "Failed to list S3 prefix");
-                ApiError::internal("s3_list_failed", "failed to list manifest objects")
-            })?;
-
-        let objects = output
-            .contents()
-            .iter()
-            .filter_map(|object| {
-                let key = object.key()?;
-                if key.ends_with('/') {
-                    return None;
-                }
-
-                Some(ObjectSummary {
-                    key: key.to_string(),
-                    e_tag: object.e_tag().map(str::to_string),
-                    size_bytes: object.size().unwrap_or_default(),
-                })
-            })
-            .collect();
-
-        Ok(ObjectList {
-            bucket: self.media_bucket.clone(),
-            prefix: prefix.to_string(),
-            objects,
-        })
     }
 
     async fn create_upload_url(
@@ -316,9 +214,7 @@ impl AppState {
             validate_stable_id("job", job_id, "jobId")?;
         }
 
-        let album_object = self
-            .get_media_object(&draft_album_key(&request.album_id))
-            .await?;
+        let album_object = db::get_draft_album(&self.db, &request.album_id).await?;
         let album: DraftAlbum = serde_json::from_str(&album_object.text).map_err(|err| {
             error!(album_id = request.album_id, error = %err, "Stored draft album cannot be parsed for encode job");
             ApiError::internal("invalid_stored_album", "stored draft album cannot be parsed")
@@ -368,23 +264,7 @@ impl AppState {
         );
         let mut job = prepared.job;
         let job_key = prepared.job_key;
-        let job_value = serde_json::to_value(&job).map_err(|err| {
-            error!(job_id = job.job_id, error = %err, "Failed to serialize queued encode job");
-            ApiError::internal(
-                "job_serialize_failed",
-                "failed to serialize queued encode job",
-            )
-        })?;
-        let write = self
-            .put_media_json(
-                &job_key,
-                &job_value,
-                WritePreconditions {
-                    if_match: None,
-                    if_none_match: Some("*".to_string()),
-                },
-            )
-            .await?;
+        db::put_encode_job(&self.db, &job).await?;
 
         let payload = serde_json::to_vec(&prepared.event).map_err(|err| {
             error!(job_id = job.job_id, error = %err, "Failed to serialize encoder invocation payload");
@@ -407,13 +287,8 @@ impl AppState {
             Ok(output) if output.status_code() == 202 => output.status_code(),
             Ok(output) => {
                 let details = format!("unexpected Lambda invoke status {}", output.status_code());
-                self.mark_job_failed_after_invoke_error(
-                    &job_key,
-                    &mut job,
-                    write.e_tag,
-                    details.clone(),
-                )
-                .await?;
+                self.mark_job_failed_after_invoke_error(&mut job, details.clone())
+                    .await?;
                 return Err(ApiError::bad_gateway(
                     "encoder_invoke_failed",
                     format!("encoder Lambda invocation failed: {details}"),
@@ -421,13 +296,8 @@ impl AppState {
             }
             Err(err) => {
                 let details = err.to_string();
-                self.mark_job_failed_after_invoke_error(
-                    &job_key,
-                    &mut job,
-                    write.e_tag,
-                    details.clone(),
-                )
-                .await?;
+                self.mark_job_failed_after_invoke_error(&mut job, details.clone())
+                    .await?;
                 return Err(ApiError::bad_gateway(
                     "encoder_invoke_failed",
                     format!("encoder Lambda invocation failed: {details}"),
@@ -448,8 +318,7 @@ impl AppState {
         album_id: String,
         request: PublishRequest,
     ) -> Result<PublishResponse, ApiError> {
-        let album_key = draft_album_key(&album_id);
-        let album_object = self.get_media_object(&album_key).await?;
+        let album_object = db::get_draft_album(&self.db, &album_id).await?;
         let draft: DraftAlbum = serde_json::from_str(&album_object.text).map_err(|err| {
             error!(album_id, error = %err, "Stored draft album cannot be parsed for publishing");
             ApiError::internal(
@@ -463,7 +332,6 @@ impl AppState {
         let published_at = request
             .published_at
             .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
-        let manifest_path = published_album_key(&draft.slug);
 
         let mut published_tracks = Vec::with_capacity(draft.tracks.len());
         let mut copied_keys = Vec::new();
@@ -472,12 +340,7 @@ impl AppState {
         for track in &draft.tracks {
             let job_id = select_publish_job_id(track, &request.track_job_ids)?;
             validate_stable_id("job", &job_id, "jobId")?;
-            let job_key = draft_job_key(&job_id);
-            let job_object = self.get_media_object(&job_key).await?;
-            let job: EncodeJob = serde_json::from_str(&job_object.text).map_err(|err| {
-                error!(job_id, error = %err, "Stored encode job cannot be parsed for publishing");
-                ApiError::internal("invalid_stored_job", "stored encode job cannot be parsed")
-            })?;
+            let job = db::get_encode_job(&self.db, &job_id).await?;
             validate_publish_job(&job, &draft, track, &self.media_bucket)?;
 
             let public_prefix = public_track_media_prefix(&draft.slug, &track.slug, &job.job_id);
@@ -499,39 +362,17 @@ impl AppState {
 
         let published_album =
             build_published_album(&draft, visibility, published_at, published_tracks)?;
-        let album_document = serde_json::to_value(&published_album).map_err(|err| {
-            error!(album_id, error = %err, "Failed to serialize published album manifest");
-            ApiError::internal(
-                "published_album_serialize_failed",
-                "failed to serialize published album manifest",
-            )
-        })?;
-        let album_write = self
-            .put_media_json(
-                &manifest_path,
-                &album_document,
-                public_json_write_preconditions(self.get_media_object(&manifest_path).await)?,
-            )
-            .await?;
-
-        let catalog_document = self
-            .build_catalog_document(&published_album, total_duration_seconds)
-            .await?;
-        let catalog_write = self
-            .put_media_json(
-                CATALOG_KEY,
-                &catalog_document.document,
-                catalog_document.preconditions,
-            )
-            .await?;
+        let album_write =
+            db::replace_publication(&self.db, &published_album, total_duration_seconds).await?;
 
         let draft_write = self
-            .mark_draft_album_published(&album_key, &album_object)
+            .mark_draft_album_published(&album_id, &album_object)
             .await?;
 
         let invalidation_paths = vec![
-            format!("/{CATALOG_KEY}"),
-            format!("/{}", published_album.manifest_path),
+            "/music".to_string(),
+            format!("/albums/{}", published_album.slug),
+            format!("/tracks/{}/*", published_album.slug),
         ];
         let invalidation_id = self
             .invalidate_manifest_paths(&album_id, invalidation_paths.clone())
@@ -546,10 +387,9 @@ impl AppState {
             copied_object_count: copied_keys.len(),
             copied_keys,
             album_write,
-            catalog_write,
             draft_write,
             invalidation: CloudFrontInvalidationResult {
-                distribution_id: self.media_cdn_distribution_id.clone(),
+                distribution_id: self.frontend_distribution_id.clone(),
                 invalidation_id,
                 paths: invalidation_paths,
             },
@@ -781,96 +621,13 @@ impl AppState {
         Ok(keys)
     }
 
-    async fn build_catalog_document(
-        &self,
-        album: &PublishedAlbum,
-        total_duration_seconds: f64,
-    ) -> Result<CatalogWrite, ApiError> {
-        let summary = PublishedCatalogAlbum {
-            album_id: album.album_id.clone(),
-            release_id: album.release_id.clone(),
-            slug: album.slug.clone(),
-            title: album.title.clone(),
-            subtitle: album.subtitle.clone(),
-            release_type: album.release_type.clone(),
-            release_date: album.release_date.clone(),
-            status: PublishedStatus::Published,
-            visibility: album.visibility,
-            manifest_path: album.manifest_path.clone(),
-            artwork: album.artwork.clone(),
-            track_count: album.tracks.len(),
-            total_duration_seconds,
-            tags: album.tags.clone(),
-            links: album.links.clone(),
-        };
-
-        let catalog_read = self.get_media_object(CATALOG_KEY).await;
-        let (mut catalog, preconditions) = match catalog_read {
-            Ok(object) => {
-                let catalog: PublishedCatalog = serde_json::from_str(&object.text).map_err(|err| {
-                    error!(key = CATALOG_KEY, error = %err, "Stored catalog cannot be parsed for publishing");
-                    ApiError::internal("invalid_stored_catalog", "stored catalog cannot be parsed")
-                })?;
-                (
-                    catalog,
-                    WritePreconditions {
-                        if_match: object.e_tag,
-                        if_none_match: None,
-                    },
-                )
-            }
-            Err(err) if err.status == StatusCode::NOT_FOUND => (
-                PublishedCatalog {
-                    schema_version: 1,
-                    entity_type: CatalogEntityType::Catalog,
-                    generated_at: String::new(),
-                    artist: CatalogArtist {
-                        name: ARTIST_NAME.to_string(),
-                        slug: ARTIST_SLUG.to_string(),
-                    },
-                    albums: Vec::new(),
-                },
-                WritePreconditions {
-                    if_match: None,
-                    if_none_match: Some("*".to_string()),
-                },
-            ),
-            Err(err) => return Err(err),
-        };
-
-        catalog.generated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-        catalog
-            .albums
-            .retain(|existing| existing.album_id != album.album_id);
-        catalog.albums.push(summary);
-        catalog.albums.sort_by(|left, right| {
-            right
-                .release_date
-                .cmp(&left.release_date)
-                .then_with(|| left.title.cmp(&right.title))
-        });
-
-        let document = serde_json::to_value(catalog).map_err(|err| {
-            error!(error = %err, "Failed to serialize catalog manifest");
-            ApiError::internal(
-                "catalog_serialize_failed",
-                "failed to serialize catalog manifest",
-            )
-        })?;
-
-        Ok(CatalogWrite {
-            document,
-            preconditions,
-        })
-    }
-
     async fn mark_draft_album_published(
         &self,
-        album_key: &str,
-        source: &S3TextObject,
-    ) -> Result<S3WriteResult, ApiError> {
+        album_id: &str,
+        source: &db::DbJsonObject,
+    ) -> Result<WriteResult, ApiError> {
         let mut document: Value = serde_json::from_str(&source.text).map_err(|err| {
-            error!(key = source.key, error = %err, "Stored draft album is invalid JSON");
+            error!(album_id, error = %err, "Stored draft album is invalid JSON");
             ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
         })?;
 
@@ -889,15 +646,7 @@ impl AppState {
             Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
         );
 
-        self.put_media_json(
-            album_key,
-            &document,
-            WritePreconditions {
-                if_match: source.e_tag.clone(),
-                if_none_match: None,
-            },
-        )
-        .await
+        db::put_draft_album(&self.db, album_id, &document, source.e_tag.as_deref(), None).await
     }
 
     async fn invalidate_manifest_paths(
@@ -935,7 +684,7 @@ impl AppState {
         let output = self
             .cloudfront
             .create_invalidation()
-            .distribution_id(&self.media_cdn_distribution_id)
+            .distribution_id(&self.frontend_distribution_id)
             .invalidation_batch(batch)
             .send()
             .await
@@ -943,7 +692,7 @@ impl AppState {
                 error!(album_id, error = %err, "Failed to create CloudFront invalidation");
                 ApiError::bad_gateway(
                     "cloudfront_invalidation_failed",
-                    "published manifests were written, but CloudFront invalidation failed",
+                    "published metadata was written, but CloudFront invalidation failed",
                 )
             })?;
 
@@ -954,9 +703,7 @@ impl AppState {
 
     async fn mark_job_failed_after_invoke_error(
         &self,
-        job_key: &str,
         job: &mut EncodeJob,
-        current_etag: Option<String>,
         details: String,
     ) -> Result<(), ApiError> {
         job.mark_failed(
@@ -965,24 +712,7 @@ impl AppState {
             "encoder Lambda invocation failed",
             Some(details),
         );
-        let value = serde_json::to_value(&*job).map_err(|err| {
-            error!(job_id = job.job_id, error = %err, "Failed to serialize failed encode job");
-            ApiError::internal(
-                "job_serialize_failed",
-                "failed to serialize failed encode job",
-            )
-        })?;
-
-        self.put_media_json(
-            job_key,
-            &value,
-            WritePreconditions {
-                if_match: current_etag,
-                if_none_match: None,
-            },
-        )
-        .await
-        .map(|_| ())
+        db::put_encode_job(&self.db, job).await
     }
 }
 
@@ -1020,14 +750,21 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             json!({ "ok": true, "mediaBaseUrl": state.media_base_url }),
         ),
         (&Method::HEAD, ApiPath::Health) => empty_response(StatusCode::NO_CONTENT),
-        (&Method::GET, ApiPath::AdminCatalog) => get_json_response(CATALOG_KEY, state).await,
-        (&Method::GET, ApiPath::AdminAlbums) => json_response(
-            StatusCode::OK,
-            state.list_media_prefix(DRAFT_ALBUM_PREFIX).await?,
-        ),
+        (&Method::GET, ApiPath::PublicCatalog | ApiPath::AdminCatalog) => {
+            json_response(StatusCode::OK, db::get_public_catalog(&state.db).await?)
+        }
+        (&Method::GET, ApiPath::PublicAlbum { slug }) => {
+            validate_slug(&slug, "albumSlug")?;
+            let album = db::get_public_album_by_slug(&state.db, &slug).await?;
+            raw_json_response(StatusCode::OK, album.text, album.e_tag.as_deref(), None)
+        }
+        (&Method::GET, ApiPath::AdminAlbums) => {
+            json_response(StatusCode::OK, db::list_draft_albums(&state.db).await?)
+        }
         (&Method::GET, ApiPath::AdminAlbum { album_id }) => {
             validate_stable_id("album", &album_id, "albumId")?;
-            get_json_response(&draft_album_key(&album_id), state).await
+            let album = db::get_draft_album(&state.db, &album_id).await?;
+            raw_json_response(StatusCode::OK, album.text, album.e_tag.as_deref(), None)
         }
         (&Method::PUT, ApiPath::AdminAlbum { album_id }) => {
             validate_stable_id("album", &album_id, "albumId")?;
@@ -1035,9 +772,14 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             let mut document: Value = parse_json_body(request.body())?;
             validate_draft_album_document(&album_id, &document)?;
             normalize_updated_at(&mut document);
-            let result = state
-                .put_media_json(&draft_album_key(&album_id), &document, preconditions)
-                .await?;
+            let result = db::put_draft_album(
+                &state.db,
+                &album_id,
+                &document,
+                preconditions.if_match.as_deref(),
+                preconditions.if_none_match.as_deref(),
+            )
+            .await?;
             json_response(StatusCode::OK, result)
         }
         (&Method::PUT, ApiPath::AdminTrack { album_id, track_id }) => {
@@ -1045,17 +787,21 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             validate_stable_id("track", &track_id, "trackId")?;
             let preconditions = required_if_match(request.headers())?;
             let track: Value = parse_json_body(request.body())?;
-            let album_key = draft_album_key(&album_id);
-            let album = state.get_media_object(&album_key).await?;
+            let album = db::get_draft_album(&state.db, &album_id).await?;
             let mut document: Value = serde_json::from_str(&album.text).map_err(|err| {
-                error!(key = album.key, error = %err, "Stored draft album is invalid JSON");
+                error!(album_id, error = %err, "Stored draft album is invalid JSON");
                 ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
             })?;
 
             let created = upsert_track_document(&mut document, &album_id, &track_id, track)?;
-            let result = state
-                .put_media_json(&album_key, &document, preconditions)
-                .await?;
+            let result = db::put_draft_album(
+                &state.db,
+                &album_id,
+                &document,
+                preconditions.if_match.as_deref(),
+                preconditions.if_none_match.as_deref(),
+            )
+            .await?;
 
             json_response(
                 if created {
@@ -1075,17 +821,21 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             validate_stable_id("album", &album_id, "albumId")?;
             validate_stable_id("track", &track_id, "trackId")?;
             let preconditions = required_if_match(request.headers())?;
-            let album_key = draft_album_key(&album_id);
-            let album = state.get_media_object(&album_key).await?;
+            let album = db::get_draft_album(&state.db, &album_id).await?;
             let mut document: Value = serde_json::from_str(&album.text).map_err(|err| {
-                error!(key = album.key, error = %err, "Stored draft album is invalid JSON");
+                error!(album_id, error = %err, "Stored draft album is invalid JSON");
                 ApiError::internal("invalid_stored_json", "stored draft album is invalid JSON")
             })?;
 
             remove_track_document(&mut document, &album_id, &track_id)?;
-            let result = state
-                .put_media_json(&album_key, &document, preconditions)
-                .await?;
+            let result = db::put_draft_album(
+                &state.db,
+                &album_id,
+                &document,
+                preconditions.if_match.as_deref(),
+                preconditions.if_none_match.as_deref(),
+            )
+            .await?;
 
             json_response(
                 StatusCode::OK,
@@ -1097,13 +847,15 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
                 },
             )
         }
-        (&Method::GET, ApiPath::AdminJobs) => json_response(
-            StatusCode::OK,
-            state.list_media_prefix(DRAFT_JOB_PREFIX).await?,
-        ),
+        (&Method::GET, ApiPath::AdminJobs) => {
+            json_response(StatusCode::OK, db::list_encode_jobs(&state.db).await?)
+        }
         (&Method::GET, ApiPath::AdminJob { job_id }) => {
             validate_stable_id("job", &job_id, "jobId")?;
-            get_json_response(&draft_job_key(&job_id), state).await
+            json_response(
+                StatusCode::OK,
+                db::get_encode_job(&state.db, &job_id).await?,
+            )
         }
         (&Method::GET, ApiPath::AdminRumSummary) => {
             let query = parse_rum_summary_query(request.uri().query())?;
@@ -1133,16 +885,6 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
     }
 }
 
-async fn get_json_response(key: &str, state: &AppState) -> Result<Response<Body>, ApiError> {
-    let object = state.get_media_object(key).await?;
-    raw_json_response(
-        StatusCode::OK,
-        object.text,
-        object.e_tag.as_deref(),
-        object.version_id.as_deref(),
-    )
-}
-
 fn parse_path(path: &str) -> ApiPath {
     let parts = path
         .trim_matches('/')
@@ -1152,6 +894,10 @@ fn parse_path(path: &str) -> ApiPath {
 
     match parts.as_slice() {
         ["health"] => ApiPath::Health,
+        ["catalog"] => ApiPath::PublicCatalog,
+        ["catalog", "albums", slug] => ApiPath::PublicAlbum {
+            slug: (*slug).to_string(),
+        },
         ["admin", "catalog"] => ApiPath::AdminCatalog,
         ["admin", "albums"] => ApiPath::AdminAlbums,
         ["admin", "albums", album_id] => ApiPath::AdminAlbum {
@@ -1505,7 +1251,7 @@ fn validate_draft_album_document(album_id: &str, document: &Value) -> Result<(),
     let object = document.as_object().ok_or_else(|| {
         ApiError::bad_request(
             "invalid_album",
-            "draft album manifest must be a JSON object",
+            "draft album document must be a JSON object",
         )
     })?;
 
@@ -1515,7 +1261,7 @@ fn validate_draft_album_document(album_id: &str, document: &Value) -> Result<(),
     if !object.get("tracks").is_some_and(Value::is_array) {
         return Err(ApiError::bad_request(
             "invalid_album",
-            "draft album manifest must include a tracks array",
+            "draft album document must include a tracks array",
         ));
     }
 
@@ -1795,7 +1541,7 @@ fn build_published_album(
         status: PublishedStatus::Published,
         visibility,
         published_at,
-        manifest_path: published_album_key(&draft.slug),
+        manifest_path: published_album_api_path(&draft.slug),
         description: draft.description.clone(),
         copyright: draft.copyright.clone(),
         artwork: draft.artwork.clone().ok_or_else(|| {
@@ -1974,24 +1720,8 @@ fn public_track_media_prefix(album_slug: &str, track_slug: &str, job_id: &str) -
     format!("{PUBLIC_ALBUM_PREFIX}{album_slug}/tracks/{track_slug}/{job_id}")
 }
 
-fn published_album_key(album_slug: &str) -> String {
-    format!("{PUBLIC_ALBUM_PREFIX}{album_slug}.json")
-}
-
-fn public_json_write_preconditions(
-    read: Result<S3TextObject, ApiError>,
-) -> Result<WritePreconditions, ApiError> {
-    match read {
-        Ok(object) => Ok(WritePreconditions {
-            if_match: object.e_tag,
-            if_none_match: None,
-        }),
-        Err(err) if err.status == StatusCode::NOT_FOUND => Ok(WritePreconditions {
-            if_match: None,
-            if_none_match: Some("*".to_string()),
-        }),
-        Err(err) => Err(err),
-    }
+fn published_album_api_path(album_slug: &str) -> String {
+    format!("/catalog/albums/{album_slug}")
 }
 
 struct PreparedEncodeJob {
@@ -2026,7 +1756,7 @@ fn build_encode_job_event(
         args: planned_ffmpeg_args(&track.source_master.key, &job.output, include_lossless),
     });
 
-    let job_key = contract_draft_job_key(&job_id);
+    let job_key = contract_encode_job_key(&job_id);
     let event = EncodeJobEvent {
         action: ACTION_ENCODE_TRACK.to_string(),
         job_key: job_key.clone(),
@@ -2161,6 +1891,46 @@ fn validate_stable_id(prefix: &str, value: &str, field: &'static str) -> Result<
     Ok(())
 }
 
+fn validate_slug(value: &str, field: &'static str) -> Result<(), ApiError> {
+    if value.is_empty() || value.len() > 120 {
+        return Err(ApiError::bad_request(
+            "invalid_slug",
+            format!("{field} has an invalid length"),
+        ));
+    }
+
+    let mut previous_was_hyphen = false;
+    for (index, c) in value.chars().enumerate() {
+        let valid = c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-';
+        if !valid {
+            return Err(ApiError::bad_request(
+                "invalid_slug",
+                format!("{field} may only contain lowercase letters, digits, and hyphens"),
+            ));
+        }
+        if c == '-' {
+            if index == 0 || previous_was_hyphen {
+                return Err(ApiError::bad_request(
+                    "invalid_slug",
+                    format!("{field} must not contain empty slug segments"),
+                ));
+            }
+            previous_was_hyphen = true;
+        } else {
+            previous_was_hyphen = false;
+        }
+    }
+
+    if previous_was_hyphen {
+        return Err(ApiError::bad_request(
+            "invalid_slug",
+            format!("{field} must not end with a hyphen"),
+        ));
+    }
+
+    Ok(())
+}
+
 fn validate_filename(filename: &str) -> Result<(), ApiError> {
     if filename.is_empty() || filename == "." || filename == ".." {
         return Err(ApiError::bad_request(
@@ -2252,45 +2022,8 @@ fn draft_album_key(album_id: &str) -> String {
     format!("{DRAFT_ALBUM_PREFIX}{album_id}.json")
 }
 
-fn draft_job_key(job_id: &str) -> String {
-    contract_draft_job_key(job_id)
-}
-
-fn map_s3_read_error(key: &str, err: impl fmt::Display) -> ApiError {
-    let message = err.to_string();
-    if is_s3_not_found(&message) {
-        return ApiError::not_found(format!("S3 object not found: {key}"));
-    }
-
-    error!(key, error = %message, "Failed to read S3 object");
-    ApiError::internal("s3_read_failed", "failed to read S3 object")
-}
-
-fn map_s3_write_error(key: &str, err: impl fmt::Display) -> ApiError {
-    let message = err.to_string();
-    if is_s3_precondition_error(&message) {
-        return ApiError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "write_precondition_failed",
-            "S3 write precondition failed; fetch the latest ETag and retry",
-        );
-    }
-
-    error!(key, error = %message, "Failed to write S3 object");
-    ApiError::internal("s3_write_failed", "failed to write S3 object")
-}
-
-fn is_s3_not_found(message: &str) -> bool {
-    message.contains("NoSuchKey")
-        || message.contains("NotFound")
-        || message.contains("status code: 404")
-}
-
-fn is_s3_precondition_error(message: &str) -> bool {
-    message.contains("PreconditionFailed")
-        || message.contains("ConditionalRequestConflict")
-        || message.contains("status code: 409")
-        || message.contains("status code: 412")
+fn encode_job_key(job_id: &str) -> String {
+    contract_encode_job_key(job_id)
 }
 
 fn split_env_list(value: &str) -> Vec<String> {
@@ -2309,6 +2042,8 @@ fn required_env(name: &'static str) -> Result<String, ConfigError> {
 #[derive(Debug, PartialEq, Eq)]
 enum ApiPath {
     Health,
+    PublicCatalog,
+    PublicAlbum { slug: String },
     AdminCatalog,
     AdminAlbums,
     AdminAlbum { album_id: String },
@@ -2383,6 +2118,10 @@ impl ApiError {
         )
     }
 
+    fn precondition_failed(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PRECONDITION_FAILED, code, message)
+    }
+
     fn to_response(&self) -> Result<Response<Body>, Error> {
         let body = json!({
             "error": {
@@ -2396,14 +2135,6 @@ impl ApiError {
             .header("content-type", "application/json")
             .body(Body::Text(serde_json::to_string(&body)?))?)
     }
-}
-
-#[derive(Debug)]
-struct S3TextObject {
-    key: String,
-    text: String,
-    e_tag: Option<String>,
-    version_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -2499,9 +2230,8 @@ struct PublishResponse {
     job_ids: Vec<String>,
     copied_object_count: usize,
     copied_keys: Vec<String>,
-    album_write: S3WriteResult,
-    catalog_write: S3WriteResult,
-    draft_write: S3WriteResult,
+    album_write: WriteResult,
+    draft_write: WriteResult,
     invalidation: CloudFrontInvalidationResult,
 }
 
@@ -2855,15 +2585,9 @@ struct PublishedCatalogAlbum {
     links: Option<Vec<ExternalLink>>,
 }
 
-#[derive(Debug)]
-struct CatalogWrite {
-    document: Value,
-    preconditions: WritePreconditions,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct S3WriteResult {
+struct WriteResult {
     bucket: String,
     key: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2878,7 +2602,7 @@ struct TrackWriteResponse {
     album_id: String,
     track_id: String,
     created: bool,
-    write: S3WriteResult,
+    write: WriteResult,
 }
 
 #[derive(Debug, Serialize)]
@@ -3122,38 +2846,6 @@ mod tests {
     }
 
     #[test]
-    fn chooses_manifest_write_preconditions_from_current_object_state() {
-        let existing = S3TextObject {
-            key: "albums/so-we-sleep.json".to_string(),
-            text: "{}".to_string(),
-            e_tag: Some("\"album-etag\"".to_string()),
-            version_id: Some("version-1".to_string()),
-        };
-
-        let update = public_json_write_preconditions(Ok(existing)).unwrap();
-        assert_eq!(update.if_match.as_deref(), Some("\"album-etag\""));
-        assert!(update.if_none_match.is_none());
-
-        let create = public_json_write_preconditions(Err(ApiError::not_found("missing"))).unwrap();
-        assert!(create.if_match.is_none());
-        assert_eq!(create.if_none_match.as_deref(), Some("*"));
-    }
-
-    #[test]
-    fn maps_s3_write_conflicts_to_precondition_failed() {
-        for message in [
-            "service error: PreconditionFailed",
-            "service error: ConditionalRequestConflict",
-            "http response status code: 409",
-            "http response status code: 412",
-        ] {
-            let error = map_s3_write_error("catalog.json", message);
-            assert_eq!(error.status, StatusCode::PRECONDITION_FAILED);
-            assert_eq!(error.code, "write_precondition_failed");
-        }
-    }
-
-    #[test]
     fn rejects_ambiguous_or_missing_write_preconditions() {
         let mut headers = HeaderMap::new();
         assert_eq!(
@@ -3197,10 +2889,7 @@ mod tests {
             true,
         );
 
-        assert_eq!(
-            prepared.job_key,
-            "draft/jobs/job_so-we-sleep_01_encode_manual.json"
-        );
+        assert_eq!(prepared.job_key, "jobs/job_so-we-sleep_01_encode_manual");
         assert_eq!(prepared.event.action, ACTION_ENCODE_TRACK);
         assert_eq!(
             prepared.event.requested_by.as_deref(),

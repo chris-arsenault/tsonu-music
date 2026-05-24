@@ -21,10 +21,7 @@ data "aws_iam_policy_document" "admin_api" {
       variable = "s3:prefix"
       values = [
         "albums/*",
-        "catalog.json",
-        "draft/albums/*",
         "draft/encodes/*",
-        "draft/jobs/*",
       ]
     }
   }
@@ -40,10 +37,7 @@ data "aws_iam_policy_document" "admin_api" {
 
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/catalog.json",
       "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/albums/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/jobs/*",
     ]
   }
 
@@ -57,9 +51,6 @@ data "aws_iam_policy_document" "admin_api" {
 
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/catalog.json",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/albums/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/jobs/*",
     ]
   }
 
@@ -72,7 +63,7 @@ data "aws_iam_policy_document" "admin_api" {
     ]
 
     resources = [
-      aws_cloudfront_distribution.media.arn,
+      module.frontend.distribution_arn,
     ]
   }
 
@@ -148,16 +139,16 @@ module "admin_api" {
   alb     = module.ctx.alb
   cognito = module.ctx.cognito
 
-  environment = {
-    ALLOWED_ORIGINS           = join(",", local.admin_api_allowed_origins)
-    ENCODER_FUNCTION_NAME     = aws_lambda_function.encoder.function_name
-    MASTERS_BUCKET            = aws_s3_bucket.media_storage["masters"].id
-    MEDIA_BASE_URL            = "https://${local.media_hostname}"
-    MEDIA_BUCKET              = aws_s3_bucket.media_storage["media"].id
-    MEDIA_CDN_DISTRIBUTION_ID = aws_cloudfront_distribution.media.id
-    RUM_LOG_GROUP_NAME        = aws_rum_app_monitor.player.cw_log_group
-    RUST_LOG                  = "info"
-  }
+  environment = merge(local.db_env, {
+    ALLOWED_ORIGINS          = join(",", local.admin_api_allowed_origins)
+    ENCODER_FUNCTION_NAME    = aws_lambda_function.encoder.function_name
+    FRONTEND_DISTRIBUTION_ID = module.frontend.distribution_id
+    MASTERS_BUCKET           = aws_s3_bucket.media_storage["masters"].id
+    MEDIA_BASE_URL           = "https://${local.media_hostname}"
+    MEDIA_BUCKET             = aws_s3_bucket.media_storage["media"].id
+    RUM_LOG_GROUP_NAME       = aws_rum_app_monitor.player.cw_log_group
+    RUST_LOG                 = "info"
+  })
 
   iam_policy = [data.aws_iam_policy_document.admin_api.json]
 
@@ -173,6 +164,12 @@ module "admin_api" {
         },
         {
           priority      = 241
+          paths         = ["/catalog", "/catalog/*"]
+          methods       = ["GET", "HEAD"]
+          authenticated = false
+        },
+        {
+          priority      = 242
           paths         = ["/admin", "/admin/*"]
           authenticated = true
         },

@@ -1,11 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import {
+    createContext,
+    useContext,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    type ReactNode,
+} from 'react';
 import {
     fetchAlbumManifest,
+    fetchAlbumManifestBySlug,
     fetchPublishedCatalog,
     getArtworkUrl,
     resolveMediaUrl,
-} from './catalog/catalog-client';
+} from '../catalog/catalog-client';
 import type {
     CatalogAlbumSummary,
     PlaybackFormat,
@@ -14,7 +22,7 @@ import type {
     PublishedCatalog,
     PublishedTrack,
     StableId,
-} from './catalog/media-catalog';
+} from '../catalog/media-catalog';
 import {
     getPlaybackSessionId,
     recordAlbumView,
@@ -27,16 +35,12 @@ import {
     recordQualityChanged,
     recordTrackImpression,
     type PlayerEventContext,
-} from './player-analytics';
-import { getRuntimeConfig } from './runtime-config';
+} from '../player-analytics';
+import { getRuntimeConfig } from '../runtime-config';
 
 type LoadState = 'loading' | 'ready' | 'error';
-type QualitySelection = 'auto' | PlaybackQuality;
+export type QualitySelection = 'auto' | PlaybackQuality;
 type HlsInstance = InstanceType<typeof import('hls.js/light').default>;
-
-interface StreamingPlayerProps {
-    fallbackArtworkSrc: string;
-}
 
 interface PlaybackSource {
     assetId: StableId;
@@ -50,10 +54,44 @@ interface PendingPlaybackRestore {
     skipPlayStart: boolean;
 }
 
+export interface MusicPlayerContextValue {
+    mediaBaseUrl: string;
+    catalogApiBaseUrl: string;
+    catalog?: PublishedCatalog;
+    selectedAlbumSummary?: CatalogAlbumSummary;
+    albumManifest?: PublishedAlbumManifest;
+    selectedTrack?: PublishedTrack;
+    selectedQuality: QualitySelection;
+    hlsFormats: PlaybackFormat[];
+    loadState: LoadState;
+    loadError?: string;
+    playbackError?: string;
+    isPlaying: boolean;
+    currentTime: number;
+    duration: number;
+    artworkSrc: string;
+    canGoBack: boolean;
+    canGoForward: boolean;
+    playAlbum: (albumId: StableId) => void;
+    playTrack: (albumId: StableId, trackId: StableId) => void;
+    selectAlbum: (albumId: StableId) => void;
+    selectTrack: (trackId: StableId) => void;
+    selectTrackOffset: (offset: number) => void;
+    setQuality: (value: string) => void;
+    seek: (value: string) => void;
+    togglePlay: () => void;
+}
+
+interface MusicPlayerProviderProps {
+    children: ReactNode;
+    fallbackArtworkSrc: string;
+}
+
 const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
 const PROGRESS_MILESTONES = [25, 50, 75] as const;
+const MusicPlayerContext = createContext<MusicPlayerContextValue | undefined>(undefined);
 
-function formatTime(seconds: number): string {
+export function formatTime(seconds: number): string {
     if (!Number.isFinite(seconds) || seconds < 0) {
         return '0:00';
     }
@@ -64,20 +102,20 @@ function formatTime(seconds: number): string {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
 }
 
+export function formatQualityLabel(format: PlaybackFormat): string {
+    if (format.bitrateKbps) {
+        return `${format.bitrateKbps} kbps AAC`;
+    }
+
+    return format.quality;
+}
+
 function isHlsRendition(format: PlaybackFormat): boolean {
     return format.kind === 'hls-rendition' && format.mimeType === HLS_MIME_TYPE;
 }
 
 function isPlaybackQuality(value: string): value is PlaybackQuality {
     return value === 'aac-192' || value === 'aac-320' || value === 'flac-lossless';
-}
-
-function formatQualityLabel(format: PlaybackFormat): string {
-    if (format.bitrateKbps) {
-        return `${format.bitrateKbps} kbps AAC`;
-    }
-
-    return format.quality;
 }
 
 function getHlsFormats(track: PublishedTrack | undefined): PlaybackFormat[] {
@@ -123,18 +161,56 @@ function findAlbumSummary(
     return catalog?.albums.find((album) => album.albumId === albumId);
 }
 
-export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerProps) {
+function initialRouteTarget(catalog: PublishedCatalog): {
+    albumId?: StableId;
+    albumSlug?: string;
+    trackSlug?: string;
+} {
+    if (typeof window === 'undefined') {
+        return {};
+    }
+
+    const parts = window.location.pathname
+        .trim()
+        .replace(/^\/+|\/+$/g, '')
+        .split('/')
+        .filter(Boolean);
+
+    if (parts[0] === 'albums' && parts[1]) {
+        const albumSlug = decodeURIComponent(parts[1]);
+        return {
+            albumSlug,
+            albumId: catalog.albums.find((album) => album.slug === albumSlug)?.albumId,
+        };
+    }
+
+    if (parts[0] === 'tracks' && parts[1] && parts[2]) {
+        const albumSlug = decodeURIComponent(parts[1]);
+        return {
+            albumSlug,
+            albumId: catalog.albums.find((album) => album.slug === albumSlug)?.albumId,
+            trackSlug: decodeURIComponent(parts[2]),
+        };
+    }
+
+    return {};
+}
+
+export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlayerProviderProps) {
     const runtimeConfig = useMemo(() => getRuntimeConfig(), []);
     const mediaBaseUrl = runtimeConfig.mediaBaseUrl;
     const catalogApiBaseUrl = runtimeConfig.adminApiBaseUrl;
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const pendingRestoreRef = useRef<PendingPlaybackRestore | null>(null);
+    const pendingRouteTrackSlugRef = useRef<string | undefined>(undefined);
     const progressMilestonesRef = useRef<Set<string>>(new Set());
     const suppressPauseUntilRef = useRef(0);
     const skipNextPlayStartRef = useRef(false);
+    const initialRouteAppliedRef = useRef(false);
 
     const [catalog, setCatalog] = useState<PublishedCatalog>();
     const [selectedAlbumId, setSelectedAlbumId] = useState<StableId>();
+    const [selectedAlbumSlug, setSelectedAlbumSlug] = useState<string>();
     const [albumManifest, setAlbumManifest] = useState<PublishedAlbumManifest>();
     const [selectedTrackId, setSelectedTrackId] = useState<StableId>();
     const [selectedQuality, setSelectedQuality] = useState<QualitySelection>('auto');
@@ -147,8 +223,11 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
     const [artworkSrc, setArtworkSrc] = useState(fallbackArtworkSrc);
 
     const selectedAlbumSummary = useMemo(
-        () => findAlbumSummary(catalog, selectedAlbumId),
-        [catalog, selectedAlbumId],
+        () => (
+            findAlbumSummary(catalog, selectedAlbumId) ??
+            catalog?.albums.find((album) => album.slug === selectedAlbumSlug)
+        ),
+        [catalog, selectedAlbumId, selectedAlbumSlug],
     );
     const selectedTrack = useMemo(
         () => albumManifest?.tracks.find((track) => track.trackId === selectedTrackId),
@@ -167,12 +246,16 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
 
         fetchPublishedCatalog(catalogApiBaseUrl, controller.signal)
             .then((publishedCatalog) => {
-                if (publishedCatalog.albums.length === 0) {
+                const target = initialRouteTarget(publishedCatalog);
+                if (publishedCatalog.albums.length === 0 && !target.albumSlug) {
                     throw new Error('Published catalog has no albums.');
                 }
 
+                initialRouteAppliedRef.current = true;
+                pendingRouteTrackSlugRef.current = target.trackSlug;
                 setCatalog(publishedCatalog);
-                setSelectedAlbumId((currentAlbumId) => currentAlbumId ?? publishedCatalog.albums[0].albumId);
+                setSelectedAlbumSlug(target.albumSlug);
+                setSelectedAlbumId(target.albumId ?? publishedCatalog.albums[0]?.albumId);
             })
             .catch((error: unknown) => {
                 if (controller.signal.aborted) {
@@ -187,7 +270,16 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
     }, [catalogApiBaseUrl]);
 
     useEffect(() => {
-        if (!selectedAlbumSummary) {
+        if (!catalog || selectedAlbumId || initialRouteAppliedRef.current) {
+            return;
+        }
+
+        setSelectedAlbumId(catalog.albums[0]?.albumId);
+    }, [catalog, selectedAlbumId]);
+
+    useEffect(() => {
+        const albumSlug = selectedAlbumSlug;
+        if (!selectedAlbumSummary && !albumSlug) {
             return undefined;
         }
 
@@ -196,17 +288,30 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         setLoadError(undefined);
         setPlaybackError(undefined);
 
-        fetchAlbumManifest(catalogApiBaseUrl, selectedAlbumSummary, controller.signal)
+        const request = selectedAlbumSummary
+            ? fetchAlbumManifest(catalogApiBaseUrl, selectedAlbumSummary, controller.signal)
+            : fetchAlbumManifestBySlug(catalogApiBaseUrl, albumSlug, controller.signal);
+
+        request
             .then((manifest) => {
                 if (manifest.tracks.length === 0) {
                     throw new Error(`${manifest.title} has no published tracks.`);
                 }
 
+                const routeTrackSlug = pendingRouteTrackSlugRef.current;
+                pendingRouteTrackSlugRef.current = undefined;
+                const routeTrackId = routeTrackSlug
+                    ? manifest.tracks.find((track) => track.slug === routeTrackSlug)?.trackId
+                    : undefined;
+
                 setAlbumManifest(manifest);
+                setSelectedAlbumId(manifest.albumId);
+                setSelectedAlbumSlug(manifest.slug);
                 setSelectedTrackId((currentTrackId) => (
-                    manifest.tracks.some((track) => track.trackId === currentTrackId)
+                    routeTrackId ??
+                    (manifest.tracks.some((track) => track.trackId === currentTrackId)
                         ? currentTrackId
-                        : manifest.tracks[0].trackId
+                        : manifest.tracks[0].trackId)
                 ));
                 setSelectedQuality('auto');
                 setDuration(manifest.tracks[0].durationSeconds);
@@ -223,7 +328,7 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
             });
 
         return () => controller.abort();
-    }, [catalogApiBaseUrl, selectedAlbumSummary]);
+    }, [catalogApiBaseUrl, selectedAlbumSlug, selectedAlbumSummary]);
 
     useEffect(() => {
         if (!albumManifest) {
@@ -388,6 +493,18 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         setPlaybackError(message);
     }
 
+    function queueTrackChange(trackId: StableId, shouldPlay: boolean): void {
+        pendingRestoreRef.current = {
+            positionSeconds: 0,
+            shouldPlay,
+            skipPlayStart: false,
+        };
+        suppressPauseUntilRef.current = Date.now() + 500;
+        setSelectedTrackId(trackId);
+        setSelectedQuality('auto');
+        setCurrentTime(0);
+    }
+
     function selectAlbum(albumId: StableId): void {
         if (albumId === selectedAlbumId) {
             return;
@@ -401,6 +518,7 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         };
         suppressPauseUntilRef.current = Date.now() + 500;
         setSelectedAlbumId(albumId);
+        setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
         setAlbumManifest(undefined);
         setSelectedTrackId(undefined);
         setSelectedQuality('auto');
@@ -413,15 +531,69 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         }
 
         const audio = audioRef.current;
-        pendingRestoreRef.current = {
-            positionSeconds: 0,
-            shouldPlay: Boolean(audio && !audio.paused),
-            skipPlayStart: false,
-        };
-        suppressPauseUntilRef.current = Date.now() + 500;
-        setSelectedTrackId(trackId);
-        setSelectedQuality('auto');
-        setCurrentTime(0);
+        queueTrackChange(trackId, Boolean(audio && !audio.paused));
+    }
+
+    function playAlbum(albumId: StableId): void {
+        if (albumId !== selectedAlbumId) {
+            pendingRestoreRef.current = {
+                positionSeconds: 0,
+                shouldPlay: true,
+                skipPlayStart: false,
+            };
+            suppressPauseUntilRef.current = Date.now() + 500;
+            setSelectedAlbumId(albumId);
+            setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
+            setAlbumManifest(undefined);
+            setSelectedTrackId(undefined);
+            setSelectedQuality('auto');
+            setCurrentTime(0);
+            return;
+        }
+
+        if (!albumManifest) {
+            pendingRestoreRef.current = {
+                positionSeconds: 0,
+                shouldPlay: true,
+                skipPlayStart: false,
+            };
+            return;
+        }
+
+        const firstTrack = albumManifest?.tracks[0];
+        if (firstTrack) {
+            playTrack(albumId, firstTrack.trackId);
+        }
+    }
+
+    function playTrack(albumId: StableId, trackId: StableId): void {
+        const audio = audioRef.current;
+        if (albumId !== selectedAlbumId) {
+            pendingRestoreRef.current = {
+                positionSeconds: 0,
+                shouldPlay: true,
+                skipPlayStart: false,
+            };
+            suppressPauseUntilRef.current = Date.now() + 500;
+            setSelectedAlbumId(albumId);
+            setSelectedAlbumSlug(findAlbumSummary(catalog, albumId)?.slug);
+            setAlbumManifest(undefined);
+            setSelectedTrackId(trackId);
+            setSelectedQuality('auto');
+            setCurrentTime(0);
+            return;
+        }
+
+        if (trackId !== selectedTrackId) {
+            queueTrackChange(trackId, true);
+            return;
+        }
+
+        if (audio?.paused) {
+            void audio.play().catch((error: unknown) => {
+                recordPlaybackError(error, 'Playback could not start.');
+            });
+        }
     }
 
     function selectTrackOffset(offset: number): void {
@@ -436,7 +608,7 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         }
     }
 
-    function handleQualityChange(value: string): void {
+    function setQuality(value: string): void {
         if (!selectedTrack) {
             return;
         }
@@ -465,7 +637,7 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         setSelectedQuality(nextQuality);
     }
 
-    function handleTogglePlay(): void {
+    function togglePlay(): void {
         const audio = audioRef.current;
         if (!audio) {
             return;
@@ -482,7 +654,7 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         audio.pause();
     }
 
-    function handleSeek(nextValue: string): void {
+    function seek(nextValue: string): void {
         const audio = audioRef.current;
         if (!audio) {
             return;
@@ -600,29 +772,37 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
         : -1;
     const canGoBack = currentTrackIndex > 0;
     const canGoForward = Boolean(albumManifest && currentTrackIndex >= 0 && currentTrackIndex < albumManifest.tracks.length - 1);
-    const resolvedDuration = duration || selectedTrack?.durationSeconds || 0;
-    const seekMax = Math.max(resolvedDuration, 0);
 
-    if (loadState === 'error') {
-        return (
-            <div className="streaming-player streaming-player--status" role="alert">
-                <AlertCircle aria-hidden="true" />
-                <p>{loadError ?? 'The streaming catalog is unavailable.'}</p>
-            </div>
-        );
-    }
-
-    if (loadState === 'loading' || !catalog || !albumManifest || !selectedTrack || !selectedSource) {
-        return (
-            <div className="streaming-player streaming-player--status" aria-busy="true">
-                <LoaderCircle className="streaming-player__spinner" aria-hidden="true" />
-                <p>Loading catalog...</p>
-            </div>
-        );
-    }
+    const value: MusicPlayerContextValue = {
+        mediaBaseUrl,
+        catalogApiBaseUrl,
+        catalog,
+        selectedAlbumSummary,
+        albumManifest,
+        selectedTrack,
+        selectedQuality,
+        hlsFormats,
+        loadState,
+        loadError,
+        playbackError,
+        isPlaying,
+        currentTime,
+        duration,
+        artworkSrc,
+        canGoBack,
+        canGoForward,
+        playAlbum,
+        playTrack,
+        selectAlbum,
+        selectTrack,
+        selectTrackOffset,
+        setQuality,
+        seek,
+        togglePlay,
+    };
 
     return (
-        <div className="streaming-player">
+        <MusicPlayerContext.Provider value={value}>
             <audio
                 ref={audioRef}
                 crossOrigin="anonymous"
@@ -634,128 +814,16 @@ export default function StreamingPlayer({ fallbackArtworkSrc }: StreamingPlayerP
                 onPlay={handlePlay}
                 onTimeUpdate={handleTimeUpdate}
             />
-
-            <div className="streaming-player__layout">
-                <div className="streaming-player__artwork-wrap">
-                    <img
-                        src={artworkSrc}
-                        alt={albumManifest.artwork.altText}
-                        className="streaming-player__artwork"
-                        onError={() => setArtworkSrc(fallbackArtworkSrc)}
-                    />
-                </div>
-
-                <div className="streaming-player__main">
-                    <div className="streaming-player__album-row">
-                        <div>
-                            <p className="streaming-player__artist">{albumManifest.artistName}</p>
-                            <h3>{albumManifest.title}</h3>
-                            <p className="streaming-player__track-title">
-                                {selectedTrack.trackNumber}. {selectedTrack.title}
-                            </p>
-                        </div>
-
-                        <label className="streaming-player__quality">
-                            <span>Quality</span>
-                            <select
-                                value={selectedQuality}
-                                onChange={(event) => handleQualityChange(event.target.value)}
-                            >
-                                <option value="auto">Auto</option>
-                                {hlsFormats.map((format) => (
-                                    <option key={format.assetId} value={format.quality}>
-                                        {formatQualityLabel(format)}
-                                    </option>
-                                ))}
-                            </select>
-                        </label>
-                    </div>
-
-                    {catalog.albums.length > 1 && (
-                        <div className="streaming-player__albums" aria-label="Albums">
-                            {catalog.albums.map((album) => (
-                                <button
-                                    type="button"
-                                    key={album.albumId}
-                                    className={album.albumId === selectedAlbumSummary?.albumId ? 'is-active' : ''}
-                                    onClick={() => selectAlbum(album.albumId)}
-                                >
-                                    {album.title}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="streaming-player__controls">
-                        <button
-                            type="button"
-                            className="streaming-player__icon-button"
-                            disabled={!canGoBack}
-                            onClick={() => selectTrackOffset(-1)}
-                            aria-label="Previous track"
-                            title="Previous track"
-                        >
-                            <SkipBack aria-hidden="true" />
-                        </button>
-                        <button
-                            type="button"
-                            className="streaming-player__play-button"
-                            onClick={handleTogglePlay}
-                            aria-label={isPlaying ? 'Pause' : 'Play'}
-                            title={isPlaying ? 'Pause' : 'Play'}
-                        >
-                            {isPlaying ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
-                        </button>
-                        <button
-                            type="button"
-                            className="streaming-player__icon-button"
-                            disabled={!canGoForward}
-                            onClick={() => selectTrackOffset(1)}
-                            aria-label="Next track"
-                            title="Next track"
-                        >
-                            <SkipForward aria-hidden="true" />
-                        </button>
-                    </div>
-
-                    <div className="streaming-player__timeline">
-                        <span>{formatTime(currentTime)}</span>
-                        <input
-                            type="range"
-                            min="0"
-                            max={seekMax}
-                            step="0.1"
-                            value={Math.min(currentTime, seekMax)}
-                            onChange={(event) => handleSeek(event.target.value)}
-                            aria-label="Playback position"
-                        />
-                        <span>{formatTime(seekMax)}</span>
-                    </div>
-
-                    {playbackError && (
-                        <p className="streaming-player__error" role="alert">{playbackError}</p>
-                    )}
-
-                    <ol className="streaming-player__track-list">
-                        {albumManifest.tracks.map((track) => (
-                            <li key={track.trackId}>
-                                <button
-                                    type="button"
-                                    className={track.trackId === selectedTrack.trackId ? 'is-active' : ''}
-                                    onClick={() => selectTrack(track.trackId)}
-                                    aria-current={track.trackId === selectedTrack.trackId ? 'true' : undefined}
-                                >
-                                    <span className="streaming-player__track-number">{track.trackNumber}</span>
-                                    <span className="streaming-player__track-name">{track.title}</span>
-                                    <span className="streaming-player__track-duration">
-                                        {formatTime(track.durationSeconds)}
-                                    </span>
-                                </button>
-                            </li>
-                        ))}
-                    </ol>
-                </div>
-            </div>
-        </div>
+            {children}
+        </MusicPlayerContext.Provider>
     );
+}
+
+export function useMusicPlayer(): MusicPlayerContextValue {
+    const value = useContext(MusicPlayerContext);
+    if (!value) {
+        throw new Error('useMusicPlayer must be used inside MusicPlayerProvider');
+    }
+
+    return value;
 }

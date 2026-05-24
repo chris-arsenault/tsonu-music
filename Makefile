@@ -1,6 +1,6 @@
-.PHONY: ci lint lint-frontend lint-rust fmt-rust typecheck test test-frontend test-rust test-encode-fixture manifest-validate build build-frontend build-backend build-rust build-ffmpeg-layer terraform-fmt-check
+.PHONY: ci lint lint-frontend lint-rust fmt-rust typecheck test test-frontend test-rust test-encode-fixture schema-validate manifest-validate migrate build build-frontend build-backend build-rust build-ffmpeg-layer terraform-fmt-check deploy
 
-ci: lint fmt-rust typecheck test manifest-validate terraform-fmt-check
+ci: lint fmt-rust typecheck test schema-validate terraform-fmt-check
 
 lint: lint-frontend lint-rust
 
@@ -27,8 +27,13 @@ test-rust:
 test-encode-fixture:
 	cd backend && cargo test -p encoder local_fixture_transcodes_short_wav_to_hls_and_lossless -- --ignored --nocapture
 
-manifest-validate:
-	node scripts/validate-manifests.mjs
+schema-validate:
+	node scripts/validate-media-catalog-schemas.mjs
+
+manifest-validate: schema-validate
+
+migrate:
+	db-migrate
 
 build: build-frontend build-backend
 
@@ -45,3 +50,6 @@ build-ffmpeg-layer:
 
 terraform-fmt-check:
 	terraform fmt -check -recursive infrastructure/terraform/
+
+deploy:
+	scripts/deploy.sh

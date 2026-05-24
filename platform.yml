@@ -1,5 +1,6 @@
 project: tsonu-music
 prefix: tsonu-music
+migrations: db/migrations
 stack:
   - typescript
   - rust

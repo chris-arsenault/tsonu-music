@@ -16,22 +16,16 @@ Request:
 }
 ```
 
-The admin API reads the draft album manifest, validates that the track has a
-canonical source master under:
+The admin API reads the draft album record from RDS, validates that the track
+has a canonical source master under:
 
 ```text
 masters/{albumId}/{trackId}/source.{wav|aif|aiff|flac}
 ```
 
-It then writes a queued job object to:
-
-```text
-draft/jobs/{jobId}.json
-```
-
-and invokes `tsonu-music-encoder` directly with `InvocationType = Event`. The
-encoder is invoked once per track and writes job state back to the same S3 job
-object.
+It then creates a queued job row in `music_encode_jobs` and invokes
+`tsonu-music-encoder` directly with `InvocationType = Event`. The encoder is
+invoked once per track and updates job state in the same RDS row.
 
 Generated assets are planned under a draft-only prefix until publishing exists:
 
@@ -46,7 +40,7 @@ draft/encodes/{jobId}/lossless.flac
 The encoder downloads the source master to `/tmp`, runs `ffprobe` plus an
 `ffmpeg` loudness pass, generates 192k and 320k AAC HLS renditions, optionally
 generates a FLAC copy, uploads all playlists/segments/metadata to S3, and writes
-the final job status back to `draft/jobs/{jobId}.json`.
+the final job status back to `music_encode_jobs`.
 
 Successful jobs include measured duration, source codec, sample rate, channel
 count, loudness metadata, and file size/SHA-256 integrity fields for the compact
@@ -70,6 +64,7 @@ tracks with `trackJobIds`. The API copies every object under each
 albums/{albumSlug}/tracks/{trackSlug}/{jobId}/...
 ```
 
-It then writes `albums/{albumSlug}.json`, updates `catalog.json`, marks the
-draft album `published`, and creates a CloudFront invalidation for only the two
-manifest JSON paths.
+It then replaces the public album and track snapshot rows in
+`music_published_albums` and `music_published_tracks`, marks the draft album
+`published`, and creates a CloudFront invalidation for the frontend catalog and
+deep-link routes backed by those rows.

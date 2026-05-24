@@ -60,7 +60,7 @@ export interface ObjectList {
     objects: ObjectSummary[];
 }
 
-export interface S3WriteResult {
+export interface WriteResult {
     bucket: string;
     key: string;
     eTag?: string;
@@ -71,7 +71,7 @@ export interface TrackWriteResponse {
     albumId: StableId;
     trackId: StableId;
     created: boolean;
-    write: S3WriteResult;
+    write: WriteResult;
 }
 
 export interface UploadUrlRequest {
@@ -155,9 +155,8 @@ export interface PublishResponse {
     jobIds: StableId[];
     copiedObjectCount: number;
     copiedKeys: string[];
-    albumWrite: S3WriteResult;
-    catalogWrite: S3WriteResult;
-    draftWrite: S3WriteResult;
+    albumWrite: WriteResult;
+    draftWrite: WriteResult;
     invalidation: {
         distributionId: string;
         invalidationId?: string;

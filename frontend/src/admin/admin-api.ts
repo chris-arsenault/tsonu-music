@@ -7,7 +7,7 @@ import type {
     ObjectList,
     PublishResponse,
     RumSummary,
-    S3WriteResult,
+    WriteResult,
     TrackWriteResponse,
     UploadUrlRequest,
     UploadUrlResponse,
@@ -100,9 +100,9 @@ export async function getDraftAlbum(albumId: string): Promise<ApiJsonResult<Draf
     return requestJson<DraftAlbum>(`/admin/albums/${encodeURIComponent(albumId)}`);
 }
 
-export async function putDraftAlbum(album: DraftAlbum, eTag?: string): Promise<S3WriteResult> {
+export async function putDraftAlbum(album: DraftAlbum, eTag?: string): Promise<WriteResult> {
     const headers = eTag ? { 'If-Match': eTag } : { 'If-None-Match': '*' };
-    return (await requestJson<S3WriteResult>(
+    return (await requestJson<WriteResult>(
         `/admin/albums/${encodeURIComponent(album.albumId)}`,
         jsonInit('PUT', album, headers),
     )).data;

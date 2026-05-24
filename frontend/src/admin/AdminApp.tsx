@@ -97,7 +97,7 @@ function albumIdFromKey(key: string): string {
 }
 
 function jobIdFromKey(key: string): string {
-    return key.replace(/^draft\/jobs\//, '').replace(/\.json$/, '');
+    return key.replace(/^jobs\//, '').replace(/^draft\/jobs\//, '').replace(/\.json$/, '');
 }
 
 function newDraftAlbum(albumId: StableId): DraftAlbum {
@@ -942,7 +942,7 @@ export default function AdminApp() {
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
-                            <p className="admin-kicker">6. Publish Manifests</p>
+                            <p className="admin-kicker">6. Publish Metadata</p>
                             <h2>{canPublish ? 'Ready' : 'Blocked'}</h2>
                         </div>
                         <Rocket />
@@ -979,7 +979,7 @@ export default function AdminApp() {
                 <section className="admin-panel">
                     <div className="admin-panel__header">
                         <div>
-                            <p className="admin-kicker">7. Draft Catalog Objects</p>
+                            <p className="admin-kicker">7. Draft Albums</p>
                             <h2>Albums</h2>
                         </div>
                         <ListMusic />

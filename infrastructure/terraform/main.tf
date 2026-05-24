@@ -40,6 +40,14 @@ locals {
 
   frontend_package             = jsondecode(file("${path.module}/../../frontend/package.json"))
   frontend_application_version = local.frontend_package.version
+
+  db_env = {
+    DB_HOST     = module.ctx.rds.address
+    DB_PORT     = module.ctx.rds.port
+    DB_NAME     = nonsensitive(data.aws_ssm_parameter.db_database.value)
+    DB_USERNAME = nonsensitive(data.aws_ssm_parameter.db_username.value)
+    DB_PASSWORD = nonsensitive(data.aws_ssm_parameter.db_password.value)
+  }
 }
 
 # Shared Ahara platform resources. Instantiate this once and pass the grouped
@@ -77,5 +85,16 @@ module "frontend" {
       }
     }
   }
-  vpc = module.ctx.vpc
+  og_config = {
+    site_name = "Tsonu"
+    defaults = {
+      title       = "Tsonu Music"
+      description = "Music by Tsonu."
+      image       = local.frontend_og_default_image
+    }
+    routes      = local.frontend_og_routes
+    environment = local.db_env
+  }
+  og_artifact = module.ctx.og_server
+  vpc         = module.ctx.vpc
 }

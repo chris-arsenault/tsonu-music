@@ -1,7 +1,27 @@
 # Streaming Player
 
-The first-party listener loads `catalog.json` from `window.__APP_CONFIG__.app.mediaBaseUrl`,
-then loads the selected album manifest from that catalog entry's `manifestPath`.
+The first-party listener loads published metadata from
+`window.__APP_CONFIG__.app.adminApiBaseUrl`:
+
+- `GET /catalog`
+- `GET /catalog/albums/{albumSlug}`
+
+Playback URLs in those responses still resolve against
+`window.__APP_CONFIG__.app.mediaBaseUrl`.
+
+The public frontend has separate catalog routes:
+
+- `/music` lists published catalog entries.
+- `/albums/{albumSlug}` renders one album.
+- `/tracks/{albumSlug}/{trackSlug}` renders one track deep link.
+
+Only `visibility = public` rows appear in `/music`. Direct album and track
+links can resolve `public` and `unlisted` rows so previews can be shared without
+being listed in the catalog.
+
+The audio element lives in `MusicPlayerProvider`, which is mounted once at the
+public app root. Page navigation swaps catalog/detail views without remounting
+the audio element, so playback continues in the bottom sticky player.
 
 Playback uses:
 
@@ -11,6 +31,11 @@ Playback uses:
 
 The player resolves all manifest `path` values against the media CDN base URL.
 Absolute `url` values in manifests are respected.
+
+OpenGraph pages use the Ahara `website` module's `og_config` mode with shared
+RDS credentials from `/ahara/db/tsonu-music/*`. `/albums/{albumSlug}` and
+`/tracks/{albumSlug}/{trackSlug}` query the published metadata tables for
+per-entity title, description, and artwork.
 
 ## Analytics
 

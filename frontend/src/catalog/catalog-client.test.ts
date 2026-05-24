@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
+    fetchAlbumManifestBySlug,
     fetchAlbumManifest,
     fetchPublishedCatalog,
     getArtworkUrl,
@@ -25,7 +26,7 @@ const catalogResponse = {
             releaseDate: '2026-01-01',
             status: 'published',
             visibility: 'public',
-            manifestPath: 'albums/so-we-sleep.json',
+            manifestPath: '/catalog/albums/so-we-sleep',
             artwork: {
                 assetId: 'asset_so-we-sleep_cover',
                 altText: 'So We Sleep cover art',
@@ -73,10 +74,10 @@ afterEach(() => {
 
 describe('catalog client', () => {
     test('resolves CDN-relative and absolute media URLs', () => {
-        expect(resolveMediaUrl('https://media.tsonu.com', 'catalog.json'))
-            .toBe('https://media.tsonu.com/catalog.json');
-        expect(resolveMediaUrl('https://media.tsonu.com/base/', '/albums/a.json'))
-            .toBe('https://media.tsonu.com/base/albums/a.json');
+        expect(resolveMediaUrl('https://media.tsonu.com', 'albums/a/tracks/b/job/hls/master.m3u8'))
+            .toBe('https://media.tsonu.com/albums/a/tracks/b/job/hls/master.m3u8');
+        expect(resolveMediaUrl('https://media.tsonu.com/base/', '/artwork/cover.jpg'))
+            .toBe('https://media.tsonu.com/base/artwork/cover.jpg');
         expect(resolveMediaUrl('https://cdn.example.com', 'https://assets.example.com/track.m3u8'))
             .toBe('https://assets.example.com/track.m3u8');
     });
@@ -106,13 +107,13 @@ describe('catalog client', () => {
             .toBe('https://images.example.com/cover-1024.jpg');
     });
 
-    test('fetches catalog and album manifests with basic shape validation', async () => {
+    test('fetches catalog and album metadata with basic shape validation', async () => {
         const fetchMock = vi.fn(async (url: string) => {
-            if (url.endsWith('/catalog.json')) {
+            if (url.endsWith('/catalog')) {
                 return jsonResponse(catalogResponse);
             }
 
-            if (url.endsWith('/albums/so-we-sleep.json')) {
+            if (url.endsWith('/catalog/albums/so-we-sleep')) {
                 return jsonResponse(albumResponse);
             }
 
@@ -120,17 +121,17 @@ describe('catalog client', () => {
         });
         vi.stubGlobal('fetch', fetchMock);
 
-        const catalog = await fetchPublishedCatalog('https://media.tsonu.com', new AbortController().signal);
+        const catalog = await fetchPublishedCatalog('https://api.music.tsonu.com', new AbortController().signal);
         const album = await fetchAlbumManifest(
-            'https://media.tsonu.com',
+            'https://api.music.tsonu.com',
             catalog.albums[0] as CatalogAlbumSummary,
             new AbortController().signal,
         );
 
-        expect(catalog.albums[0].manifestPath).toBe('albums/so-we-sleep.json');
+        expect(catalog.albums[0].manifestPath).toBe('/catalog/albums/so-we-sleep');
         expect(album.entityType).toBe('album');
         expect(fetchMock).toHaveBeenCalledWith(
-            'https://media.tsonu.com/catalog.json',
+            'https://api.music.tsonu.com/catalog',
             expect.objectContaining({
                 headers: {
                     Accept: 'application/json',
@@ -139,10 +140,26 @@ describe('catalog client', () => {
         );
     });
 
-    test('rejects malformed published manifests before rendering them', async () => {
+    test('fetches an album directly by slug', async () => {
+        const fetchMock = vi.fn(async (url: string) => {
+            expect(url).toBe('https://api.music.tsonu.com/catalog/albums/so-we-sleep');
+            return jsonResponse(albumResponse);
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const album = await fetchAlbumManifestBySlug(
+            'https://api.music.tsonu.com',
+            'so-we-sleep',
+            new AbortController().signal,
+        );
+
+        expect(album.slug).toBe('so-we-sleep');
+    });
+
+    test('rejects malformed published metadata before rendering it', async () => {
         vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ entityType: 'draftAlbum' })));
 
-        await expect(fetchPublishedCatalog('https://media.tsonu.com', new AbortController().signal))
+        await expect(fetchPublishedCatalog('https://api.music.tsonu.com', new AbortController().signal))
             .rejects
             .toThrow('published catalog');
     });

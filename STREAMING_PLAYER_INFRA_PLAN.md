@@ -3,15 +3,16 @@
 This plan replaces the embedded Bandcamp listener with a first-party streaming
 surface for mastered albums and non-album material. The platform should use
 Ahara integration patterns: shared ALB for HTTP backends, shared VPC, shared
-Cognito for admin authentication, shared RDS only if JSON manifests stop being
-enough, and Terraform in `infrastructure/terraform`.
+Cognito for admin authentication, shared RDS for catalog metadata, and
+Terraform in `infrastructure/terraform`.
 
 ## Decisions
 
 - Use HLS for browser playback.
 - Keep lossless masters in private S3 and never serve them as the default stream.
-- Use JSON manifests in S3 as the catalog source of truth for the first version.
-- Use shared RDS only if JSON manifests become limiting for editing, auditing, or querying.
+- Use shared Ahara RDS as the catalog source of truth.
+- Keep runtime catalog data out of this repo; commit migrations, schemas, code,
+  and docs only.
 - Use the shared Ahara ALB via `ahara-tf-patterns/modules/alb-api`; do not use API Gateway.
 - Use a normal zip Lambda for ffmpeg/ffprobe encoding. Audio encodes take seconds, and track-sized WAV/AIFF/FLAC files fit Lambda's runtime and storage model.
 - Process one track per encoder invocation.
@@ -33,7 +34,7 @@ enough, and Terraform in `infrastructure/terraform`.
 
 3. Add private media storage.
    - Create a versioned, encrypted `tsonu-music-masters` S3 bucket for uploaded lossless masters.
-   - Create a private `tsonu-music-media` S3 bucket for generated HLS, artwork, waveform data, and published manifests.
+   - Create a private `tsonu-music-media` S3 bucket for generated HLS, artwork, waveform data, and optional lossless assets.
    - Block all public access on both buckets.
    - Keep bucket policies private; add the CloudFront Origin Access Control read allow in step 4 when the media distribution ARN exists.
    - Keep masters readable only by the admin and encoder Lambdas.
@@ -45,18 +46,20 @@ enough, and Terraform in `infrastructure/terraform`.
    - Use correct content types for `.m3u8`, `.aac`, `.m4s`, `.ts`, `.flac`, `.json`, and artwork.
    - Enable CloudFront logs for delivery-level analytics.
 
-5. Define the JSON manifest schema.
-   - Store draft manifests under a non-public prefix such as `draft/`.
-   - Store published manifests under public CDN paths such as `catalog.json` and `albums/{albumSlug}.json`.
+5. Define the RDS catalog schema.
+   - Add `db/migrations` for draft albums, encode jobs, published albums, and published tracks.
+   - Store editable draft documents in `music_draft_albums`.
+   - Store encode state in `music_encode_jobs`.
+   - Store published public snapshots in `music_published_albums` and `music_published_tracks`.
    - Include stable IDs for albums, tracks, releases, assets, and encode jobs.
    - Include album title, slug, release date, artwork, credits, track order, duration, explicit status, and available playback formats.
-   - Use S3 object versioning and ETag conditional writes to avoid accidental overwrite.
+   - Use optimistic revision ETags for draft edits.
 
 6. Build the admin API behind the shared ALB.
    - Use `ahara-tf-patterns/modules/alb-api`.
    - Host it at `api.music.tsonu.com` or an Ahara platform hostname if preferred.
    - Use shared Cognito with ALB `jwt-validation` for admin routes.
-   - Expose endpoints to create/edit albums, create/edit tracks, request presigned master uploads, start re-encode jobs, inspect job status, and publish manifests.
+   - Expose endpoints to create/edit albums, create/edit tracks, request presigned master uploads, start re-encode jobs, inspect job status, publish albums, and read the public catalog.
    - Keep playback public; only management requires auth.
 
 7. Package ffmpeg for normal Lambda.
@@ -67,11 +70,11 @@ enough, and Terraform in `infrastructure/terraform`.
 
 8. Add the encode trigger path.
    - Trigger from an admin action or S3 upload event.
-   - Invoke the encoder Lambda directly; use JSON status objects in S3 for job state.
+   - Invoke the encoder Lambda directly; use RDS for job state.
    - Invoke the encoder Lambda once per track.
    - Generate an HLS master playlist plus AAC renditions, initially 192 kbps and 320 kbps.
    - Optionally generate a FLAC asset for explicit lossless playback or download.
-   - Write job status and errors to JSON status objects in S3.
+   - Write job status and errors to `music_encode_jobs`.
 
 9. Implement the encoder Lambda.
    - Read input and output S3 keys from the event payload.
@@ -82,9 +85,9 @@ enough, and Terraform in `infrastructure/terraform`.
    - Return a compact result payload with asset keys and measured metadata.
 
 10. Implement publishing.
-    - Treat draft JSON and generated assets as non-public until publish.
-    - Publish by writing immutable media paths and public manifest snapshots.
-    - Invalidate only manifest JSON paths in CloudFront.
+    - Treat draft metadata and generated assets as non-public until publish.
+    - Publish by writing immutable media paths and replacing public RDS snapshots.
+    - Invalidate the frontend catalog and deep-link routes served from those snapshots.
     - Avoid invalidating HLS segments by making generated media paths content-addressed or versioned.
 
 11. Add CloudWatch RUM.
@@ -94,23 +97,19 @@ enough, and Terraform in `infrastructure/terraform`.
     - Include `albumId`, `trackId`, `releaseId`, `assetId`, selected quality, and session playback position in event data.
 
 12. Replace the Bandcamp iframe with the first-party player.
-    - Load `catalog.json` from the media CDN.
-    - Render albums and tracks from the manifest.
+    - Load `GET /catalog` and `GET /catalog/albums/{albumSlug}` from the public API.
+    - Render albums and tracks from the RDS-backed public catalog responses.
     - Use an HLS-capable browser player path, with native fallback where available.
     - Track meaningful playback milestones once per track/session, not on every time update.
     - Keep external streaming links as secondary actions.
 
 13. Add local and CI checks.
-    - Add unit tests for manifest parsing and player event emission.
-    - Add backend tests for manifest writes, ETag conflict handling, and encode job event construction.
+    - Add unit tests for catalog parsing and player event emission.
+    - Add backend tests for RDS-backed catalog writes, revision conflict handling, and encode job event construction.
     - Add a local fixture encode test using a short WAV sample.
     - Update `Makefile` and `platform.yml` if Rust/backend code is added.
 
 14. Add deployment documentation.
     - Update `README.md` and `CLAUDE.md` with the new architecture.
-    - Document how to upload a master, start an encode, publish an album, and roll back a manifest.
+    - Document how to upload a master, start an encode, publish an album, and roll back a publication.
     - Document the Ahara cross-repo prerequisites so deploy failures are easy to diagnose.
-
-15. Defer RDS until JSON proves insufficient.
-    - Move to shared Ahara RDS only if catalog editing needs concurrent multi-user workflows, rich queries, audit trails, or relational credit/personnel management.
-    - If RDS is added, use `db/migrations`, register `tsonu-music` in Ahara's migration projects, and keep publishing static JSON snapshots for the public player.

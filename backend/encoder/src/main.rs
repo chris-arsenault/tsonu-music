@@ -14,7 +14,7 @@ async fn main() -> Result<(), Error> {
         .init();
 
     let aws_config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-    let state = Arc::new(EncoderState::from_env(S3Client::new(&aws_config))?);
+    let state = Arc::new(EncoderState::from_env(S3Client::new(&aws_config)).await?);
 
     run(service_fn(move |event| {
         handle_event(event, Arc::clone(&state))

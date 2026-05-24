@@ -1,6 +1,7 @@
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use chrono::{SecondsFormat, Utc};
+mod db;
 use encode_contract::{
     planned_ffmpeg_args, AssetRef, EncodeJob, EncodeJobEvent, EncodeMetadata, EncodeOutput,
     EncodeStatus, FfmpegDetails, LoudnessMetadata, ACTION_ENCODE_TRACK, ACTION_PACKAGING_CHECK,
@@ -10,6 +11,7 @@ use lambda_runtime::{Error, LambdaEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error as StdError;
@@ -29,6 +31,7 @@ const WORK_ROOT: &str = "/tmp/tsonu-encoder";
 
 #[derive(Clone)]
 pub struct EncoderState {
+    db: PgPool,
     s3: S3Client,
     masters_bucket: String,
     media_bucket: String,
@@ -37,8 +40,12 @@ pub struct EncoderState {
 }
 
 impl EncoderState {
-    pub fn from_env(s3: S3Client) -> Result<Self, ConfigError> {
+    pub async fn from_env(s3: S3Client) -> Result<Self, ConfigError> {
+        let db = db::connect_pool_from_env()
+            .await
+            .map_err(|source| ConfigError::db_connect(source.to_string()))?;
         Ok(Self {
+            db,
             s3,
             masters_bucket: required_env("MASTERS_BUCKET")?,
             media_bucket: required_env("MEDIA_BUCKET")?,
@@ -49,7 +56,7 @@ impl EncoderState {
         })
     }
 
-    async fn write_job_status(&self, job_key: &str, job: &EncodeJob) -> Result<(), EncoderError> {
+    async fn write_job_status(&self, job: &EncodeJob) -> Result<(), EncoderError> {
         if job.output.bucket != self.media_bucket {
             return Err(EncoderError::InvalidEvent(format!(
                 "job output bucket {} does not match configured media bucket {}",
@@ -57,18 +64,11 @@ impl EncoderState {
             )));
         }
 
-        let body = serde_json::to_vec_pretty(job).map_err(EncoderError::SerializeJob)?;
-        self.s3
-            .put_object()
-            .bucket(&self.media_bucket)
-            .key(job_key)
-            .content_type("application/json; charset=utf-8")
-            .body(ByteStream::from(body))
-            .send()
+        db::upsert_encode_job(&self.db, job)
             .await
-            .map_err(|source| EncoderError::WriteStatus {
-                job_key: job_key.to_string(),
-                source: Box::new(source),
+            .map_err(|source| EncoderError::WriteStatusDatabase {
+                job_id: job.job_id.clone(),
+                source,
             })?;
 
         Ok(())
@@ -311,7 +311,7 @@ async fn handle_encode_job(
         version: None,
         args: planned_ffmpeg_args(&job.input.key, &job.output, includes_lossless(&job)),
     });
-    state.write_job_status(&event.job_key, &job).await?;
+    state.write_job_status(&job).await?;
 
     let ffmpeg = match check_binary("ffmpeg", &state.ffmpeg_path)
         .and_then(|ffmpeg| check_binary("ffprobe", &state.ffprobe_path).map(|_| ffmpeg))
@@ -334,7 +334,7 @@ async fn handle_encode_job(
                     args: result.ffmpeg_args,
                 },
             );
-            state.write_job_status(&event.job_key, &job).await?;
+            state.write_job_status(&job).await?;
 
             Ok(EncodeJobResponse {
                 ok: true,
@@ -359,14 +359,14 @@ async fn fail_job(
     let message = error.to_string();
     let details = error.job_details();
     job.mark_failed(now(), error.job_code(), message, details);
-    state.write_job_status(&job_key, &job).await?;
+    state.write_job_status(&job).await?;
 
     Ok(EncodeJobResponse {
         ok: false,
         job_id: job.job_id,
         job_key,
         status: job.status,
-        message: "encode job failed; status was written to S3".to_string(),
+        message: "encode job failed; status was written to RDS".to_string(),
         assets: job.output.assets,
         metadata: job.metadata,
     })
@@ -448,7 +448,7 @@ fn validate_encode_event_targets(
         )));
     }
 
-    let expected_job_key = encode_contract::draft_job_key(&event.job.job_id);
+    let expected_job_key = encode_contract::encode_job_key(&event.job.job_id);
     if event.job_key != expected_job_key {
         return Err(EncoderError::InvalidEvent(format!(
             "jobKey must be {expected_job_key}"
@@ -1103,17 +1103,31 @@ fn first_nonempty_line(stdout: &str) -> Option<String> {
 }
 
 fn required_env(name: &'static str) -> Result<String, ConfigError> {
-    env::var(name).map_err(|_| ConfigError { name })
+    env::var(name).map_err(|_| ConfigError::missing_env(name))
 }
 
 #[derive(Debug)]
 pub struct ConfigError {
-    name: &'static str,
+    message: String,
+}
+
+impl ConfigError {
+    fn missing_env(name: &'static str) -> Self {
+        Self {
+            message: format!("missing required environment variable {name}"),
+        }
+    }
+
+    fn db_connect(error: String) -> Self {
+        Self {
+            message: format!("failed to connect to catalog database: {error}"),
+        }
+    }
 }
 
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "missing required environment variable {}", self.name)
+        f.write_str(&self.message)
     }
 }
 
@@ -1124,7 +1138,6 @@ enum EncoderError {
     UnsupportedAction(String),
     InvalidEvent(String),
     DeserializeEvent(serde_json::Error),
-    SerializeJob(serde_json::Error),
     SerializeMetadata(serde_json::Error),
     ParseProbeJson(serde_json::Error),
     ParseLoudnormJson(serde_json::Error),
@@ -1140,9 +1153,9 @@ enum EncoderError {
         value: String,
         source: ParseIntError,
     },
-    WriteStatus {
-        job_key: String,
-        source: Box<dyn StdError + Send + Sync>,
+    WriteStatusDatabase {
+        job_id: String,
+        source: sqlx::Error,
     },
     DownloadSource {
         bucket: String,
@@ -1207,11 +1220,11 @@ impl EncoderError {
             Self::CommandFailed { name, .. } if *name == "ffmpeg" => "ffmpeg_failed",
             Self::UploadOutput { .. } | Self::ReadUploadFile { .. } => "output_upload_failed",
             Self::MissingExpectedAsset(_) | Self::NoGeneratedFiles(_) => "missing_output_asset",
-            Self::SerializeJob(_) | Self::SerializeMetadata(_) => "serialization_failed",
+            Self::SerializeMetadata(_) => "serialization_failed",
             Self::Io { .. } | Self::PathEncoding(_) | Self::InvalidRelativePath { .. } => {
                 "filesystem_failed"
             }
-            Self::WriteStatus { .. } => "status_write_failed",
+            Self::WriteStatusDatabase { .. } => "status_write_failed",
             Self::SpawnFailed { name, .. } if *name == "ffmpeg" => "ffmpeg_unavailable",
             Self::SpawnFailed { name, .. } if *name == "ffprobe" => "ffprobe_unavailable",
             Self::EmptyVersion { .. } => "binary_check_failed",
@@ -1227,8 +1240,8 @@ impl EncoderError {
             Self::DownloadSource { source, .. }
             | Self::ReadSourceStream { source, .. }
             | Self::ReadUploadFile { source, .. }
-            | Self::UploadOutput { source, .. }
-            | Self::WriteStatus { source, .. } => Some(truncate(&source.to_string(), 4_000)),
+            | Self::UploadOutput { source, .. } => Some(truncate(&source.to_string(), 4_000)),
+            Self::WriteStatusDatabase { source, .. } => Some(truncate(&source.to_string(), 4_000)),
             Self::Io { source, .. } => Some(source.to_string()),
             _ => None,
         }
@@ -1244,7 +1257,6 @@ impl fmt::Display for EncoderError {
             ),
             Self::InvalidEvent(message) => write!(f, "invalid encode event: {message}"),
             Self::DeserializeEvent(source) => write!(f, "failed to parse encode event: {source}"),
-            Self::SerializeJob(source) => write!(f, "failed to serialize job status: {source}"),
             Self::SerializeMetadata(source) => write!(f, "failed to serialize metadata: {source}"),
             Self::ParseProbeJson(source) => write!(f, "failed to parse ffprobe JSON: {source}"),
             Self::ParseLoudnormJson(source) => {
@@ -1262,8 +1274,8 @@ impl fmt::Display for EncoderError {
                 value,
                 source,
             } => write!(f, "failed to parse ffprobe {field} value {value}: {source}"),
-            Self::WriteStatus { job_key, source } => {
-                write!(f, "failed to write job status {job_key}: {source}")
+            Self::WriteStatusDatabase { job_id, source } => {
+                write!(f, "failed to write job status {job_id} to database: {source}")
             }
             Self::DownloadSource {
                 bucket,
@@ -1326,17 +1338,16 @@ impl StdError for EncoderError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
         match self {
             Self::DeserializeEvent(source)
-            | Self::SerializeJob(source)
             | Self::SerializeMetadata(source)
             | Self::ParseProbeJson(source)
             | Self::ParseLoudnormJson(source) => Some(source),
             Self::ParseProbeFloat { source, .. } => Some(source),
             Self::ParseProbeInt { source, .. } => Some(source),
-            Self::WriteStatus { source, .. }
-            | Self::DownloadSource { source, .. }
+            Self::DownloadSource { source, .. }
             | Self::ReadSourceStream { source, .. }
             | Self::ReadUploadFile { source, .. }
             | Self::UploadOutput { source, .. } => Some(source.as_ref()),
+            Self::WriteStatusDatabase { source, .. } => Some(source),
             Self::Io { source, .. } | Self::SpawnFailed { source, .. } => Some(source),
             _ => None,
         }
@@ -1399,7 +1410,7 @@ mod tests {
         );
         let event = EncodeJobEvent {
             action: ACTION_ENCODE_TRACK.to_string(),
-            job_key: "draft/jobs/job_so-we-sleep_01_encode_20260523.json".to_string(),
+            job_key: "jobs/job_so-we-sleep_01_encode_20260523".to_string(),
             job,
             requested_by: None,
         };
@@ -1425,7 +1436,7 @@ mod tests {
         job.mark_running("2026-05-23T19:55:31Z".to_string());
         let event = EncodeJobEvent {
             action: ACTION_ENCODE_TRACK.to_string(),
-            job_key: "draft/jobs/job_so-we-sleep_01_encode_20260523.json".to_string(),
+            job_key: "jobs/job_so-we-sleep_01_encode_20260523".to_string(),
             job,
             requested_by: None,
         };

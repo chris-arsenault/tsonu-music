@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 pub const ACTION_ENCODE_TRACK: &str = "encodeTrack";
 pub const ACTION_PACKAGING_CHECK: &str = "packagingCheck";
-pub const DRAFT_JOB_PREFIX: &str = "draft/jobs/";
 pub const DRAFT_ENCODE_PREFIX: &str = "draft/encodes/";
 pub const ENCODE_ENTITY_TYPE: &str = "encodeJob";
+pub const ENCODE_JOB_KEY_PREFIX: &str = "jobs/";
 pub const SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -197,8 +197,8 @@ pub struct JobError {
     pub details: Option<String>,
 }
 
-pub fn draft_job_key(job_id: &str) -> String {
-    format!("{DRAFT_JOB_PREFIX}{job_id}.json")
+pub fn encode_job_key(job_id: &str) -> String {
+    format!("{ENCODE_JOB_KEY_PREFIX}{job_id}")
 }
 
 pub fn build_job_id(track_id: &str, timestamp: &str) -> String {

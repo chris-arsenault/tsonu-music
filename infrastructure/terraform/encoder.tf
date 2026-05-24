@@ -7,7 +7,7 @@ locals {
   ffmpeg_layer_zip_path       = "${path.module}/../../backend/target/lambda-layers/ffmpeg/ffmpeg-layer.zip"
   ffmpeg_layer_s3_key         = "lambda-layers/ffmpeg/ffmpeg-7.0.2-amd64-static.zip"
   ffmpeg_layer_source_hash    = fileexists(local.ffmpeg_layer_zip_path) ? filebase64sha256(local.ffmpeg_layer_zip_path) : null
-  encoder_output_prefixes     = ["albums/*", "draft/encodes/*", "draft/jobs/*"]
+  encoder_output_prefixes     = ["albums/*", "draft/encodes/*"]
   encoder_master_key_prefixes = ["masters/*"]
 }
 
@@ -159,6 +159,11 @@ resource "aws_iam_role_policy_attachment" "encoder_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+resource "aws_iam_role_policy_attachment" "encoder_vpc" {
+  role       = aws_iam_role.encoder.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 data "aws_iam_policy_document" "encoder" {
   statement {
     sid    = "ListSourceMasters"
@@ -203,7 +208,7 @@ data "aws_iam_policy_document" "encoder" {
   }
 
   statement {
-    sid    = "WriteGeneratedMediaAndJobStatus"
+    sid    = "WriteGeneratedMedia"
     effect = "Allow"
 
     actions = [
@@ -216,7 +221,6 @@ data "aws_iam_policy_document" "encoder" {
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
       "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/jobs/*",
     ]
   }
 
@@ -264,18 +268,24 @@ resource "aws_lambda_function" "encoder" {
   layers = [aws_lambda_layer_version.ffmpeg.arn]
 
   environment {
-    variables = {
+    variables = merge(local.db_env, {
       FFMPEG_PATH    = "/opt/bin/ffmpeg"
       FFPROBE_PATH   = "/opt/bin/ffprobe"
       MASTERS_BUCKET = aws_s3_bucket.media_storage["masters"].id
       MEDIA_BUCKET   = aws_s3_bucket.media_storage["media"].id
       RUST_LOG       = "info"
-    }
+    })
+  }
+
+  vpc_config {
+    subnet_ids         = module.ctx.vpc.private_subnet_ids
+    security_group_ids = [module.ctx.vpc.lambda_sg_id]
   }
 
   depends_on = [
     aws_cloudwatch_log_group.encoder,
     aws_iam_role_policy_attachment.encoder_basic,
+    aws_iam_role_policy_attachment.encoder_vpc,
     aws_iam_role_policy.encoder,
   ]
 }

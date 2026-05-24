@@ -8,7 +8,7 @@ locals {
     }
     media = {
       name        = "${local.prefix}-media"
-      description = "Generated streaming media and published manifests"
+      description = "Generated streaming media and artwork"
     }
   }
 
@@ -178,7 +178,6 @@ data "aws_iam_policy_document" "media_storage_bucket" {
 
       actions = ["s3:GetObject"]
       resources = [
-        "${each.value.arn}/catalog.json",
         "${each.value.arn}/albums/*",
         "${each.value.arn}/artwork/*",
         "${each.value.arn}/waveforms/*",

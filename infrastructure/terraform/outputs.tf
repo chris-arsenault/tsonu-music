@@ -14,12 +14,12 @@ output "masters_kms_key_arn" {
 }
 
 output "media_bucket_name" {
-  description = "S3 bucket name for generated HLS, artwork, waveform data, and published manifests."
+  description = "S3 bucket name for generated HLS, artwork, and waveform data."
   value       = aws_s3_bucket.media_storage["media"].id
 }
 
 output "media_bucket_arn" {
-  description = "S3 bucket ARN for generated HLS, artwork, waveform data, and published manifests."
+  description = "S3 bucket ARN for generated HLS, artwork, and waveform data."
   value       = aws_s3_bucket.media_storage["media"].arn
 }
 

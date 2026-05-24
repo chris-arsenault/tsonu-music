@@ -16,6 +16,11 @@ export function resolveMediaUrl(mediaBaseUrl: string, pathOrUrl: string): string
     return new URL(pathOrUrl.replace(/^\/+/, ''), baseUrl).toString();
 }
 
+function resolveApiUrl(apiBaseUrl: string, path: string): string {
+    const baseUrl = apiBaseUrl.endsWith('/') ? apiBaseUrl : `${apiBaseUrl}/`;
+    return new URL(path.replace(/^\/+/, ''), baseUrl).toString();
+}
+
 export function getArtworkUrl(mediaBaseUrl: string, artwork: CatalogArtwork): string | undefined {
     const source = [...artwork.sources].sort((left, right) => right.width - left.width)[0];
     if (!source) {
@@ -46,32 +51,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function assertCatalog(value: unknown): asserts value is PublishedCatalog {
     if (!isRecord(value) || value.entityType !== 'catalog' || !Array.isArray(value.albums)) {
-        throw new Error('Catalog manifest is not a published catalog.');
+        throw new Error('Catalog response is not a published catalog.');
     }
 }
 
 function assertAlbumManifest(value: unknown): asserts value is PublishedAlbumManifest {
     if (!isRecord(value) || value.entityType !== 'album' || !Array.isArray(value.tracks)) {
-        throw new Error('Album manifest is not a published album.');
+        throw new Error('Album response is not a published album.');
     }
 }
 
 export async function fetchPublishedCatalog(
-    mediaBaseUrl: string,
+    apiBaseUrl: string,
     signal: AbortSignal,
 ): Promise<PublishedCatalog> {
-    const catalog = await fetchJson<PublishedCatalog>(resolveMediaUrl(mediaBaseUrl, 'catalog.json'), signal);
+    const catalog = await fetchJson<PublishedCatalog>(resolveApiUrl(apiBaseUrl, '/catalog'), signal);
     assertCatalog(catalog);
     return catalog;
 }
 
 export async function fetchAlbumManifest(
-    mediaBaseUrl: string,
+    apiBaseUrl: string,
     album: CatalogAlbumSummary,
     signal: AbortSignal,
 ): Promise<PublishedAlbumManifest> {
+    return fetchAlbumManifestPath(apiBaseUrl, album.manifestPath, signal);
+}
+
+export async function fetchAlbumManifestBySlug(
+    apiBaseUrl: string,
+    albumSlug: string,
+    signal: AbortSignal,
+): Promise<PublishedAlbumManifest> {
+    return fetchAlbumManifestPath(
+        apiBaseUrl,
+        `/catalog/albums/${encodeURIComponent(albumSlug)}`,
+        signal,
+    );
+}
+
+async function fetchAlbumManifestPath(
+    apiBaseUrl: string,
+    manifestPath: string,
+    signal: AbortSignal,
+): Promise<PublishedAlbumManifest> {
     const manifest = await fetchJson<PublishedAlbumManifest>(
-        resolveMediaUrl(mediaBaseUrl, album.manifestPath),
+        resolveApiUrl(apiBaseUrl, manifestPath),
         signal,
     );
     assertAlbumManifest(manifest);

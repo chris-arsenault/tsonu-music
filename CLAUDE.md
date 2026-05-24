@@ -1,6 +1,9 @@
 # Claude Guide
 
-Marketing site for the band **Tsonu**. Single-page React app, built with Vite, deployed to CloudFront via the platform `website` module.
+Marketing site and first-party streaming surface for the band **Tsonu**. The
+public React app renders catalog, album, and track pages with a bottom sticky
+HLS player. The admin surface manages catalog metadata, master uploads, encode
+jobs, publishing, and CloudWatch RUM playback stats.
 
 ## URLs
 
@@ -15,24 +18,31 @@ DNS records for the three `tsonu.com` hostnames live in the `tsonu.com.` Route53
 
 ## Architecture
 
-- **Frontend**: React 19 + Vite, TypeScript, in `frontend/`. No backend, no database, no authentication.
-- **Infrastructure**: `infrastructure/terraform/main.tf` calls the `ahara-tf-patterns` `website` module (S3 + CloudFront + ACM + WAF + KMS + Route53).
-- **Analytics**: Google Analytics 4 loaded lazily by `frontend/src/CookieBanner.tsx` only after user consent.
+- **Frontend**: React 19 + Vite, TypeScript, in `frontend/`.
+- **Admin/API**: Rust Lambdas behind Ahara `alb-api`, with Cognito-protected admin routes and public `/catalog` playback routes.
+- **Metadata**: shared Ahara RDS. Migrations live in `db/migrations`; runtime catalog rows are not committed to this repo.
+- **Media**: private source-master and generated-media S3 buckets. Public HLS, artwork, and lossless assets are served through CloudFront.
+- **Analytics**: CloudWatch RUM custom player events and an admin dashboard for player stats.
 
 ## Build and deploy
 
 - **Local dev**: `cd frontend && pnpm install && pnpm dev` → http://localhost:3000
-- **Local build**: `cd frontend && pnpm run build` → `frontend/build/`
-- **Deploy**: CI only. Push to `main` triggers the shared platform workflow (`.github/workflows/ci.yml`) which builds, then runs `terraform apply` to deploy.
-- **Pre-commit check**: `make ci` runs lint + typecheck + terraform fmt.
+- **Local build**: `cd frontend && pnpm run build` -> `frontend/build/`
+- **Backend tests**: `cd backend && cargo test --lib`
+- **Migrations**: `db-migrate` applies `db/migrations` through the shared Ahara migration role.
+- **Deploy**: CI only. Push to `main` triggers the shared platform workflow (`.github/workflows/ci.yml`) which builds, runs migrations, then runs `terraform apply`.
+- **Pre-commit check**: `make ci` runs lint, typecheck, tests, schema validation, and Terraform fmt.
 
 ## Stack declaration
 
-`platform.yml` declares `stack: [typescript, terraform]`. The shared workflow auto-detects the frontend at `frontend/` (shallowest `package.json` outside `node_modules`). No migrations, no Rust, no TrueNAS.
+`platform.yml` declares TypeScript, Rust, Terraform, and `migrations:
+db/migrations`. The shared workflow auto-detects the frontend at `frontend/`
+and Rust Lambda artifacts under `backend/`.
 
 ## Key decisions
 
 - **`music.tsonu.com` is the canonical URL** but all four hostnames resolve to the same S3 content. The band's historical `tsonu.com` presence is preserved.
 - **`frontend/build/`** is the Vite output dir (not the default `dist/`) — preserved from the legacy Create React App layout to minimize churn in downstream paths.
-- **No vitest setup** — the app has no tests yet. Adding vitest is a follow-up when there's something to test.
+- **RDS is the catalog source of truth**. Do not commit runtime album, track, or job JSON data into this repo.
+- **Vitest is enabled** for frontend catalog and analytics behavior.
 - **Tailwind is loaded via CDN** (`https://cdn.tailwindcss.com`) in `frontend/index.html`, not bundled. This predates the Vite migration and hasn't been untangled.
