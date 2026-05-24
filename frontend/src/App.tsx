@@ -6,16 +6,19 @@ import {
     FaSpotify,
     FaYoutube,
     FaEnvelope,
-    FaAmazon, FaApple
+    FaAmazon,
+    FaApple,
 } from 'react-icons/fa';
-import { Play } from 'lucide-react';
+import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
 
-import InstagramIframe from "./InstagramIframe";
+import InstagramIframe from './InstagramIframe';
 import CookieBanner from './CookieBanner';
 import AdminApp from './admin/AdminApp';
 import { AlbumPage, CatalogPage, TrackPage } from './music/CatalogPages';
-import { MusicPlayerProvider, useMusicPlayer } from './music/MusicPlayerContext';
+import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
+import { getArtworkUrl } from './catalog/catalog-client';
+import type { CatalogAlbumSummary } from './catalog/media-catalog';
 import {
     albumPath,
     decodePathPart,
@@ -23,11 +26,11 @@ import {
     useCurrentRoute,
 } from './music/routes';
 
-// Import assets.  When this project is compiled all assets under
-// src/assets will be bundled automatically.
 import logoLarge from './assets/tsonu-combined.png';
 import logoSmall from './assets/tsonu-small-knight.png';
 import albumCover from './assets/so-we-sleep-front-no-text.jpg';
+
+const LAUNCH_ALBUM_SLUG = 'so-we-sleep';
 
 function renderPublicRoute(route: string) {
     const pathname = route.split(/[?#]/)[0] || '/';
@@ -42,7 +45,11 @@ function renderPublicRoute(route: string) {
     }
 
     if (parts[0] === 'albums' && parts[1]) {
-        return <AlbumPage slug={decodePathPart(parts[1]) ?? ''} />;
+        const slug = decodePathPart(parts[1]) ?? '';
+        if (slug === LAUNCH_ALBUM_SLUG) {
+            return <SoWeSleepLaunchPage />;
+        }
+        return <AlbumPage slug={slug} />;
     }
 
     if (parts[0] === 'tracks' && parts[1] && parts[2]) {
@@ -57,146 +64,374 @@ function renderPublicRoute(route: string) {
     return <HomePage />;
 }
 
+/* -----------------------------------------------------------------
+ * General home page — artist portal
+ * ----------------------------------------------------------------- */
 function HomePage() {
     const player = useMusicPlayer();
-    const featuredAlbum = player.catalog?.albums[0];
+    const albums = player.catalog?.albums ?? [];
+    const featuredAlbum = albums[0];
+    const otherAlbums = albums.slice(1, 7);
 
     return (
-        <>
-            <div id="album-art">
-                <img src={albumCover} alt="So We Sleep Cover Art" className="album-img" />
-            </div>
+        <div className="home">
+            <section className="home-hero grain">
+                <img src={logoSmall} alt="Tsonu emblem" className="home-hero__mark" />
+                <span className="home-hero__wordmark">Tsonu</span>
+                <h1 className="home-hero__tagline">
+                    Music for <em>dreamers</em>, adventurers, and anyone who falls asleep with one earbud in.
+                </h1>
+                <p className="home-hero__lede">
+                    Downtempo, orchestral electronica from the edge of sleep —
+                    written between half-remembered dreams and old RPG soundtracks.
+                </p>
+            </section>
 
-            <header className="hero" id="home">
-                <img src={logoLarge} alt="Tsonu logo" className="hero__logo" />
-            </header>
-
-            <section id="album" className="section section--album">
-                <div className="section__inner">
-                    <h2>So We Sleep</h2>
-                    <p>
-                        My first album, <b>So We Sleep</b>, is an exploration of the kind of music I like to listen to.
-                        Downtempo, Orchestral Electronica, Final Fantasy Soundtracks, all thrown in a blender with
-                        a dash of inexperience and memories of high school band. This album represents my creative
-                        journey over the past few years from sketching on beepbox.co (Adventure Between the Verdant Fields)
-                        to a 10 year old FL Studio Project (The Sun Arrived at Midnight) to learning Ableton (Parallax Expedition)
-                        and Dorico (Orchestral edit of Reign of the Simmered).
-                    </p>
-                    <p>
-                        I've been a fan of dreams for most of my adult life, after having taught myself to lucid dream
-                        in my teens. I dream of spaceships, wizards, and epic battles along with the occasional forgetting
-                        to turn my homework in. This album is the adventures I have while dreaming, the same
-                        fantasy as books or the RPGs that inspired some of these tracks.
-                    </p>
-                    <p>
-                        No journey would be complete with out the friends we meet (or keep) along the way, so big should out
-                        to <a href="https://www.tonereverie.com">Tony</a> for providing feedback on the album, coaching me
-                        through mixing it, and providing the final mastering.
-                    </p>
-                    <p>
-                        Hope y'all enjoy listening to it as much as I did making it!
-                    </p>
-                    <p>&nbsp;&nbsp;--Tsonu</p>
-                    <div className="album-actions">
-                        <button
-                            type="button"
-                            onClick={() => featuredAlbum ? player.playAlbum(featuredAlbum.albumId) : undefined}
-                            disabled={!featuredAlbum}
-                        >
-                            <Play aria-hidden="true" /> Play
-                        </button>
-                        <a
-                            href={albumPath('so-we-sleep')}
-                            onClick={(event) => handleInternalLink(event, albumPath('so-we-sleep'))}
-                        >
-                            Album Page
-                        </a>
+            <section className="featured" aria-labelledby="featured-heading">
+                <div className="featured__inner">
+                    <a
+                        className="featured__art"
+                        href={albumPath(LAUNCH_ALBUM_SLUG)}
+                        onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}
+                        aria-label="Open So We Sleep"
+                    >
+                        <img src={albumCover} alt="So We Sleep cover art" />
+                    </a>
+                    <div className="featured__copy">
+                        <p className="eyebrow">Latest release</p>
+                        <h2 id="featured-heading" className="featured__title">So We Sleep</h2>
+                        <p className="featured__meta">
+                            <span>Debut album</span><span className="dot" />
+                            <span>September 2025</span><span className="dot" />
+                            <span>10 tracks</span>
+                        </p>
+                        <p>
+                            A debut album of orchestral downtempo built around dreams, fantasy,
+                            and the strange landscapes that arrive when the world gets quiet.
+                        </p>
+                        <div className="featured__actions">
+                            <button
+                                type="button"
+                                className="button--primary"
+                                onClick={() => featuredAlbum ? player.playAlbum(featuredAlbum.albumId) : undefined}
+                                disabled={!featuredAlbum}
+                            >
+                                <Play aria-hidden="true" /> Play Album
+                            </button>
+                            <a
+                                href={albumPath(LAUNCH_ALBUM_SLUG)}
+                                onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}
+                            >
+                                Album Page
+                            </a>
+                        </div>
                     </div>
                 </div>
             </section>
 
-            <section id="music" className="section section--music">
-                <div className="section__inner">
-                    <h2>Catalog</h2>
-                    <p>First-party streaming for albums, demos, previews, and releases outside the platform feeds.</p>
-                    <div className="album-actions">
-                        <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>Browse Catalog</a>
-                    </div>
-                    <div className="streaming-links">
-                        <a href="https://open.spotify.com/album/6yC28QGn2Zv8Lr1TIAHYPD" className="streaming-links__item" aria-label="Spotify">
-                            <FaSpotify />
-                            <span>Spotify</span>
-                        </a>
-                        <a href="https://music.apple.com/us/album/so-we-sleep/1836883166" className="streaming-links__item" aria-label="Apple">
-                            <FaApple />
-                            <span>Apple</span>
-                        </a>
-                        <a href="https://music.youtube.com/playlist?list=OLAK5uy_l6Sv8O1P37iK9Qjz621dYc909fE34aoms" className="streaming-links__item" aria-label="YouTube">
-                            <FaYoutube />
-                            <span>YouTube</span>
-                        </a>
-                        <a href="https://tsonu.bandcamp.com/album/so-we-sleep" className="streaming-links__item" aria-label="Bandcamp">
-                            <FaBandcamp />
-                            <span>Bandcamp</span>
-                        </a>
-                        <a href="https://music.amazon.com/albums/B0FPBB5QCR" className="streaming-links__item" aria-label="Amazon">
-                            <FaAmazon />
-                            <span>Amazon</span>
-                        </a>
+            <CatalogueRibbon featured={featuredAlbum} others={otherAlbums} />
+
+            <section className="bio">
+                <div className="bio__inner">
+                    <p className="eyebrow">About</p>
+                    <div className="bio__body">
+                        <p>
+                            Tsonu is a one-person project for late-night music — orchestral electronica
+                            stitched together from FL Studio sketches, Ableton sessions, and Dorico scores.
+                        </p>
+                        <p>
+                            Influenced by Final Fantasy soundtracks, downtempo records,
+                            and a long-running habit of lucid dreaming. Most tracks start as something
+                            half-remembered the next morning.
+                        </p>
                     </div>
                 </div>
             </section>
 
-            <section id="connect" className="section section--connect">
-                <div className="section__inner">
-                    <h2>Connect</h2>
-                    <div className="social-links">
-                        <a href="https://x.com/Tsonu_Music" className="social-links__item" aria-label="X (Twitter)">
-                            <FaTwitter />
-                            <span>X / Twitter</span>
+            <section id="connect" className="connect-strip">
+                <div className="connect-strip__inner">
+                    <h2 className="connect-strip__heading">Stay in touch</h2>
+                    <div className="connect-strip__links">
+                        <a href="https://x.com/Tsonu_Music" aria-label="X / Twitter">
+                            <FaTwitter /> X
                         </a>
-                        <a href="https://www.instagram.com/tsonu.music/" className="social-links__item" aria-label="Instagram">
-                            <FaInstagram />
-                            <span>Instagram</span>
+                        <a href="https://www.instagram.com/tsonu.music/" aria-label="Instagram">
+                            <FaInstagram /> Instagram
                         </a>
-                        <a href="https://tsonu.bandcamp.com" className="social-links__item" aria-label="Bandcamp">
-                            <FaBandcamp />
-                            <span>Bandcamp</span>
+                        <a href="https://tsonu.bandcamp.com" aria-label="Bandcamp">
+                            <FaBandcamp /> Bandcamp
                         </a>
-                        <a href="mailto:contact@tsonu.com" className="social-links__item" aria-label="Email">
-                            <FaEnvelope />
-                            <span>Email</span>
+                        <a href="https://soundcloud.com/tsonu" aria-label="SoundCloud">
+                            <FaSoundcloud /> SoundCloud
                         </a>
-                    </div>
-
-                    <div className="social-links">
-                        <a href="https://soundcloud.com/tsonu" className="social-links__item" aria-label="SoundCloud">
-                            <FaSoundcloud />
-                            <span>SoundCloud - Betas & Other Projects</span>
+                        <a href="mailto:contact@tsonu.com" aria-label="Email">
+                            <FaEnvelope /> Email
                         </a>
                     </div>
                 </div>
             </section>
-            <section id="grow" className="section section--grow">
-                <div className="section__inner">
-                    <h2>Help Me Grow</h2>
-                    <div>
-                        <blockquote className="twitter-tweet"><p lang="en" dir="ltr">Debut album, So We Sleep, out now!
-                            Good music for adventuring:<a href="https://t.co/q4rq1MbV86">https://t.co/q4rq1MbV86</a>
-                        </p>&mdash; Tsonu (@Tsonu_Music) <a
-                            href="https://twitter.com/Tsonu_Music/status/1964408798619267289?ref_src=twsrc%5Etfw">September
-                            6, 2025</a></blockquote>
-                        <script async src="https://platform.twitter.com/widgets.js" charSet="utf-8"></script>
-                    </div>
-                    <div>
-                        <InstagramIframe url="https://www.instagram.com/p/DORbp-jkorj/" height={800} />
-                    </div>
-                </div>
-            </section>
-        </>
+        </div>
     );
 }
 
+function CatalogueRibbon({
+    featured,
+    others,
+}: {
+    featured: CatalogAlbumSummary | undefined;
+    others: CatalogAlbumSummary[];
+}) {
+    const { mediaBaseUrl } = useMusicPlayer();
+    const items = [featured, ...others].filter((album): album is CatalogAlbumSummary => Boolean(album));
+
+    if (items.length === 0) {
+        return null;
+    }
+
+    return (
+        <section className="ribbon" aria-label="Catalogue">
+            <div className="ribbon__inner">
+                <div className="ribbon__head">
+                    <h2>Catalogue</h2>
+                    <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>
+                        Browse all
+                    </a>
+                </div>
+                <div className="ribbon__grid">
+                    {items.map((album) => {
+                        const src = getArtworkUrl(mediaBaseUrl, album.artwork);
+                        return (
+                            <a
+                                key={album.albumId}
+                                className="ribbon-card"
+                                href={albumPath(album.slug)}
+                                onClick={(event) => handleInternalLink(event, albumPath(album.slug))}
+                            >
+                                <div className="ribbon-card__art">
+                                    {src
+                                        ? <img src={src} alt={album.artwork.altText} />
+                                        : <img src={albumCover} alt={album.artwork.altText} />}
+                                </div>
+                                <div className="ribbon-card__body">
+                                    <span className="ribbon-card__kind">{album.releaseType}</span>
+                                    <h3 className="ribbon-card__title">{album.title}</h3>
+                                    <span className="ribbon-card__meta">
+                                        {album.trackCount} tracks · {formatTime(album.totalDurationSeconds)}
+                                    </span>
+                                </div>
+                            </a>
+                        );
+                    })}
+                </div>
+            </div>
+        </section>
+    );
+}
+
+/* -----------------------------------------------------------------
+ * So We Sleep — launch / campaign page
+ * ----------------------------------------------------------------- */
+function SoWeSleepLaunchPage() {
+    const player = useMusicPlayer();
+    const featuredAlbum = player.catalog?.albums.find((album) => album.slug === LAUNCH_ALBUM_SLUG);
+    const trackCount = featuredAlbum?.trackCount ?? 10;
+    const totalDuration = featuredAlbum?.totalDurationSeconds ?? 0;
+
+    return (
+        <div className="launch">
+            <section className="launch-hero">
+                <div className="launch-hero__art">
+                    <img src={albumCover} alt="So We Sleep cover art" />
+                </div>
+                <div className="launch-hero__veil" />
+                <div className="launch-hero__inner">
+                    <p className="launch-hero__eyebrow">Debut Album · Out Now</p>
+                    <h1 className="launch-hero__title">So We Sleep</h1>
+                    <p className="launch-hero__subtitle">
+                        Orchestral downtempo built from dreams, fantasy soundtracks, and
+                        ten years of half-finished FL Studio projects.
+                    </p>
+                    <div className="launch-hero__meta">
+                        <span><CalendarDays aria-hidden="true" /> September 2025</span>
+                        <span><Disc3 aria-hidden="true" /> {trackCount} tracks</span>
+                        {totalDuration > 0 ? <span><ListMusic aria-hidden="true" /> {formatTime(totalDuration)}</span> : null}
+                    </div>
+                    <div className="launch-hero__actions">
+                        <button
+                            type="button"
+                            className="button--primary"
+                            onClick={() => featuredAlbum ? player.playAlbum(featuredAlbum.albumId) : undefined}
+                            disabled={!featuredAlbum}
+                        >
+                            <Play aria-hidden="true" /> Play Album
+                        </button>
+                        <a href="#stream" onClick={(event) => {
+                            event.preventDefault();
+                            document.getElementById('stream')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}>
+                            Stream Elsewhere ↓
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <article className="chapter chapter--soft">
+                <div className="chapter__inner">
+                    <header className="chapter__label">
+                        <span className="chapter__number">No. 01</span>
+                        <h2 className="chapter__heading">A letter from Tsonu</h2>
+                    </header>
+                    <div className="chapter__body">
+                        <p>
+                            My first album, <em>So We Sleep</em>, is an exploration of the kind of music I like
+                            to listen to — downtempo, orchestral electronica, Final Fantasy soundtracks, all thrown
+                            in a blender with a dash of inexperience and memories of high school band. This album
+                            represents my creative journey over the past few years from sketching on beepbox.co
+                            (<em>Adventure Between the Verdant Fields</em>) to a ten year old FL Studio project
+                            (<em>The Sun Arrived at Midnight</em>) to learning Ableton (<em>Parallax Expedition</em>)
+                            and Dorico (orchestral edit of <em>Reign of the Simmered</em>).
+                        </p>
+                        <p>
+                            I've been a fan of dreams for most of my adult life, after having taught myself to lucid
+                            dream in my teens. I dream of spaceships, wizards, and epic battles — along with the
+                            occasional forgetting to turn my homework in. This album is the adventures I have while
+                            dreaming; the same fantasy as books, or the RPGs that inspired some of these tracks.
+                        </p>
+                        <p>
+                            No journey would be complete without the friends we meet (or keep) along the way, so a big
+                            shout out to <a href="https://www.tonereverie.com">Tony</a> for providing feedback on the
+                            album, coaching me through mixing it, and providing the final mastering.
+                        </p>
+                        <p>Hope y'all enjoy listening to it as much as I did making it.</p>
+                        <span className="chapter__sig">— Tsonu</span>
+                    </div>
+                </div>
+            </article>
+
+            <article className="chapter" id="tracks">
+                <div className="chapter__inner">
+                    <header className="chapter__label">
+                        <span className="chapter__number">No. 02</span>
+                        <h2 className="chapter__heading">The album</h2>
+                    </header>
+                    <div className="chapter__body">
+                        <LaunchTracklist />
+                    </div>
+                </div>
+            </article>
+
+            <article className="chapter chapter--soft" id="stream">
+                <div className="chapter__inner">
+                    <header className="chapter__label">
+                        <span className="chapter__number">No. 03</span>
+                        <h2 className="chapter__heading">Stream elsewhere</h2>
+                    </header>
+                    <div className="chapter__body">
+                        <p style={{ margin: '0 0 1.5rem', maxWidth: '52ch' }}>
+                            Prefer your own player? <em>So We Sleep</em> is available everywhere you listen.
+                        </p>
+                        <div className="streaming-links">
+                            <a href="https://open.spotify.com/album/6yC28QGn2Zv8Lr1TIAHYPD" className="streaming-links__item" aria-label="Spotify">
+                                <FaSpotify /><span>Spotify</span>
+                            </a>
+                            <a href="https://music.apple.com/us/album/so-we-sleep/1836883166" className="streaming-links__item" aria-label="Apple Music">
+                                <FaApple /><span>Apple Music</span>
+                            </a>
+                            <a href="https://music.youtube.com/playlist?list=OLAK5uy_l6Sv8O1P37iK9Qjz621dYc909fE34aoms" className="streaming-links__item" aria-label="YouTube Music">
+                                <FaYoutube /><span>YouTube Music</span>
+                            </a>
+                            <a href="https://tsonu.bandcamp.com/album/so-we-sleep" className="streaming-links__item" aria-label="Bandcamp">
+                                <FaBandcamp /><span>Bandcamp</span>
+                            </a>
+                            <a href="https://music.amazon.com/albums/B0FPBB5QCR" className="streaming-links__item" aria-label="Amazon Music">
+                                <FaAmazon /><span>Amazon Music</span>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </article>
+
+            <article className="chapter" id="grow">
+                <div className="chapter__inner">
+                    <header className="chapter__label">
+                        <span className="chapter__number">No. 04</span>
+                        <h2 className="chapter__heading">From the wild</h2>
+                    </header>
+                    <div className="chapter__body">
+                        <p style={{ margin: '0 0 1.5rem', maxWidth: '52ch' }}>
+                            A signal boost goes a long way for an independent artist — share the album, or just say hi.
+                        </p>
+                        <div className="embeds-grid">
+                            <div>
+                                <blockquote className="twitter-tweet">
+                                    <p lang="en" dir="ltr">
+                                        Debut album, So We Sleep, out now! Good music for adventuring:{' '}
+                                        <a href="https://t.co/q4rq1MbV86">https://t.co/q4rq1MbV86</a>
+                                    </p>
+                                    &mdash; Tsonu (@Tsonu_Music){' '}
+                                    <a href="https://twitter.com/Tsonu_Music/status/1964408798619267289?ref_src=twsrc%5Etfw">
+                                        September 6, 2025
+                                    </a>
+                                </blockquote>
+                                <script async src="https://platform.twitter.com/widgets.js" charSet="utf-8"></script>
+                            </div>
+                            <div>
+                                <InstagramIframe url="https://www.instagram.com/p/DORbp-jkorj/" height={760} />
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </article>
+        </div>
+    );
+}
+
+function LaunchTracklist() {
+    const player = useMusicPlayer();
+    const album = player.albumManifest?.slug === LAUNCH_ALBUM_SLUG ? player.albumManifest : undefined;
+
+    if (!album) {
+        return (
+            <p className="mono" style={{ color: 'var(--muted)', fontSize: '0.82rem', letterSpacing: '0.12em' }}>
+                Loading tracklist…
+            </p>
+        );
+    }
+
+    return (
+        <ol className="catalog-track-list">
+            {album.tracks.map((track) => {
+                const isActive = player.selectedTrack?.trackId === track.trackId;
+                return (
+                    <li key={track.trackId}>
+                        <button
+                            type="button"
+                            className="catalog-track-list__play"
+                            onClick={() => player.playTrack(album.albumId, track.trackId)}
+                            aria-label={`Play ${track.title}`}
+                            title={`Play ${track.title}`}
+                        >
+                            <Play aria-hidden="true" />
+                        </button>
+                        <a
+                            href={`/tracks/${encodeURIComponent(album.slug)}/${encodeURIComponent(track.slug)}`}
+                            onClick={(event) => handleInternalLink(event, `/tracks/${encodeURIComponent(album.slug)}/${encodeURIComponent(track.slug)}`)}
+                            className={isActive ? 'is-active' : undefined}
+                        >
+                            <span>{String(track.trackNumber).padStart(2, '0')}</span>
+                            <strong>{track.title}</strong>
+                            <span>{formatTime(track.durationSeconds)}</span>
+                        </a>
+                    </li>
+                );
+            })}
+        </ol>
+    );
+}
+
+/* -----------------------------------------------------------------
+ * Public shell
+ * ----------------------------------------------------------------- */
 function PublicApp() {
     const route = useCurrentRoute();
 
@@ -205,21 +440,27 @@ function PublicApp() {
             <div className="App App--with-bottom-player">
                 <CookieBanner measurementId="G-PZ5LZZL2YE" />
 
-                <nav className="nav">
+                <nav className="nav" aria-label="Primary">
                     <ul className="nav__list">
                         <li className="nav__item">
-                            <a href="/" onClick={(event) => handleInternalLink(event, '/')}>
-                                <img src={logoSmall} className="nav__logo" alt="Tsonu emblem" />
+                            <a href="/" onClick={(event) => handleInternalLink(event, '/')} aria-label="Tsonu — home">
+                                <img src={logoSmall} className="nav__logo" alt="" />
                             </a>
                         </li>
                         <li className="nav__item">
-                            <a href={albumPath('so-we-sleep')} onClick={(event) => handleInternalLink(event, albumPath('so-we-sleep'))}>Album</a>
+                            <a href={albumPath(LAUNCH_ALBUM_SLUG)} onClick={(event) => handleInternalLink(event, albumPath(LAUNCH_ALBUM_SLUG))}>
+                                So We Sleep
+                            </a>
                         </li>
                         <li className="nav__item">
-                            <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>Music</a>
+                            <a href="/music" onClick={(event) => handleInternalLink(event, '/music')}>
+                                Catalogue
+                            </a>
                         </li>
                         <li className="nav__item">
-                            <a href="/#connect" onClick={(event) => handleInternalLink(event, '/#connect')}>Connect</a>
+                            <a href="/#connect" onClick={(event) => handleInternalLink(event, '/#connect')}>
+                                Connect
+                            </a>
                         </li>
                     </ul>
                 </nav>
@@ -227,8 +468,8 @@ function PublicApp() {
                 {renderPublicRoute(route)}
 
                 <footer className="footer">
-                    <img src={logoSmall} alt="Tsonu emblem" className="footer__logo" />
-                    <p>&copy; {new Date().getFullYear()} Tsonu &nbsp;•&nbsp; All rights reserved.</p>
+                    <img src={logoLarge} alt="Tsonu" className="footer__logo" />
+                    <p>&copy; {new Date().getFullYear()} Tsonu · All rights reserved</p>
                 </footer>
                 <StickyPlayer />
             </div>
@@ -236,17 +477,6 @@ function PublicApp() {
     );
 }
 
-/**
- * Root component for the Tsonu website.
- *
- * The site is organised into distinct sections: a hero banner with
- * branding, an about blurb, an album description, a music player and
- * streaming links, and a connect section with social media links.
- * Navigation anchors allow visitors to jump between sections on a
- * single page.  Colour choices and typography are inspired by the
- * supplied artwork.  A dark background with green and gold accents
- * keeps the mood intimate without feeling sterile.
- */
 function App() {
     if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
         return <AdminApp />;
