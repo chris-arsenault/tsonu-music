@@ -14,4 +14,6 @@ permissions:
 jobs:
   ci:
     uses: chris-arsenault/ahara/.github/workflows/ci.yml@main
+    with:
+      rust_extra_ci_commands: scripts/build-ffmpeg-layer.sh
     secrets: inherit
