@@ -20,10 +20,12 @@ async function loadAnalyticsWithRum() {
     vi.resetModules();
 
     const recordEvent = vi.fn();
+    const recordPageView = vi.fn();
     const addSessionAttributes = vi.fn();
     const AwsRum = vi.fn(function AwsRumMock() {
         return {
             addSessionAttributes,
+            recordPageView,
             recordEvent,
         };
     });
@@ -35,9 +37,11 @@ async function loadAnalyticsWithRum() {
     vi.stubGlobal('crypto', {
         randomUUID: () => 'session-test-1',
     });
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true })));
     vi.stubGlobal('window', {
         __APP_CONFIG__: {
             app: {
+                adminApiBaseUrl: 'https://api.music.tsonu.com',
                 mediaBaseUrl: 'https://media.tsonu.com',
                 rum: {
                     enabled: true,
@@ -67,6 +71,7 @@ async function loadAnalyticsWithRum() {
         analytics,
         AwsRum,
         addSessionAttributes,
+        recordPageView,
         recordEvent,
     };
 }
@@ -97,6 +102,7 @@ describe('player analytics', () => {
         });
 
         await vi.waitFor(() => expect(recordEvent).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
 
         expect(AwsRum).toHaveBeenCalledWith(
             'rum-app-id',
@@ -111,6 +117,7 @@ describe('player analytics', () => {
             }),
         );
         expect(addSessionAttributes).toHaveBeenCalledWith({
+            siteSessionId: 'session-test-1',
             playbackSessionId: 'session-test-1',
         });
         expect(recordEvent).toHaveBeenCalledWith(
@@ -126,9 +133,62 @@ describe('player analytics', () => {
                 positionSeconds: 12.346,
                 sessionPositionSeconds: 12.346,
                 durationSeconds: 180,
+                siteSessionId: 'session-test-1',
                 playbackSessionId: 'session-test-1',
                 pagePath: '/listen?album=so-we-sleep#music',
                 occurredAt: '2026-05-24T00:00:00.000Z',
+            }),
+        );
+        expect(fetch).toHaveBeenCalledWith(
+            'https://api.music.tsonu.com/analytics/play',
+            expect.objectContaining({
+                method: 'POST',
+                keepalive: true,
+                body: expect.stringContaining('"eventType":"play_start"'),
+            }),
+        );
+    });
+
+    test('records visit and page view events for SPA routes', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-05-24T01:00:00Z'));
+        const { analytics, recordEvent, recordPageView } = await loadAnalyticsWithRum();
+
+        analytics.recordSitePageView('/music');
+        await vi.waitFor(() => expect(recordEvent).toHaveBeenCalledTimes(2));
+
+        expect(recordPageView).toHaveBeenCalledWith({ pageId: '/music' });
+        expect(recordEvent).toHaveBeenNthCalledWith(
+            1,
+            'site_visit',
+            expect.objectContaining({
+                landingPagePath: '/music',
+                pagePath: '/music',
+                previousPagePath: null,
+                siteSessionId: 'session-test-1',
+                occurredAt: '2026-05-24T01:00:00.000Z',
+            }),
+        );
+        expect(recordEvent).toHaveBeenNthCalledWith(
+            2,
+            'page_view',
+            expect.objectContaining({
+                pagePath: '/music',
+                previousPagePath: null,
+                siteSessionId: 'session-test-1',
+                occurredAt: '2026-05-24T01:00:00.000Z',
+            }),
+        );
+
+        analytics.recordSitePageView('/releases/so-we-sleep');
+        await vi.waitFor(() => expect(recordEvent).toHaveBeenCalledTimes(3));
+        expect(recordPageView).toHaveBeenCalledWith({ pageId: '/releases/so-we-sleep' });
+        expect(recordEvent).toHaveBeenNthCalledWith(
+            3,
+            'page_view',
+            expect.objectContaining({
+                pagePath: '/releases/so-we-sleep',
+                previousPagePath: '/music',
             }),
         );
     });
@@ -182,6 +242,7 @@ describe('player analytics', () => {
             },
             sessionStorage: createSessionStorage(),
         });
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true })));
 
         const analytics = await import('./player-analytics');
         analytics.recordPlayPause({
@@ -191,5 +252,52 @@ describe('player analytics', () => {
 
         await Promise.resolve();
         expect(AwsRum).not.toHaveBeenCalled();
+    });
+
+    test('does not load the RUM client when the browser sends privacy opt out signals', async () => {
+        vi.resetModules();
+        const AwsRum = vi.fn();
+        vi.doMock('aws-rum-web', () => ({
+            AwsRum,
+        }));
+        vi.stubGlobal('navigator', {
+            globalPrivacyControl: true,
+            doNotTrack: '1',
+        });
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true })));
+        vi.stubGlobal('window', {
+            __APP_CONFIG__: {
+                app: {
+                    mediaBaseUrl: 'https://media.tsonu.com',
+                    rum: {
+                        enabled: true,
+                        applicationId: 'rum-app-id',
+                        applicationRegion: 'us-east-1',
+                        identityPoolId: 'us-east-1:identity-pool',
+                        guestRoleArn: 'arn:aws:iam::123456789012:role/rum',
+                    },
+                },
+            },
+            location: {
+                pathname: '/',
+                search: '',
+                hash: '',
+            },
+            sessionStorage: createSessionStorage(),
+        });
+
+        const analytics = await import('./player-analytics');
+        expect(analytics.hasPrivacyOptOutSignal()).toBe(true);
+        analytics.recordSitePageView('/');
+        analytics.recordPlayStart({
+            releaseId: 'release_so-we-sleep_2026',
+            songId: 'song_so-we-sleep_01',
+            recordingId: 'recording_so-we-sleep_01',
+            trackId: 'track_so-we-sleep_01',
+        });
+
+        await Promise.resolve();
+        expect(AwsRum).not.toHaveBeenCalled();
+        expect(fetch).toHaveBeenCalledTimes(1);
     });
 });

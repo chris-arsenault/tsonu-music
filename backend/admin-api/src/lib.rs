@@ -18,6 +18,7 @@ use lambda_http::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use lambda_http::{Body, Error, Request, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -42,10 +43,32 @@ const MAX_RUM_SUMMARY_HOURS: u32 = 720;
 const MAX_RUM_QUERY_RESULTS: i32 = 10_000;
 const RUM_QUERY_POLL_ATTEMPTS: usize = 12;
 const RUM_QUERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const ANALYTICS_RATE_LIMIT_WINDOW_SECONDS: i64 = 60;
+const ANALYTICS_RATE_LIMIT_MAX_REQUESTS: i32 = 120;
+const MAX_ANALYTICS_EVENT_AGE_HOURS: i64 = 24;
+const MAX_ANALYTICS_EVENT_FUTURE_SECONDS: i64 = 300;
 const PLAYER_RUM_EVENT_NAMES: &[&str] = &[
     "release_view",
     "album_view",
     "track_impression",
+    "play_start",
+    "play_pause",
+    "play_seek",
+    "play_progress_25",
+    "play_progress_50",
+    "play_progress_75",
+    "play_complete",
+    "quality_changed",
+    "play_error",
+];
+const SITE_RUM_EVENT_NAMES: &[&str] = &["site_visit", "page_view"];
+const STANDARD_RUM_EVENT_NAMES: &[&str] = &[
+    "com.amazon.rum.page_view_event",
+    "com.amazon.rum.performance_navigation_event",
+    "com.amazon.rum.js_error_event",
+    "com.amazon.rum.http_event",
+];
+const ENGAGED_SITE_EVENT_NAMES: &[&str] = &[
     "play_start",
     "play_pause",
     "play_seek",
@@ -150,6 +173,79 @@ impl AppState {
                 headers.insert("access-control-max-age", HeaderValue::from_static("600"));
             }
         }
+    }
+
+    fn validate_public_write_origin(&self, headers: &HeaderMap) -> Result<(), ApiError> {
+        if headers.get("origin").is_none() || self.cors_origin(headers).is_some() {
+            return Ok(());
+        }
+
+        Err(ApiError::forbidden(
+            "origin_not_allowed",
+            "origin is not allowed to write analytics events",
+        ))
+    }
+
+    async fn record_backend_play_event(
+        &self,
+        request: PlayEventRequest,
+        headers: &HeaderMap,
+    ) -> Result<PlayEventResponse, ApiError> {
+        validate_play_event_request(&request)?;
+        let occurred_at = parse_play_event_time(request.occurred_at.as_deref())?;
+        let rate_limit_key = analytics_rate_limit_key(headers, &request.site_session_id);
+        let rate_limit = db::check_analytics_rate_limit(
+            &self.db,
+            &rate_limit_key,
+            ANALYTICS_RATE_LIMIT_MAX_REQUESTS,
+            ANALYTICS_RATE_LIMIT_WINDOW_SECONDS,
+        )
+        .await?;
+
+        if !rate_limit.allowed {
+            return Err(ApiError::too_many_requests(
+                "analytics_rate_limited",
+                "too many analytics events",
+            ));
+        }
+
+        db::validate_play_event_track(
+            &self.db,
+            &request.release_id,
+            &request.track_id,
+            &request.song_id,
+            &request.recording_id,
+        )
+        .await?;
+
+        let dedupe_key = backend_play_dedupe_key(&request);
+        let inserted = db::insert_play_event(
+            &self.db,
+            &StoredPlayEvent {
+                dedupe_key,
+                event_type: request.event_type,
+                release_id: request.release_id,
+                track_id: request.track_id,
+                song_id: request.song_id,
+                recording_id: request.recording_id,
+                asset_id: request.asset_id,
+                selected_quality: request.selected_quality,
+                position_seconds: request.position_seconds,
+                duration_seconds: request.duration_seconds,
+                site_session_id: request.site_session_id,
+                playback_session_id: request.playback_session_id,
+                page_path: request.page_path,
+                referrer_origin: request.referrer_origin,
+                referrer_host: request.referrer_host,
+                occurred_at,
+            },
+        )
+        .await?;
+
+        Ok(PlayEventResponse {
+            accepted: inserted,
+            duplicate: !inserted,
+        })
     }
 
     async fn create_upload_url(
@@ -466,14 +562,18 @@ impl AppState {
         })?;
         let rows = self.await_logs_query(query_id).await?;
 
-        Ok(build_rum_summary(
+        let mut summary = build_rum_summary(
             &self.rum_log_group_name,
             query_id,
             query.hours,
             start_time.to_rfc3339_opts(SecondsFormat::Secs, true),
             end_time.to_rfc3339_opts(SecondsFormat::Secs, true),
             rows,
-        ))
+        );
+        summary.backend_play_events =
+            db::get_backend_play_summary(&self.db, start_time, end_time).await?;
+
+        Ok(summary)
     }
 
     async fn await_logs_query(
@@ -816,6 +916,16 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
                 db::get_public_song_by_slug(&state.db, &slug).await?,
             )
         }
+        (&Method::POST, ApiPath::PublicAnalyticsPlay) => {
+            state.validate_public_write_origin(request.headers())?;
+            let play_event: PlayEventRequest = parse_json_body(request.body())?;
+            json_response(
+                StatusCode::ACCEPTED,
+                state
+                    .record_backend_play_event(play_event, request.headers())
+                    .await?,
+            )
+        }
         (&Method::GET, ApiPath::AdminSongs) => {
             json_response(StatusCode::OK, db::list_draft_songs(&state.db).await?)
         }
@@ -921,6 +1031,7 @@ fn parse_path(path: &str) -> ApiPath {
         ["catalog", "songs", slug] => ApiPath::PublicSong {
             slug: (*slug).to_string(),
         },
+        ["analytics", "play"] => ApiPath::PublicAnalyticsPlay,
         ["admin", "catalog"] => ApiPath::AdminCatalog,
         ["admin", "songs"] => ApiPath::AdminSongs,
         ["admin", "songs", song_id] => ApiPath::AdminSong {
@@ -1051,15 +1162,101 @@ fn parse_rum_summary_query(query: Option<&str>) -> Result<RumSummaryQuery, ApiEr
     Ok(RumSummaryQuery { hours })
 }
 
+fn validate_play_event_request(request: &PlayEventRequest) -> Result<(), ApiError> {
+    if !matches!(
+        request.event_type.as_str(),
+        "play_start" | "play_10s" | "play_25" | "play_complete"
+    ) {
+        return Err(ApiError::bad_request(
+            "invalid_event_type",
+            "eventType must be play_start, play_10s, play_25, or play_complete",
+        ));
+    }
+
+    validate_stable_id("release", &request.release_id, "releaseId")?;
+    validate_stable_id("track", &request.track_id, "trackId")?;
+    validate_stable_id("song", &request.song_id, "songId")?;
+    validate_stable_id("recording", &request.recording_id, "recordingId")?;
+    validate_session_id(&request.site_session_id, "siteSessionId")?;
+    validate_session_id(&request.playback_session_id, "playbackSessionId")?;
+    validate_optional_stable_id("asset", request.asset_id.as_deref(), "assetId")?;
+    validate_optional_short_text(request.selected_quality.as_deref(), "selectedQuality", 64)?;
+    validate_optional_path(request.page_path.as_deref(), "pagePath")?;
+    validate_optional_url_origin(request.referrer_origin.as_deref(), "referrerOrigin")?;
+    validate_optional_short_text(request.referrer_host.as_deref(), "referrerHost", 253)?;
+    validate_optional_seconds(request.position_seconds, "positionSeconds")?;
+    validate_optional_seconds(request.duration_seconds, "durationSeconds")?;
+
+    Ok(())
+}
+
+fn parse_play_event_time(value: Option<&str>) -> Result<DateTime<Utc>, ApiError> {
+    let Some(value) = value else {
+        return Ok(Utc::now());
+    };
+
+    let occurred_at = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| ApiError::bad_request("invalid_occurred_at", "occurredAt must be RFC3339"))?
+        .with_timezone(&Utc);
+    let now = Utc::now();
+    if occurred_at < now - ChronoDuration::hours(MAX_ANALYTICS_EVENT_AGE_HOURS) {
+        return Err(ApiError::bad_request(
+            "stale_event",
+            "analytics event is too old",
+        ));
+    }
+    if occurred_at > now + ChronoDuration::seconds(MAX_ANALYTICS_EVENT_FUTURE_SECONDS) {
+        return Err(ApiError::bad_request(
+            "future_event",
+            "analytics event timestamp is too far in the future",
+        ));
+    }
+
+    Ok(occurred_at)
+}
+
+fn backend_play_dedupe_key(request: &PlayEventRequest) -> String {
+    hash_hex(&format!(
+        "play:v1:{}:{}:{}:{}:{}:{}",
+        request.site_session_id,
+        request.event_type,
+        request.release_id,
+        request.track_id,
+        request.song_id,
+        request.recording_id
+    ))
+}
+
+fn analytics_rate_limit_key(headers: &HeaderMap, site_session_id: &str) -> String {
+    let origin = header_str(headers, "origin").unwrap_or("-");
+    let forwarded_for = header_str(headers, "x-forwarded-for")
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("-");
+    let user_agent = header_str(headers, "user-agent").unwrap_or("-");
+
+    hash_hex(&format!(
+        "analytics-rate:v1:{origin}:{forwarded_for}:{user_agent}:{site_session_id}"
+    ))
+}
+
+fn hash_hex(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn build_player_rum_query() -> String {
     let event_names = PLAYER_RUM_EVENT_NAMES
         .iter()
+        .chain(SITE_RUM_EVENT_NAMES)
+        .chain(STANDARD_RUM_EVENT_NAMES)
         .map(|event_name| format!("\"{event_name}\""))
         .collect::<Vec<_>>()
         .join(", ");
 
     format!(
-        "fields @timestamp, event_type, event_details.releaseId as releaseId, event_details.albumId as albumId, event_details.songId as songId, event_details.recordingId as recordingId, event_details.trackId as trackId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
+        "fields @timestamp, event_type, event_details.releaseId as releaseId, event_details.albumId as albumId, event_details.songId as songId, event_details.recordingId as recordingId, event_details.trackId as trackId, event_details.siteSessionId as siteSessionId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage, event_details.pagePath as pagePath, event_details.previousPagePath as previousPagePath, event_details.landingPagePath as landingPagePath, event_details.referrerOrigin as referrerOrigin, event_details.referrerHost as referrerHost, event_details.pageTitle as pageTitle, event_details.utmSource as utmSource, event_details.utmMedium as utmMedium, event_details.utmCampaign as utmCampaign, metadata.pageId as rumPageId, metadata.pageTitle as rumPageTitle, metadata.browserName as browserName, metadata.deviceType as deviceType, metadata.osName as osName, metadata.countryCode as countryCode | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
     )
 }
 
@@ -1072,8 +1269,15 @@ fn build_rum_summary(
     rows: Vec<HashMap<String, String>>,
 ) -> RumSummaryResponse {
     let mut event_counts = HashMap::<String, u64>::new();
+    let mut standard_counts = HashMap::<String, u64>::new();
     let mut release_counts = HashMap::<String, RumAggregate>::new();
     let mut track_counts = HashMap::<String, RumTrackAggregate>::new();
+    let mut site_sessions = HashMap::<String, RumSiteSession>::new();
+    let mut page_counts = HashMap::<String, u64>::new();
+    let mut referrer_counts = HashMap::<String, u64>::new();
+    let mut browser_counts = HashMap::<String, u64>::new();
+    let mut device_counts = HashMap::<String, u64>::new();
+    let mut country_counts = HashMap::<String, u64>::new();
     let mut playback_sessions = HashSet::<String>::new();
     let mut recent_errors = Vec::<RumRecentError>::new();
 
@@ -1081,52 +1285,95 @@ fn build_rum_summary(
         let Some(event_type) = query_row_value(row, "event_type") else {
             continue;
         };
-        if !PLAYER_RUM_EVENT_NAMES.contains(&event_type) {
+
+        if STANDARD_RUM_EVENT_NAMES.contains(&event_type) {
+            *standard_counts.entry(event_type.to_string()).or_default() += 1;
+            increment_dimension(&mut browser_counts, query_row_value(row, "browserName"));
+            increment_dimension(&mut device_counts, query_row_value(row, "deviceType"));
+            increment_dimension(&mut country_counts, query_row_value(row, "countryCode"));
+        }
+
+        if !(PLAYER_RUM_EVENT_NAMES.contains(&event_type)
+            || SITE_RUM_EVENT_NAMES.contains(&event_type)
+            || STANDARD_RUM_EVENT_NAMES.contains(&event_type))
+        {
             continue;
         }
 
-        *event_counts.entry(event_type.to_string()).or_default() += 1;
+        if SITE_RUM_EVENT_NAMES.contains(&event_type) {
+            let session_id = query_row_value(row, "siteSessionId")
+                .or_else(|| query_row_value(row, "playbackSessionId"));
+            if let Some(session_id) = session_id {
+                let session = site_sessions.entry(session_id.to_string()).or_default();
+                session.record(row, event_type);
+            }
 
-        if let Some(session_id) = query_row_value(row, "playbackSessionId") {
-            playback_sessions.insert(session_id.to_string());
-        }
+            if event_type == "site_visit" {
+                let referrer = traffic_source(row);
+                *referrer_counts.entry(referrer).or_default() += 1;
+            }
 
-        if let Some(release_id) =
-            query_row_value(row, "releaseId").or_else(|| query_row_value(row, "albumId"))
-        {
-            release_counts
-                .entry(release_id.to_string())
-                .or_default()
-                .record(event_type);
-
-            if let Some(track_id) = query_row_value(row, "trackId") {
-                let track_key = format!("{release_id}/{track_id}");
-                track_counts
-                    .entry(track_key)
-                    .or_insert_with(|| RumTrackAggregate {
-                        release_id: release_id.to_string(),
-                        track_id: track_id.to_string(),
-                        song_id: query_row_value(row, "songId").map(str::to_string),
-                        recording_id: query_row_value(row, "recordingId").map(str::to_string),
-                        counts: RumAggregate::default(),
-                    })
-                    .counts
-                    .record(event_type);
+            if event_type == "page_view" {
+                let page_path = query_row_value(row, "pagePath")
+                    .or_else(|| query_row_value(row, "rumPageId"))
+                    .unwrap_or("/");
+                *page_counts.entry(page_path.to_string()).or_default() += 1;
             }
         }
 
-        if event_type == "play_error" && recent_errors.len() < 10 {
-            recent_errors.push(RumRecentError {
-                timestamp: query_row_value(row, "@timestamp").map(str::to_string),
-                release_id: query_row_value(row, "releaseId")
-                    .or_else(|| query_row_value(row, "albumId"))
-                    .map(str::to_string),
-                song_id: query_row_value(row, "songId").map(str::to_string),
-                recording_id: query_row_value(row, "recordingId").map(str::to_string),
-                track_id: query_row_value(row, "trackId").map(str::to_string),
-                error_name: query_row_value(row, "errorName").map(str::to_string),
-                error_message: query_row_value(row, "errorMessage").map(str::to_string),
-            });
+        if PLAYER_RUM_EVENT_NAMES.contains(&event_type) {
+            *event_counts.entry(event_type.to_string()).or_default() += 1;
+
+            if let Some(session_id) = query_row_value(row, "playbackSessionId") {
+                playback_sessions.insert(session_id.to_string());
+            }
+
+            if ENGAGED_SITE_EVENT_NAMES.contains(&event_type) {
+                if let Some(session_id) = query_row_value(row, "siteSessionId") {
+                    site_sessions
+                        .entry(session_id.to_string())
+                        .or_default()
+                        .record_engagement();
+                }
+            }
+
+            if let Some(release_id) =
+                query_row_value(row, "releaseId").or_else(|| query_row_value(row, "albumId"))
+            {
+                release_counts
+                    .entry(release_id.to_string())
+                    .or_default()
+                    .record(event_type);
+
+                if let Some(track_id) = query_row_value(row, "trackId") {
+                    let track_key = format!("{release_id}/{track_id}");
+                    track_counts
+                        .entry(track_key)
+                        .or_insert_with(|| RumTrackAggregate {
+                            release_id: release_id.to_string(),
+                            track_id: track_id.to_string(),
+                            song_id: query_row_value(row, "songId").map(str::to_string),
+                            recording_id: query_row_value(row, "recordingId").map(str::to_string),
+                            counts: RumAggregate::default(),
+                        })
+                        .counts
+                        .record(event_type);
+                }
+            }
+
+            if event_type == "play_error" && recent_errors.len() < 10 {
+                recent_errors.push(RumRecentError {
+                    timestamp: query_row_value(row, "@timestamp").map(str::to_string),
+                    release_id: query_row_value(row, "releaseId")
+                        .or_else(|| query_row_value(row, "albumId"))
+                        .map(str::to_string),
+                    song_id: query_row_value(row, "songId").map(str::to_string),
+                    recording_id: query_row_value(row, "recordingId").map(str::to_string),
+                    track_id: query_row_value(row, "trackId").map(str::to_string),
+                    error_name: query_row_value(row, "errorName").map(str::to_string),
+                    error_message: query_row_value(row, "errorMessage").map(str::to_string),
+                });
+            }
         }
     }
 
@@ -1179,6 +1426,15 @@ fn build_rum_summary(
     let total_events = events.iter().map(|event| event.count).sum::<u64>();
     let play_starts = event_count(&event_counts, "play_start");
     let play_completes = event_count(&event_counts, "play_complete");
+    let visits = site_sessions
+        .values()
+        .filter(|session| session.page_views > 0 || session.landing_page.is_some())
+        .count() as u64;
+    let page_views = page_counts.values().copied().sum::<u64>();
+    let bounces = site_sessions
+        .values()
+        .filter(|session| session.is_bounce())
+        .count() as u64;
 
     RumSummaryResponse {
         log_group_name: log_group_name.to_string(),
@@ -1189,6 +1445,19 @@ fn build_rum_summary(
         result_limit: MAX_RUM_QUERY_RESULTS,
         truncated: rows.len() >= MAX_RUM_QUERY_RESULTS as usize,
         total_events,
+        visits,
+        page_views,
+        bounces,
+        bounce_rate: ratio(bounces, visits),
+        standard: RumStandardSummary {
+            page_views: event_count(&standard_counts, "com.amazon.rum.page_view_event"),
+            navigation_events: event_count(
+                &standard_counts,
+                "com.amazon.rum.performance_navigation_event",
+            ),
+            js_errors: event_count(&standard_counts, "com.amazon.rum.js_error_event"),
+            http_events: event_count(&standard_counts, "com.amazon.rum.http_event"),
+        },
         unique_playback_sessions: playback_sessions.len() as u64,
         play_starts,
         play_completes,
@@ -1200,8 +1469,76 @@ fn build_rum_summary(
         events,
         releases,
         tracks,
+        pages: build_page_summaries(page_counts, &site_sessions),
+        referrers: build_dimension_summaries(referrer_counts),
+        browsers: build_dimension_summaries(browser_counts),
+        devices: build_dimension_summaries(device_counts),
+        countries: build_dimension_summaries(country_counts),
+        backend_play_events: BackendPlaySummary::default(),
         recent_errors,
     }
+}
+
+fn traffic_source(row: &HashMap<String, String>) -> String {
+    if let Some(source) = query_row_value(row, "utmSource") {
+        return format!("utm:{source}");
+    }
+
+    query_row_value(row, "referrerHost")
+        .unwrap_or("(direct)")
+        .to_string()
+}
+
+fn increment_dimension(counts: &mut HashMap<String, u64>, value: Option<&str>) {
+    if let Some(value) = value {
+        *counts.entry(value.to_string()).or_default() += 1;
+    }
+}
+
+fn build_dimension_summaries(counts: HashMap<String, u64>) -> Vec<RumDimensionSummary> {
+    let mut summaries = counts
+        .into_iter()
+        .map(|(value, count)| RumDimensionSummary { value, count })
+        .collect::<Vec<_>>();
+    summaries.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.value.cmp(&right.value))
+    });
+    summaries
+}
+
+fn build_page_summaries(
+    page_counts: HashMap<String, u64>,
+    site_sessions: &HashMap<String, RumSiteSession>,
+) -> Vec<RumPageSummary> {
+    let mut bounce_counts = HashMap::<String, u64>::new();
+    for session in site_sessions.values().filter(|session| session.is_bounce()) {
+        if let Some(landing_page) = &session.landing_page {
+            *bounce_counts.entry(landing_page.clone()).or_default() += 1;
+        }
+    }
+
+    let mut pages = page_counts
+        .into_iter()
+        .map(|(page_path, views)| {
+            let bounces = bounce_counts.get(&page_path).copied().unwrap_or_default();
+            RumPageSummary {
+                page_path,
+                views,
+                bounces,
+                bounce_rate: ratio(bounces, views),
+            }
+        })
+        .collect::<Vec<_>>();
+    pages.sort_by(|left, right| {
+        right
+            .views
+            .cmp(&left.views)
+            .then_with(|| left.page_path.cmp(&right.page_path))
+    });
+    pages
 }
 
 fn query_row_value<'a>(row: &'a HashMap<String, String>, name: &str) -> Option<&'a str> {
@@ -1267,6 +1604,10 @@ fn optional_header(headers: &HeaderMap, name: &'static str) -> Result<Option<Str
             })
         })
         .transpose()
+}
+
+fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
+    headers.get(name).and_then(|value| value.to_str().ok())
 }
 
 fn validate_draft_song_document(song_id: &str, document: &Value) -> Result<(), ApiError> {
@@ -1936,6 +2277,104 @@ fn validate_stable_id(prefix: &str, value: &str, field: &'static str) -> Result<
     Ok(())
 }
 
+fn validate_optional_stable_id(
+    prefix: &str,
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        validate_stable_id(prefix, value, field)?;
+    }
+
+    Ok(())
+}
+
+fn validate_session_id(value: &str, field: &'static str) -> Result<(), ApiError> {
+    if !(8..=128).contains(&value.len()) {
+        return Err(ApiError::bad_request(
+            "invalid_session_id",
+            format!("{field} has an invalid length"),
+        ));
+    }
+
+    if !value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(ApiError::bad_request(
+            "invalid_session_id",
+            format!("{field} may only contain letters, digits, hyphens, and underscores"),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_optional_short_text(
+    value: Option<&str>,
+    field: &'static str,
+    max_len: usize,
+) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        if value.is_empty() || value.len() > max_len || value.chars().any(char::is_control) {
+            return Err(ApiError::bad_request(
+                "invalid_text_field",
+                format!("{field} has an invalid value"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_optional_path(value: Option<&str>, field: &'static str) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        if value.is_empty()
+            || value.len() > 512
+            || !value.starts_with('/')
+            || value.chars().any(char::is_control)
+        {
+            return Err(ApiError::bad_request(
+                "invalid_path",
+                format!("{field} has an invalid value"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_optional_url_origin(value: Option<&str>, field: &'static str) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        let valid = value.len() <= 256
+            && (value.starts_with("https://") || value.starts_with("http://"))
+            && !value.contains('?')
+            && !value.contains('#')
+            && !value.chars().any(char::is_control);
+        if !valid {
+            return Err(ApiError::bad_request(
+                "invalid_origin",
+                format!("{field} has an invalid value"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_optional_seconds(value: Option<f64>, field: &'static str) -> Result<(), ApiError> {
+    if let Some(value) = value {
+        if !value.is_finite() || !(0.0..=86_400.0).contains(&value) {
+            return Err(ApiError::bad_request(
+                "invalid_seconds",
+                format!("{field} has an invalid value"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn validate_slug(value: &str, field: &'static str) -> Result<(), ApiError> {
     if value.is_empty() || value.len() > 120 {
         return Err(ApiError::bad_request(
@@ -2094,6 +2533,7 @@ enum ApiPath {
     PublicCatalog,
     PublicRelease { slug: String },
     PublicSong { slug: String },
+    PublicAnalyticsPlay,
     AdminCatalog,
     AdminSongs,
     AdminSong { song_id: String },
@@ -2139,6 +2579,14 @@ impl ApiError {
 
     fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code, message)
+    }
+
+    fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::FORBIDDEN, code, message)
+    }
+
+    fn too_many_requests(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, code, message)
     }
 
     fn internal(code: &'static str, message: impl Into<String>) -> Self {
@@ -2302,6 +2750,11 @@ struct RumSummaryResponse {
     result_limit: i32,
     truncated: bool,
     total_events: u64,
+    visits: u64,
+    page_views: u64,
+    bounces: u64,
+    bounce_rate: f64,
+    standard: RumStandardSummary,
     unique_playback_sessions: u64,
     play_starts: u64,
     play_completes: u64,
@@ -2313,7 +2766,65 @@ struct RumSummaryResponse {
     events: Vec<RumEventCount>,
     releases: Vec<RumReleaseSummary>,
     tracks: Vec<RumTrackSummary>,
+    pages: Vec<RumPageSummary>,
+    referrers: Vec<RumDimensionSummary>,
+    browsers: Vec<RumDimensionSummary>,
+    devices: Vec<RumDimensionSummary>,
+    countries: Vec<RumDimensionSummary>,
+    backend_play_events: BackendPlaySummary,
     recent_errors: Vec<RumRecentError>,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct BackendPlaySummary {
+    total_events: u64,
+    unique_site_sessions: u64,
+    play_starts: u64,
+    ten_second_plays: u64,
+    twenty_five_percent_plays: u64,
+    play_completes: u64,
+    play_completion_rate: f64,
+    events: Vec<RumEventCount>,
+    songs: Vec<BackendSongPlaySummary>,
+    releases: Vec<BackendReleasePlaySummary>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendSongPlaySummary {
+    song_id: String,
+    recording_id: String,
+    title: Option<String>,
+    total_events: u64,
+    play_starts: u64,
+    ten_second_plays: u64,
+    twenty_five_percent_plays: u64,
+    play_completes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendReleasePlaySummary {
+    release_id: String,
+    track_id: String,
+    song_id: String,
+    recording_id: String,
+    title: Option<String>,
+    total_events: u64,
+    play_starts: u64,
+    ten_second_plays: u64,
+    twenty_five_percent_plays: u64,
+    play_completes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RumStandardSummary {
+    page_views: u64,
+    navigation_events: u64,
+    js_errors: u64,
+    http_events: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2346,6 +2857,22 @@ struct RumTrackSummary {
     play_starts: u64,
     play_completes: u64,
     player_errors: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RumPageSummary {
+    page_path: String,
+    views: u64,
+    bounces: u64,
+    bounce_rate: f64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RumDimensionSummary {
+    value: String,
+    count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -2394,6 +2921,101 @@ struct RumTrackAggregate {
     song_id: Option<String>,
     recording_id: Option<String>,
     counts: RumAggregate,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlayEventRequest {
+    event_type: String,
+    release_id: String,
+    track_id: String,
+    song_id: String,
+    recording_id: String,
+    #[serde(default)]
+    asset_id: Option<String>,
+    #[serde(default)]
+    selected_quality: Option<String>,
+    #[serde(default)]
+    position_seconds: Option<f64>,
+    #[serde(default)]
+    duration_seconds: Option<f64>,
+    site_session_id: String,
+    playback_session_id: String,
+    #[serde(default)]
+    page_path: Option<String>,
+    #[serde(default)]
+    referrer_origin: Option<String>,
+    #[serde(default)]
+    referrer_host: Option<String>,
+    #[serde(default)]
+    occurred_at: Option<String>,
+}
+
+#[derive(Debug)]
+struct StoredPlayEvent {
+    dedupe_key: String,
+    event_type: String,
+    release_id: String,
+    track_id: String,
+    song_id: String,
+    recording_id: String,
+    asset_id: Option<String>,
+    selected_quality: Option<String>,
+    position_seconds: Option<f64>,
+    duration_seconds: Option<f64>,
+    site_session_id: String,
+    playback_session_id: String,
+    page_path: Option<String>,
+    referrer_origin: Option<String>,
+    referrer_host: Option<String>,
+    occurred_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlayEventResponse {
+    accepted: bool,
+    duplicate: bool,
+}
+
+#[derive(Debug)]
+struct RateLimitDecision {
+    allowed: bool,
+}
+
+#[derive(Debug, Default)]
+struct RumSiteSession {
+    page_views: u64,
+    engaged: bool,
+    landing_page: Option<String>,
+}
+
+impl RumSiteSession {
+    fn record(&mut self, row: &HashMap<String, String>, event_type: &str) {
+        match event_type {
+            "site_visit" => {
+                self.landing_page = query_row_value(row, "landingPagePath")
+                    .or_else(|| query_row_value(row, "pagePath"))
+                    .map(str::to_string)
+                    .or_else(|| self.landing_page.clone());
+            }
+            "page_view" => {
+                self.page_views += 1;
+                if self.landing_page.is_none() {
+                    self.landing_page = query_row_value(row, "pagePath").map(str::to_string);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn record_engagement(&mut self) {
+        self.engaged = true;
+    }
+
+    fn is_bounce(&self) -> bool {
+        self.page_views == 1 && !self.engaged
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -2786,9 +3408,17 @@ struct ObjectSummary {
 mod tests {
     use super::*;
 
+    fn rum_row(fields: &[(&str, &str)]) -> HashMap<String, String> {
+        fields
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
     #[test]
     fn parses_admin_paths() {
         assert_eq!(parse_path("/health"), ApiPath::Health);
+        assert_eq!(parse_path("/analytics/play"), ApiPath::PublicAnalyticsPlay);
         assert_eq!(parse_path("/admin/catalog"), ApiPath::AdminCatalog);
         assert_eq!(parse_path("/admin/songs"), ApiPath::AdminSongs);
         assert_eq!(
@@ -2817,6 +3447,67 @@ mod tests {
                 release_id: "release_so-we-sleep".to_string()
             }
         );
+    }
+
+    #[test]
+    fn summarizes_site_and_standard_rum_events() {
+        let summary = build_rum_summary(
+            "rum-log",
+            "query-id",
+            24,
+            "2026-05-24T00:00:00Z".to_string(),
+            "2026-05-25T00:00:00Z".to_string(),
+            vec![
+                rum_row(&[
+                    ("event_type", "site_visit"),
+                    ("siteSessionId", "session-1"),
+                    ("landingPagePath", "/music"),
+                    ("referrerHost", "example.com"),
+                ]),
+                rum_row(&[
+                    ("event_type", "page_view"),
+                    ("siteSessionId", "session-1"),
+                    ("pagePath", "/music"),
+                ]),
+                rum_row(&[
+                    ("event_type", "play_start"),
+                    ("siteSessionId", "session-1"),
+                    ("playbackSessionId", "playback-1"),
+                    ("releaseId", "release_demo"),
+                    ("trackId", "track_demo_01"),
+                ]),
+                rum_row(&[
+                    ("event_type", "site_visit"),
+                    ("siteSessionId", "session-2"),
+                    ("landingPagePath", "/"),
+                ]),
+                rum_row(&[
+                    ("event_type", "page_view"),
+                    ("siteSessionId", "session-2"),
+                    ("pagePath", "/"),
+                ]),
+                rum_row(&[
+                    ("event_type", "com.amazon.rum.page_view_event"),
+                    ("browserName", "Chrome"),
+                    ("deviceType", "desktop"),
+                    ("countryCode", "US"),
+                ]),
+            ],
+        );
+
+        assert_eq!(summary.visits, 2);
+        assert_eq!(summary.page_views, 2);
+        assert_eq!(summary.bounces, 1);
+        assert_eq!(summary.bounce_rate, 0.5);
+        assert_eq!(summary.standard.page_views, 1);
+        assert_eq!(summary.browsers[0].value, "Chrome");
+        assert_eq!(summary.devices[0].value, "desktop");
+        assert_eq!(summary.countries[0].value, "US");
+        assert_eq!(summary.referrers[0].value, "(direct)");
+        assert_eq!(summary.referrers[1].value, "example.com");
+        assert_eq!(summary.unique_playback_sessions, 1);
+        assert_eq!(summary.play_starts, 1);
+        assert_eq!(summary.pages[0].views, 1);
     }
 
     #[test]

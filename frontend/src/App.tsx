@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import {
     FaTwitter,
     FaInstagram,
@@ -12,7 +13,6 @@ import {
 import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
 
 import InstagramIframe from './InstagramIframe';
-import CookieBanner from './CookieBanner';
 import { AuthProvider } from './auth-context';
 import { AdminRoute } from './admin/AdminRoute';
 import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
@@ -20,6 +20,7 @@ import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPl
 import StickyPlayer from './music/StickyPlayer';
 import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
+import { recordSitePageView } from './player-analytics';
 import {
     decodePathPart,
     handleInternalLink,
@@ -64,6 +65,10 @@ function renderPublicRoute(route: string) {
                 trackSlug={decodePathPart(parts[2]) ?? ''}
             />
         );
+    }
+
+    if (parts[0] === 'privacy') {
+        return <PrivacyPage />;
     }
 
     return <HomePage />;
@@ -434,17 +439,74 @@ function LaunchTracklist() {
     );
 }
 
+function PrivacyPage() {
+    return (
+        <main className="privacy-page">
+            <section className="privacy-page__hero">
+                <p className="eyebrow">Privacy</p>
+                <h1>Site analytics without ad tracking</h1>
+                <p>
+                    Tsonu uses first-party analytics to understand song popularity, visits,
+                    referrers, playback quality, and site errors. Analytics data is for
+                    internal operation of this music site. It is not sold, shared for ad
+                    targeting, or used for cross-site profiling.
+                </p>
+            </section>
+
+            <section className="privacy-page__content" aria-label="Analytics details">
+                <div>
+                    <h2>What is collected</h2>
+                    <p>
+                        The public site records page views, song and release interactions,
+                        playback events, referrer origin or host, UTM campaign fields when
+                        present, browser/device metadata, approximate country, and client-side
+                        errors or performance events.
+                    </p>
+                </div>
+                <div>
+                    <h2>What is not collected</h2>
+                    <p>
+                        The site does not use Google Analytics, ad pixels, retargeting tags,
+                        or cross-site advertising profiles. Public analytics do not use
+                        persistent visitor cookies. Full referrer URLs are not stored.
+                    </p>
+                </div>
+                <div>
+                    <h2>How it is used</h2>
+                    <p>
+                        Analytics are used to see which songs and releases are being played,
+                        which pages are visited, where visitors are referred from, and whether
+                        playback or site code is failing.
+                    </p>
+                </div>
+                <div>
+                    <h2>Processor and opt out</h2>
+                    <p>
+                        Browser telemetry is processed by AWS CloudWatch RUM. If your browser
+                        sends Global Privacy Control or Do Not Track, this site does not start
+                        RUM analytics. Song playback still sends first-party backend play counts
+                        for aggregate popularity and reliability stats. Browser or network
+                        blockers may also block RUM requests without affecting playback.
+                    </p>
+                </div>
+            </section>
+        </main>
+    );
+}
+
 /* -----------------------------------------------------------------
  * Public shell
  * ----------------------------------------------------------------- */
 function PublicApp() {
     const route = useCurrentRoute();
 
+    useEffect(() => {
+        recordSitePageView(route);
+    }, [route]);
+
     return (
         <MusicPlayerProvider fallbackArtworkSrc={albumCover}>
             <div className="App App--with-bottom-player">
-                <CookieBanner measurementId="G-PZ5LZZL2YE" />
-
                 <nav className="nav" aria-label="Primary">
                     <ul className="nav__list">
                         <li className="nav__item">
@@ -480,6 +542,9 @@ function PublicApp() {
                 <footer className="footer">
                     <img src={logoLarge} alt="Tsonu" className="footer__logo" />
                     <p>&copy; {new Date().getFullYear()} Tsonu · All rights reserved</p>
+                    <a href="/privacy" onClick={(event) => handleInternalLink(event, '/privacy')}>
+                        Privacy
+                    </a>
                 </footer>
                 <StickyPlayer />
             </div>

@@ -196,6 +196,16 @@ export interface RumSummary {
     resultLimit: number;
     truncated: boolean;
     totalEvents: number;
+    visits: number;
+    pageViews: number;
+    bounces: number;
+    bounceRate: number;
+    standard: {
+        pageViews: number;
+        navigationEvents: number;
+        jsErrors: number;
+        httpEvents: number;
+    };
     uniquePlaybackSessions: number;
     playStarts: number;
     playCompletes: number;
@@ -225,6 +235,63 @@ export interface RumSummary {
         playCompletes: number;
         playerErrors: number;
     }>;
+    pages: Array<{
+        pagePath: string;
+        views: number;
+        bounces: number;
+        bounceRate: number;
+    }>;
+    referrers: Array<{
+        value: string;
+        count: number;
+    }>;
+    browsers: Array<{
+        value: string;
+        count: number;
+    }>;
+    devices: Array<{
+        value: string;
+        count: number;
+    }>;
+    countries: Array<{
+        value: string;
+        count: number;
+    }>;
+    backendPlayEvents: {
+        totalEvents: number;
+        uniqueSiteSessions: number;
+        playStarts: number;
+        tenSecondPlays: number;
+        twentyFivePercentPlays: number;
+        playCompletes: number;
+        playCompletionRate: number;
+        events: Array<{
+            eventType: string;
+            count: number;
+        }>;
+        songs: Array<{
+            songId: StableId;
+            recordingId: StableId;
+            title?: string;
+            totalEvents: number;
+            playStarts: number;
+            tenSecondPlays: number;
+            twentyFivePercentPlays: number;
+            playCompletes: number;
+        }>;
+        releases: Array<{
+            releaseId: StableId;
+            trackId: StableId;
+            songId: StableId;
+            recordingId: StableId;
+            title?: string;
+            totalEvents: number;
+            playStarts: number;
+            tenSecondPlays: number;
+            twentyFivePercentPlays: number;
+            playCompletes: number;
+        }>;
+    };
     recentErrors: Array<{
         timestamp?: string;
         releaseId?: StableId;

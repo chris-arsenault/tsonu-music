@@ -279,6 +279,10 @@ function formatPercent(value: number): string {
     return `${Math.round(value * 100)}%`;
 }
 
+function formatCount(value: number): string {
+    return new Intl.NumberFormat('en-US').format(value);
+}
+
 function formatBytes(bytes: number | undefined): string {
     if (!bytes || bytes < 1) {
         return '0 B';
@@ -1233,20 +1237,62 @@ export default function AdminApp() {
                         {rumSummary ? (
                             <>
                                 <div className="admin-metrics">
-                                    <div><span>Events</span><strong>{rumSummary.totalEvents}</strong></div>
-                                    <div><span>Sessions</span><strong>{rumSummary.uniquePlaybackSessions}</strong></div>
-                                    <div><span>Starts</span><strong>{rumSummary.playStarts}</strong></div>
+                                    <div><span>Visits</span><strong>{formatCount(rumSummary.visits)}</strong></div>
+                                    <div><span>Page Views</span><strong>{formatCount(rumSummary.pageViews)}</strong></div>
+                                    <div><span>Bounce</span><strong>{formatPercent(rumSummary.bounceRate)}</strong></div>
+                                    <div><span>Playback Sessions</span><strong>{formatCount(rumSummary.uniquePlaybackSessions)}</strong></div>
+                                    <div><span>Starts</span><strong>{formatCount(rumSummary.playStarts)}</strong></div>
                                     <div><span>Completes</span><strong>{formatPercent(rumSummary.playCompletionRate)}</strong></div>
-                                    <div><span>Errors</span><strong>{rumSummary.playerErrors}</strong></div>
+                                    <div><span>Player Errors</span><strong>{formatCount(rumSummary.playerErrors)}</strong></div>
+                                    <div><span>RUM JS Errors</span><strong>{formatCount(rumSummary.standard.jsErrors)}</strong></div>
+                                    <div><span>Backend Plays</span><strong>{formatCount(rumSummary.backendPlayEvents.tenSecondPlays)}</strong></div>
+                                    <div><span>Backend 25%</span><strong>{formatCount(rumSummary.backendPlayEvents.twentyFivePercentPlays)}</strong></div>
+                                    <div><span>Backend Complete</span><strong>{formatPercent(rumSummary.backendPlayEvents.playCompletionRate)}</strong></div>
                                 </div>
 
                                 <div className="admin-rum-grid">
                                     <div>
-                                        <h3>Events</h3>
+                                        <h3>Backend Top Songs</h3>
+                                        {rumSummary.backendPlayEvents.songs.slice(0, 8).map((song) => (
+                                            <div className="admin-stat-row" key={`${song.songId}/${song.recordingId}`}>
+                                                <span>{song.title ?? song.songId}</span>
+                                                <strong>{formatCount(song.tenSecondPlays)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Backend Play Events</h3>
+                                        {rumSummary.backendPlayEvents.events.map((event) => (
+                                            <div className="admin-stat-row" key={event.eventType}>
+                                                <span>{event.eventType}</span>
+                                                <strong>{formatCount(event.count)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Traffic Sources</h3>
+                                        {rumSummary.referrers.slice(0, 8).map((referrer) => (
+                                            <div className="admin-stat-row" key={referrer.value}>
+                                                <span>{referrer.value}</span>
+                                                <strong>{formatCount(referrer.count)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Top Pages</h3>
+                                        {rumSummary.pages.slice(0, 8).map((page) => (
+                                            <div className="admin-stat-row" key={page.pagePath}>
+                                                <span>{page.pagePath}</span>
+                                                <strong>{formatCount(page.views)} / {formatPercent(page.bounceRate)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Player Events</h3>
                                         {rumSummary.events.map((event) => (
                                             <div className="admin-stat-row" key={event.eventType}>
                                                 <span>{event.eventType}</span>
-                                                <strong>{event.count}</strong>
+                                                <strong>{formatCount(event.count)}</strong>
                                             </div>
                                         ))}
                                     </div>
@@ -1255,7 +1301,49 @@ export default function AdminApp() {
                                         {rumSummary.tracks.slice(0, 8).map((track) => (
                                             <div className="admin-stat-row" key={`${track.releaseId}/${track.trackId}`}>
                                                 <span>{track.trackId}</span>
-                                                <strong>{track.playStarts}</strong>
+                                                <strong>{formatCount(track.playStarts)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>RUM Standard</h3>
+                                        <div className="admin-stat-row">
+                                            <span>page_view_event</span>
+                                            <strong>{formatCount(rumSummary.standard.pageViews)}</strong>
+                                        </div>
+                                        <div className="admin-stat-row">
+                                            <span>performance_navigation_event</span>
+                                            <strong>{formatCount(rumSummary.standard.navigationEvents)}</strong>
+                                        </div>
+                                        <div className="admin-stat-row">
+                                            <span>http_event</span>
+                                            <strong>{formatCount(rumSummary.standard.httpEvents)}</strong>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <h3>Browsers</h3>
+                                        {rumSummary.browsers.slice(0, 8).map((browser) => (
+                                            <div className="admin-stat-row" key={browser.value}>
+                                                <span>{browser.value}</span>
+                                                <strong>{formatCount(browser.count)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Devices</h3>
+                                        {rumSummary.devices.slice(0, 8).map((device) => (
+                                            <div className="admin-stat-row" key={device.value}>
+                                                <span>{device.value}</span>
+                                                <strong>{formatCount(device.count)}</strong>
+                                            </div>
+                                        ))}
+                                    </div>
+                                    <div>
+                                        <h3>Countries</h3>
+                                        {rumSummary.countries.slice(0, 8).map((country) => (
+                                            <div className="admin-stat-row" key={country.value}>
+                                                <span>{country.value}</span>
+                                                <strong>{formatCount(country.count)}</strong>
                                             </div>
                                         ))}
                                     </div>

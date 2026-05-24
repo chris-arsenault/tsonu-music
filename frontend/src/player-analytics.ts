@@ -17,6 +17,7 @@ export const playerEventNames = [
 ] as const;
 
 export type PlayerEventName = (typeof playerEventNames)[number];
+type BackendPlayEventName = 'play_start' | 'play_10s' | 'play_25' | 'play_complete';
 
 export interface PlayerEventContext {
     releaseId: StableId;
@@ -42,19 +43,32 @@ type PlayerEventPayload = PlayerEventExtra & {
     positionSeconds: number;
     sessionPositionSeconds: number;
     durationSeconds: number | null;
+    siteSessionId: string;
     playbackSessionId: string;
     pagePath: string;
     occurredAt: string;
 };
 
-type AwsRumClient = InstanceType<typeof import('aws-rum-web').AwsRum>;
+type AwsRumClient = InstanceType<typeof import('aws-rum-web').AwsRum> & {
+    recordPageView?: (page: { pageId: string }) => void;
+};
 
+type NavigatorPrivacySignals = Navigator & {
+    globalPrivacyControl?: boolean;
+    msDoNotTrack?: string | null;
+};
+
+const SITE_SESSION_STORAGE_KEY = 'tsonu.analytics.siteSessionId';
 const PLAYBACK_SESSION_STORAGE_KEY = 'tsonu.player.playbackSessionId';
+const VISIT_RECORDED_STORAGE_KEY = 'tsonu.analytics.visitRecorded';
 
 let rumClient: AwsRumClient | undefined;
 let rumInitializationPromise: Promise<AwsRumClient | undefined> | undefined;
+let siteSessionId: string | undefined;
 let playbackSessionId: string | undefined;
+let previousPagePath: string | undefined;
 const recordedOnceKeys = new Set<string>();
+const backendPlayKeys = new Set<string>();
 
 function clampSampleRate(value: number | undefined): number {
     if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -88,7 +102,15 @@ function getPagePath(): string {
     return `${window.location.pathname}${window.location.search}${window.location.hash}`;
 }
 
-function createPlaybackSessionId(): string {
+function getPageTitle(): string | null {
+    if (typeof document === 'undefined') {
+        return null;
+    }
+
+    return document.title || null;
+}
+
+function createSessionId(): string {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
     }
@@ -96,30 +118,39 @@ function createPlaybackSessionId(): string {
     return `session_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 }
 
-export function getPlaybackSessionId(): string {
-    if (playbackSessionId) {
-        return playbackSessionId;
-    }
-
+function getStoredSessionId(storageKey: string): string {
     if (typeof window === 'undefined') {
-        playbackSessionId = createPlaybackSessionId();
-        return playbackSessionId;
+        return createSessionId();
     }
 
     try {
-        const storedSessionId = window.sessionStorage.getItem(PLAYBACK_SESSION_STORAGE_KEY);
+        const storedSessionId = window.sessionStorage.getItem(storageKey);
         if (storedSessionId) {
-            playbackSessionId = storedSessionId;
-            return playbackSessionId;
+            return storedSessionId;
         }
 
-        playbackSessionId = createPlaybackSessionId();
-        window.sessionStorage.setItem(PLAYBACK_SESSION_STORAGE_KEY, playbackSessionId);
-        return playbackSessionId;
+        const createdSessionId = createSessionId();
+        window.sessionStorage.setItem(storageKey, createdSessionId);
+        return createdSessionId;
     } catch {
-        playbackSessionId = createPlaybackSessionId();
-        return playbackSessionId;
+        return createSessionId();
     }
+}
+
+export function getSiteSessionId(): string {
+    if (!siteSessionId) {
+        siteSessionId = getStoredSessionId(SITE_SESSION_STORAGE_KEY);
+    }
+
+    return siteSessionId;
+}
+
+export function getPlaybackSessionId(): string {
+    if (!playbackSessionId) {
+        playbackSessionId = getStoredSessionId(PLAYBACK_SESSION_STORAGE_KEY);
+    }
+
+    return playbackSessionId;
 }
 
 function hasRumCredentials(config: AppRuntimeConfig): boolean {
@@ -132,6 +163,19 @@ function hasRumCredentials(config: AppRuntimeConfig): boolean {
     );
 }
 
+export function hasPrivacyOptOutSignal(): boolean {
+    if (typeof navigator === 'undefined') {
+        return false;
+    }
+
+    const privacyNavigator = navigator as NavigatorPrivacySignals;
+    return Boolean(
+        privacyNavigator.globalPrivacyControl === true ||
+        privacyNavigator.doNotTrack === '1' ||
+        privacyNavigator.msDoNotTrack === '1',
+    );
+}
+
 export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Promise<AwsRumClient | undefined> {
     if (rumClient) {
         return Promise.resolve(rumClient);
@@ -141,7 +185,7 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
         return rumInitializationPromise;
     }
 
-    if (!hasRumCredentials(config)) {
+    if (!hasRumCredentials(config) || hasPrivacyOptOutSignal()) {
         rumInitializationPromise = Promise.resolve(undefined);
         return rumInitializationPromise;
     }
@@ -149,6 +193,7 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
     rumInitializationPromise = import('aws-rum-web').then(({ AwsRum }) => {
         const rumConfig: AwsRumConfig = {
             allowCookies: config.rum.allowCookies ?? false,
+            disableAutoPageView: true,
             enableXRay: false,
             endpoint: config.rum.endpoint,
             guestRoleArn: config.rum.guestRoleArn,
@@ -165,6 +210,7 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
         );
 
         rumClient.addSessionAttributes({
+            siteSessionId: getSiteSessionId(),
             playbackSessionId: getPlaybackSessionId(),
         });
 
@@ -176,6 +222,103 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
     });
 
     return rumInitializationPromise;
+}
+
+function getReferrerInfo(): { referrerOrigin: string | null; referrerHost: string | null } {
+    if (typeof document === 'undefined' || !document.referrer) {
+        return { referrerOrigin: null, referrerHost: null };
+    }
+
+    try {
+        const referrerUrl = new URL(document.referrer);
+        return {
+            referrerOrigin: referrerUrl.origin || null,
+            referrerHost: referrerUrl.hostname || null,
+        };
+    } catch {
+        return {
+            referrerOrigin: null,
+            referrerHost: null,
+        };
+    }
+}
+
+function resolveApiUrl(path: string): string {
+    const { adminApiBaseUrl } = getRuntimeConfig();
+    const baseUrl = adminApiBaseUrl.endsWith('/') ? adminApiBaseUrl : `${adminApiBaseUrl}/`;
+    return new URL(path.replace(/^\/+/, ''), baseUrl).toString();
+}
+
+function getSearchParam(name: string): string | null {
+    if (typeof window === 'undefined') {
+        return null;
+    }
+
+    return new URLSearchParams(window.location.search).get(name);
+}
+
+function shouldRecordVisit(previousPath: string | undefined): boolean {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+
+    try {
+        if (window.sessionStorage.getItem(VISIT_RECORDED_STORAGE_KEY) === getSiteSessionId()) {
+            return false;
+        }
+
+        window.sessionStorage.setItem(VISIT_RECORDED_STORAGE_KEY, getSiteSessionId());
+        return true;
+    } catch {
+        return previousPath === undefined;
+    }
+}
+
+function buildSitePayload(pagePath: string, previousPath: string | undefined) {
+    const config = getRuntimeConfig();
+    const { referrerOrigin, referrerHost } = getReferrerInfo();
+
+    return {
+        eventVersion: config.rum.playbackEventVersion ?? 1,
+        siteSessionId: getSiteSessionId(),
+        pagePath,
+        previousPagePath: previousPath ?? null,
+        referrerOrigin,
+        referrerHost,
+        pageTitle: getPageTitle(),
+        utmSource: getSearchParam('utm_source'),
+        utmMedium: getSearchParam('utm_medium'),
+        utmCampaign: getSearchParam('utm_campaign'),
+        occurredAt: new Date().toISOString(),
+    };
+}
+
+export function recordSitePageView(pagePath: string = getPagePath()): void {
+    const normalizedPagePath = pagePath || '/';
+    const previousPath = previousPagePath;
+    if (normalizedPagePath === previousPath) {
+        return;
+    }
+
+    const sitePayload = buildSitePayload(normalizedPagePath, previousPath);
+    const recordVisit = shouldRecordVisit(previousPath);
+    previousPagePath = normalizedPagePath;
+
+    void initializeRum().then((client) => {
+        if (!client) {
+            return;
+        }
+
+        if (recordVisit) {
+            client.recordEvent('site_visit', {
+                ...sitePayload,
+                landingPagePath: normalizedPagePath,
+            });
+        }
+
+        client.recordPageView?.({ pageId: normalizedPagePath });
+        client.recordEvent('page_view', sitePayload);
+    });
 }
 
 function buildPayload(context: PlayerEventContext, extra: PlayerEventExtra = {}): PlayerEventPayload {
@@ -194,6 +337,7 @@ function buildPayload(context: PlayerEventContext, extra: PlayerEventExtra = {})
         positionSeconds,
         sessionPositionSeconds: positionSeconds,
         durationSeconds: nullableSeconds(context.durationSeconds),
+        siteSessionId: getSiteSessionId(),
         playbackSessionId: getPlaybackSessionId(),
         pagePath: getPagePath(),
         occurredAt: new Date().toISOString(),
@@ -225,6 +369,60 @@ export function recordPlayerEvent(
     });
 }
 
+function backendPlayKey(eventType: BackendPlayEventName, context: PlayerEventContext): string {
+    return [
+        getSiteSessionId(),
+        eventType,
+        context.releaseId,
+        context.trackId ?? 'track_unknown',
+        context.songId ?? 'song_unknown',
+        context.recordingId ?? 'recording_unknown',
+    ].join(':');
+}
+
+function recordBackendPlayEvent(eventType: BackendPlayEventName, context: PlayerEventContext): void {
+    if (!context.songId || !context.recordingId || !context.trackId) {
+        return;
+    }
+
+    const key = backendPlayKey(eventType, context);
+    if (backendPlayKeys.has(key)) {
+        return;
+    }
+    backendPlayKeys.add(key);
+
+    const { referrerOrigin, referrerHost } = getReferrerInfo();
+    const positionSeconds = normalizeSeconds(context.positionSeconds);
+    const body = JSON.stringify({
+        eventType,
+        releaseId: context.releaseId,
+        trackId: context.trackId,
+        songId: context.songId,
+        recordingId: context.recordingId,
+        assetId: context.assetId ?? null,
+        selectedQuality: context.quality ?? null,
+        positionSeconds,
+        durationSeconds: nullableSeconds(context.durationSeconds),
+        siteSessionId: getSiteSessionId(),
+        playbackSessionId: getPlaybackSessionId(),
+        pagePath: getPagePath(),
+        referrerOrigin,
+        referrerHost,
+        occurredAt: new Date().toISOString(),
+    });
+
+    void fetch(resolveApiUrl('/analytics/play'), {
+        method: 'POST',
+        headers: {
+            'content-type': 'application/json',
+        },
+        body,
+        keepalive: true,
+    }).catch((error: unknown) => {
+        console.warn('Backend play analytics failed.', error);
+    });
+}
+
 export function recordReleaseView(context: PlayerEventContext): void {
     recordOnce(`release_view:${context.releaseId}`, 'release_view', context);
 }
@@ -238,6 +436,7 @@ export function recordTrackImpression(context: PlayerEventContext): void {
 }
 
 export function recordPlayStart(context: PlayerEventContext): void {
+    recordBackendPlayEvent('play_start', context);
     recordPlayerEvent('play_start', context);
 }
 
@@ -257,12 +456,20 @@ export function recordPlaySeek(
 }
 
 export function recordPlayProgress(context: PlayerEventContext, milestonePercent: 25 | 50 | 75): void {
+    if (milestonePercent === 25) {
+        recordBackendPlayEvent('play_25', context);
+    }
     recordPlayerEvent(`play_progress_${milestonePercent}` as PlayerEventName, context, {
         milestonePercent,
     });
 }
 
+export function recordPlayTenSeconds(context: PlayerEventContext): void {
+    recordBackendPlayEvent('play_10s', context);
+}
+
 export function recordPlayComplete(context: PlayerEventContext): void {
+    recordBackendPlayEvent('play_complete', context);
     recordPlayerEvent('play_complete', context);
 }
 

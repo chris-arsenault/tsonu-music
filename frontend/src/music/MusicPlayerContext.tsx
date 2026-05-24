@@ -31,6 +31,7 @@ import {
     recordPlayProgress,
     recordPlaySeek,
     recordPlayStart,
+    recordPlayTenSeconds,
     recordQualityChanged,
     recordReleaseView,
     recordTrackImpression,
@@ -88,6 +89,7 @@ interface MusicPlayerProviderProps {
 }
 
 const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
+const TEN_SECOND_PLAY_MILESTONE = 10;
 const PROGRESS_MILESTONES = [25, 50, 75] as const;
 const MusicPlayerContext = createContext<MusicPlayerContextValue | undefined>(undefined);
 
@@ -728,6 +730,15 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         }
 
         const playbackSessionId = getPlaybackSessionId();
+        const tenSecondKey = `${playbackSessionId}:${selectedTrack.trackId}:10s`;
+        if (nextTime >= TEN_SECOND_PLAY_MILESTONE && !progressMilestonesRef.current.has(tenSecondKey)) {
+            progressMilestonesRef.current.add(tenSecondKey);
+            const context = createEventContext(nextTime);
+            if (context) {
+                recordPlayTenSeconds(context);
+            }
+        }
+
         const percentComplete = (nextTime / nextDuration) * 100;
 
         PROGRESS_MILESTONES.forEach((milestone) => {
