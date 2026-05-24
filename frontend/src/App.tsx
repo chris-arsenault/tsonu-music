@@ -11,6 +11,8 @@ import {
 
 import InstagramIframe from "./InstagramIframe";
 import CookieBanner from './CookieBanner';
+import StreamingPlayer from './StreamingPlayer';
+import AdminApp from './admin/AdminApp';
 
 // Import assets.  When this project is compiled all assets under
 // src/assets will be bundled automatically.
@@ -30,6 +32,10 @@ import albumCover from './assets/so-we-sleep-front-no-text.jpg';
  * keeps the mood intimate without feeling sterile.
  */
 function App() {
+    if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin')) {
+        return <AdminApp />;
+    }
+
     return (
         <div className="App">
             <CookieBanner measurementId="G-PZ5LZZL2YE" />
@@ -93,9 +99,8 @@ function App() {
             <section id="music" className="section section--music">
                 <div className="section__inner">
                     <h2>Listen</h2>
-                    {/* Replace the iframe source with an actual SoundCloud or Spotify embed when available. */}
                     <div className="player">
-                        <iframe title="bcplayer" width="100%" height="400px" src="https://bandcamp.com/EmbeddedPlayer/album=2450012966/size=large/bgcol=333333/linkcol=2ebd35/artwork=small/transparent=true/" seamless><a href="https://tsonu.bandcamp.com/album/so-we-sleep">So We Sleep by Tsonu</a></iframe>
+                        <StreamingPlayer fallbackArtworkSrc={albumCover} />
                     </div>
                     <div className="streaming-links">
                         <a href="https://open.spotify.com/album/6yC28QGn2Zv8Lr1TIAHYPD" className="streaming-links__item" aria-label="Spotify">

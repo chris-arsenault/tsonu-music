@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/encode-job.schema.json",
+  "title": "Tsonu Encode Job Status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "entityType",
+    "jobId",
+    "albumId",
+    "trackId",
+    "status",
+    "requestedAt",
+    "input",
+    "output"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "entityType": { "const": "encodeJob" },
+    "jobId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "albumId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "trackId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "canceled"]
+    },
+    "requestedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "startedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "finishedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "key"],
+      "properties": {
+        "bucket": { "type": "string", "minLength": 1 },
+        "key": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+        "versionId": { "type": "string" },
+        "etag": { "type": "string" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bucket", "prefix"],
+      "properties": {
+        "bucket": { "type": "string", "minLength": 1 },
+        "prefix": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+        "assets": {
+          "type": "array",
+          "items": { "$ref": "common.defs.schema.json#/$defs/assetRef" }
+        }
+      }
+    },
+    "ffmpeg": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string" },
+        "args": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["durationSeconds", "codecName", "sampleRateHz", "channels"],
+      "properties": {
+        "durationSeconds": { "type": "number", "minimum": 0 },
+        "codecName": { "type": "string", "minLength": 1 },
+        "sampleRateHz": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "loudness": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "integratedLufs": { "type": "number" },
+            "truePeakDbfs": { "type": "number" },
+            "loudnessRangeLu": { "type": "number" },
+            "thresholdLufs": { "type": "number" }
+          }
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "code": { "type": "string" },
+        "message": { "type": "string", "minLength": 1 },
+        "details": { "type": "string" }
+      }
+    }
+  }
+}

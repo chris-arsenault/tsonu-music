@@ -2,4 +2,9 @@ project: tsonu-music
 prefix: tsonu-music
 stack:
   - typescript
+  - rust
   - terraform
+rust_artifacts:
+  lambdas:
+    - admin-api
+    - encoder

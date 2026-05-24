@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/draft-album.schema.json",
+  "title": "Tsonu Draft Album Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "entityType",
+    "albumId",
+    "releaseId",
+    "slug",
+    "title",
+    "artistName",
+    "releaseType",
+    "publishState",
+    "updatedAt",
+    "tracks"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "entityType": { "const": "draftAlbum" },
+    "albumId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "releaseId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+    "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
+    "title": { "type": "string", "minLength": 1 },
+    "subtitle": { "type": "string" },
+    "artistName": { "type": "string", "minLength": 1 },
+    "releaseType": {
+      "type": "string",
+      "enum": ["album", "ep", "single", "demo", "preview", "collection"]
+    },
+    "releaseDate": { "$ref": "common.defs.schema.json#/$defs/isoDate" },
+    "publishState": {
+      "type": "string",
+      "enum": ["draft", "ready", "published", "archived"]
+    },
+    "updatedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "description": { "type": "string" },
+    "copyright": { "type": "string" },
+    "artwork": { "$ref": "common.defs.schema.json#/$defs/artwork" },
+    "credits": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/credit" }
+    },
+    "links": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/externalLink" }
+    },
+    "tags": {
+      "type": "array",
+      "items": { "$ref": "common.defs.schema.json#/$defs/slug" },
+      "uniqueItems": true
+    },
+    "tracks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "trackId",
+          "discNumber",
+          "trackNumber",
+          "slug",
+          "title",
+          "durationSeconds",
+          "explicit",
+          "sourceMaster"
+        ],
+        "properties": {
+          "trackId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+          "discNumber": { "type": "integer", "minimum": 1 },
+          "trackNumber": { "type": "integer", "minimum": 1 },
+          "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
+          "title": { "type": "string", "minLength": 1 },
+          "durationSeconds": { "type": "number", "exclusiveMinimum": 0 },
+          "explicit": { "type": "boolean" },
+          "isrc": { "type": "string" },
+          "description": { "type": "string" },
+          "sourceMaster": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["bucket", "key", "format", "uploadedAt"],
+            "properties": {
+              "bucket": { "type": "string", "minLength": 1 },
+              "key": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+              "versionId": { "type": "string" },
+              "etag": { "type": "string" },
+              "format": {
+                "type": "string",
+                "enum": ["wav", "aiff", "flac"]
+              },
+              "uploadedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+              "sampleRateHz": { "type": "integer", "minimum": 1 },
+              "bitDepth": { "type": "integer", "minimum": 1 },
+              "channels": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "encodeJobIds": {
+            "type": "array",
+            "items": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+            "uniqueItems": true
+          },
+          "playback": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    }
+  }
+}

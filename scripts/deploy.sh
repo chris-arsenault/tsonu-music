@@ -14,6 +14,15 @@ pnpm install --frozen-lockfile
 pnpm run build
 cd "${ROOT_DIR}"
 
+# Build backend Lambda artifacts referenced by Terraform.
+echo "Building backend Lambdas..."
+cd "${ROOT_DIR}/backend"
+cargo lambda build --release
+cd "${ROOT_DIR}"
+
+echo "Building ffmpeg Lambda layer..."
+"${ROOT_DIR}/scripts/build-ffmpeg-layer.sh"
+
 # Deploy infrastructure
 echo "Deploying infrastructure..."
 terraform -chdir="${TF_DIR}" init -reconfigure \

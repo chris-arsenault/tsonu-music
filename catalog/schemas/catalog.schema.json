@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/catalog.schema.json",
+  "title": "Tsonu Published Catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "entityType", "generatedAt", "artist", "albums"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "entityType": { "const": "catalog" },
+    "generatedAt": { "$ref": "common.defs.schema.json#/$defs/isoDateTime" },
+    "artist": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "slug"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "slug": { "$ref": "common.defs.schema.json#/$defs/slug" }
+      }
+    },
+    "albums": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "albumId",
+          "releaseId",
+          "slug",
+          "title",
+          "releaseType",
+          "releaseDate",
+          "status",
+          "visibility",
+          "manifestPath",
+          "artwork",
+          "trackCount",
+          "totalDurationSeconds"
+        ],
+        "properties": {
+          "albumId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+          "releaseId": { "$ref": "common.defs.schema.json#/$defs/stableId" },
+          "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
+          "title": { "type": "string", "minLength": 1 },
+          "subtitle": { "type": "string" },
+          "releaseType": {
+            "type": "string",
+            "enum": ["album", "ep", "single", "demo", "preview", "collection"]
+          },
+          "releaseDate": { "$ref": "common.defs.schema.json#/$defs/isoDate" },
+          "status": { "const": "published" },
+          "visibility": {
+            "type": "string",
+            "enum": ["public", "unlisted"]
+          },
+          "manifestPath": { "$ref": "common.defs.schema.json#/$defs/relativePath" },
+          "artwork": { "$ref": "common.defs.schema.json#/$defs/artwork" },
+          "trackCount": { "type": "integer", "minimum": 0 },
+          "totalDurationSeconds": { "type": "number", "minimum": 0 },
+          "tags": {
+            "type": "array",
+            "items": { "$ref": "common.defs.schema.json#/$defs/slug" },
+            "uniqueItems": true
+          },
+          "links": {
+            "type": "array",
+            "items": { "$ref": "common.defs.schema.json#/$defs/externalLink" }
+          }
+        }
+      }
+    }
+  }
+}

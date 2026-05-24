@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "entityType": "draftAlbum",
+  "albumId": "album_so-we-sleep",
+  "releaseId": "release_so-we-sleep_2026",
+  "slug": "so-we-sleep",
+  "title": "So We Sleep",
+  "artistName": "Tsonu",
+  "releaseType": "album",
+  "releaseDate": "2026-01-01",
+  "publishState": "ready",
+  "updatedAt": "2026-05-23T00:00:00Z",
+  "description": "Debut album by Tsonu.",
+  "artwork": {
+    "assetId": "asset_so-we-sleep_cover",
+    "altText": "So We Sleep cover art",
+    "sources": [
+      {
+        "path": "artwork/so-we-sleep/cover-1024.jpg",
+        "width": 1024,
+        "height": 1024,
+        "mimeType": "image/jpeg"
+      }
+    ]
+  },
+  "credits": [
+    {
+      "role": "Artist",
+      "names": [{ "name": "Tsonu" }]
+    }
+  ],
+  "tags": ["album"],
+  "links": [
+    {
+      "label": "Bandcamp",
+      "url": "https://tsonu.bandcamp.com/album/so-we-sleep"
+    }
+  ],
+  "tracks": [
+    {
+      "trackId": "track_so-we-sleep_01",
+      "discNumber": 1,
+      "trackNumber": 1,
+      "slug": "opening-dream",
+      "title": "Opening Dream",
+      "durationSeconds": 180,
+      "explicit": false,
+      "sourceMaster": {
+        "bucket": "tsonu-music-masters",
+        "key": "masters/album_so-we-sleep/track_so-we-sleep_01/source.wav",
+        "format": "wav",
+        "uploadedAt": "2026-05-23T00:00:00Z",
+        "sampleRateHz": 48000,
+        "bitDepth": 24,
+        "channels": 2
+      },
+      "encodeJobIds": ["job_so-we-sleep_01_encode_20260523"]
+    }
+  ]
+}

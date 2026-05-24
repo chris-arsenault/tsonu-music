@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "entityType": "catalog",
+  "generatedAt": "2026-05-23T00:00:00Z",
+  "artist": {
+    "name": "Tsonu",
+    "slug": "tsonu"
+  },
+  "albums": [
+    {
+      "albumId": "album_so-we-sleep",
+      "releaseId": "release_so-we-sleep_2026",
+      "slug": "so-we-sleep",
+      "title": "So We Sleep",
+      "releaseType": "album",
+      "releaseDate": "2026-01-01",
+      "status": "published",
+      "visibility": "public",
+      "manifestPath": "albums/so-we-sleep.json",
+      "artwork": {
+        "assetId": "asset_so-we-sleep_cover",
+        "altText": "So We Sleep cover art",
+        "sources": [
+          {
+            "path": "artwork/so-we-sleep/cover-1024.jpg",
+            "width": 1024,
+            "height": 1024,
+            "mimeType": "image/jpeg"
+          }
+        ]
+      },
+      "trackCount": 1,
+      "totalDurationSeconds": 180,
+      "tags": ["album"],
+      "links": [
+        {
+          "label": "Bandcamp",
+          "url": "https://tsonu.bandcamp.com/album/so-we-sleep"
+        }
+      ]
+    }
+  ]
+}

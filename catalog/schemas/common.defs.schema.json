@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://music.tsonu.com/schemas/common.defs.schema.json",
+  "title": "Tsonu Catalog Common Definitions",
+  "$defs": {
+    "stableId": {
+      "type": "string",
+      "pattern": "^(album|release|track|asset|job)_[a-z0-9][a-z0-9_-]{2,96}$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "isoDate": {
+      "type": "string",
+      "format": "date"
+    },
+    "isoDateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._~!$&'()*+,;=:@/-]*$"
+    },
+    "httpsUrl": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://"
+    },
+    "assetRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "path", "mimeType"],
+      "properties": {
+        "assetId": { "$ref": "#/$defs/stableId" },
+        "path": { "$ref": "#/$defs/relativePath" },
+        "url": { "$ref": "#/$defs/httpsUrl" },
+        "mimeType": { "type": "string", "minLength": 1 },
+        "fileSizeBytes": { "type": "integer", "minimum": 0 },
+        "checksumSha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "artwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "altText", "sources"],
+      "properties": {
+        "assetId": { "$ref": "#/$defs/stableId" },
+        "altText": { "type": "string", "minLength": 1 },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "width", "height", "mimeType"],
+            "properties": {
+              "path": { "$ref": "#/$defs/relativePath" },
+              "url": { "$ref": "#/$defs/httpsUrl" },
+              "width": { "type": "integer", "minimum": 1 },
+              "height": { "type": "integer", "minimum": 1 },
+              "mimeType": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "credit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "names"],
+      "properties": {
+        "role": { "type": "string", "minLength": 1 },
+        "names": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "url": { "$ref": "#/$defs/httpsUrl" }
+            }
+          }
+        }
+      }
+    },
+    "externalLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "url"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "url": { "$ref": "#/$defs/httpsUrl" }
+      }
+    }
+  }
+}
