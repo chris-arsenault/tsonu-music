@@ -179,22 +179,32 @@ impl AppState {
         source_key: &str,
         destination_key: &str,
     ) -> Result<(), ApiError> {
-        let copy_source = format!("{}/{}", self.media_bucket, source_key);
+        // S3's x-amz-copy-source header expects a URL-encoded key. The Rust
+        // SDK does not encode it for us. Encode every byte except the unreserved
+        // set and the path separator '/' so that nested keys stay structured.
+        let encoded_key = encode_copy_source(source_key);
+        let copy_source = format!("{}/{}", self.media_bucket, encoded_key);
         self.s3
             .copy_object()
             .bucket(&self.media_bucket)
             .key(destination_key)
-            .copy_source(copy_source)
+            .copy_source(&copy_source)
             .send()
             .await
             .map_err(|err| {
+                let detail = error_chain(&err);
                 error!(
                     source_key,
                     destination_key,
-                    error = %err,
+                    copy_source = %copy_source,
+                    detail = %detail,
+                    error = ?err,
                     "Failed to copy generated media object for publishing"
                 );
-                ApiError::internal("s3_copy_failed", "failed to publish generated media object")
+                ApiError::internal(
+                    "s3_copy_failed",
+                    format!("failed to copy {source_key} -> {destination_key}: {detail}"),
+                )
             })?;
 
         Ok(())
@@ -215,8 +225,17 @@ impl AppState {
             }
 
             let output = request.send().await.map_err(|err| {
-                error!(prefix, error = %err, "Failed to list S3 prefix for publishing");
-                ApiError::internal("s3_list_failed", "failed to list generated media objects")
+                let detail = error_chain(&err);
+                error!(
+                    prefix,
+                    detail = %detail,
+                    error = ?err,
+                    "Failed to list S3 prefix for publishing"
+                );
+                ApiError::internal(
+                    "s3_list_failed",
+                    format!("failed to list {prefix}: {detail}"),
+                )
             })?;
 
             keys.extend(
@@ -326,5 +345,92 @@ impl AppState {
         Ok(output
             .invalidation()
             .map(|invalidation| invalidation.id().to_string()))
+    }
+}
+
+/// Walk the std::error::Error source chain and produce a single-line summary.
+/// AWS SDK errors only show the top-level "service error" string via Display;
+/// the underlying S3 error code and message hang off `.source()`.
+fn error_chain<E: std::error::Error + 'static>(err: &E) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut current: Option<&dyn std::error::Error> = err.source();
+    while let Some(inner) = current {
+        let text = inner.to_string();
+        if !text.is_empty() && parts.last().map(String::as_str) != Some(text.as_str()) {
+            parts.push(text);
+        }
+        current = inner.source();
+    }
+    parts.join(": ")
+}
+
+/// Percent-encode every byte that S3's x-amz-copy-source header treats as
+/// unsafe. The unreserved set from RFC 3986 (A-Z, a-z, 0-9, '-', '.', '_', '~')
+/// plus '/' (path separator) are left intact; everything else is encoded.
+fn encode_copy_source(key: &str) -> String {
+    let mut out = String::with_capacity(key.len());
+    for byte in key.as_bytes() {
+        let safe = matches!(
+            *byte,
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/'
+        );
+        if safe {
+            out.push(*byte as char);
+        } else {
+            out.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod helper_tests {
+    use super::{encode_copy_source, error_chain};
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct ChainErr {
+        message: &'static str,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    }
+    impl fmt::Display for ChainErr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+    impl std::error::Error for ChainErr {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source.as_deref().map(|err| err as &dyn std::error::Error)
+        }
+    }
+
+    #[test]
+    fn error_chain_joins_messages() {
+        let inner = ChainErr {
+            message: "AccessDenied: User is not authorized",
+            source: None,
+        };
+        let outer = ChainErr {
+            message: "service error",
+            source: Some(Box::new(inner)),
+        };
+        assert_eq!(
+            error_chain(&outer),
+            "service error: AccessDenied: User is not authorized"
+        );
+    }
+
+    #[test]
+    fn encode_copy_source_passes_normal_keys() {
+        assert_eq!(
+            encode_copy_source("encoded/recording_x/job_y/playlist.m3u8"),
+            "encoded/recording_x/job_y/playlist.m3u8"
+        );
+    }
+
+    #[test]
+    fn encode_copy_source_encodes_spaces_and_specials() {
+        assert_eq!(encode_copy_source("a b+c"), "a%20b%2Bc");
+        assert_eq!(encode_copy_source("dir/foo bar.ts"), "dir/foo%20bar.ts");
     }
 }
