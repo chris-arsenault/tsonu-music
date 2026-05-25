@@ -1,4 +1,4 @@
-.PHONY: ci lint lint-frontend lint-rust fmt-rust typecheck test test-frontend test-rust test-encode-fixture schema-validate manifest-validate migrate build build-frontend build-backend build-rust build-ffmpeg-layer terraform-fmt-check deploy
+.PHONY: ci lint lint-frontend lint-rust lint-rust-lines fmt-rust typecheck test test-frontend test-rust test-encode-fixture schema-validate manifest-validate migrate build build-frontend build-backend build-rust build-ffmpeg-layer terraform-fmt-check deploy
 
 ci: lint fmt-rust typecheck test schema-validate terraform-fmt-check
 
@@ -7,8 +7,11 @@ lint: lint-frontend lint-rust
 lint-frontend:
 	cd frontend && pnpm exec eslint .
 
-lint-rust:
-	cd backend && cargo clippy -- -D warnings
+lint-rust: lint-rust-lines
+	cd backend && cargo clippy --release --workspace --all-targets -- -D warnings -W clippy::cognitive_complexity
+
+lint-rust-lines:
+	scripts/check-rust-file-lines.sh
 
 fmt-rust:
 	cd backend && cargo fmt --check
