@@ -282,47 +282,45 @@ export function ReleaseDetail({
                     </div>
                 </header>
 
-                <div className="admin-detail__columns">
-                    <ArtworkPicker
-                        label="Cover art"
-                        src={artworkSrc}
-                        artwork={draft.artwork}
-                        altText={`${draft.title} cover art`}
-                        artworkChoices={artworkChoices}
-                        canUpload={!isNew}
-                        uploadHint={isNew ? 'Save the release before uploading artwork.' : (draft.artwork?.sources[0]?.path ?? 'No artwork uploaded')}
-                        onUpload={uploadArtwork}
-                        onReuse={(choiceValue) => {
-                            const choice = artworkChoices.find((c) => c.value === choiceValue);
-                            if (choice) updateField('artwork', choice.artwork);
-                        }}
-                        onClear={() => updateField('artwork', undefined)}
-                    />
-                    <div className="admin-form-grid">
-                        <div className="admin-field">
-                            <label>Artist</label>
-                            <input value={draft.artistName} onChange={(event) => updateField('artistName', event.currentTarget.value)} />
-                        </div>
-                        <div className="admin-field">
-                            <label>Release date</label>
-                            <input type="date" value={draft.releaseDate ?? ''} onChange={(event) => updateField('releaseDate', event.currentTarget.value)} />
-                        </div>
-                        <div className="admin-field">
-                            <label>Kind</label>
-                            <select value={draft.releaseKind} onChange={(event) => updateField('releaseKind', event.currentTarget.value as ReleaseKind)}>
-                                {RELEASE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
-                            </select>
-                        </div>
-                        <div className="admin-field">
-                            <label>Status</label>
-                            <select value={draft.releaseStatus} onChange={(event) => updateField('releaseStatus', event.currentTarget.value as ReleaseStatus)}>
-                                {RELEASE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
-                            </select>
-                        </div>
-                        <div className="admin-field admin-field--wide">
-                            <label>Subtitle</label>
-                            <input value={draft.subtitle ?? ''} onChange={(event) => updateField('subtitle', event.currentTarget.value)} />
-                        </div>
+                <ArtworkPicker
+                    label="Cover art"
+                    src={artworkSrc}
+                    artwork={draft.artwork}
+                    altText={`${draft.title} cover art`}
+                    artworkChoices={artworkChoices}
+                    canUpload={!isNew}
+                    uploadHint={isNew ? 'Save the release before uploading artwork.' : (draft.artwork?.sources[0]?.path ?? 'No artwork uploaded')}
+                    onUpload={uploadArtwork}
+                    onReuse={(choiceValue) => {
+                        const choice = artworkChoices.find((c) => c.value === choiceValue);
+                        if (choice) updateField('artwork', choice.artwork);
+                    }}
+                    onClear={() => updateField('artwork', undefined)}
+                />
+                <div className="admin-form-grid">
+                    <div className="admin-field">
+                        <label>Artist</label>
+                        <input value={draft.artistName} onChange={(event) => updateField('artistName', event.currentTarget.value)} />
+                    </div>
+                    <div className="admin-field">
+                        <label>Release date</label>
+                        <input type="date" value={draft.releaseDate ?? ''} onChange={(event) => updateField('releaseDate', event.currentTarget.value)} />
+                    </div>
+                    <div className="admin-field">
+                        <label>Kind</label>
+                        <select value={draft.releaseKind} onChange={(event) => updateField('releaseKind', event.currentTarget.value as ReleaseKind)}>
+                            {RELEASE_KINDS.map((kind) => <option key={kind} value={kind}>{kind}</option>)}
+                        </select>
+                    </div>
+                    <div className="admin-field">
+                        <label>Status</label>
+                        <select value={draft.releaseStatus} onChange={(event) => updateField('releaseStatus', event.currentTarget.value as ReleaseStatus)}>
+                            {RELEASE_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                        </select>
+                    </div>
+                    <div className="admin-field admin-field--wide">
+                        <label>Subtitle</label>
+                        <input value={draft.subtitle ?? ''} onChange={(event) => updateField('subtitle', event.currentTarget.value)} />
                     </div>
                 </div>
             </section>

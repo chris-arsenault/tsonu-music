@@ -344,26 +344,33 @@
     box-shadow: 0 0 0 2px rgba(143, 191, 106, 0.18);
 }
 
-/* form grids */
+/* form grids
+   --------
+   Each field reserves at least 220px (260px for --compact). The track
+   count is then derived from the container width via auto-fit, so the
+   grid naturally collapses to a single column when squeezed and fans
+   out to 3-4 columns on a wide screen. `.admin-field--wide` spans every
+   visible column whatever the count happens to be. */
 .admin-form-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
     gap: 0.85rem;
+    align-items: end;
 }
-.admin-form-grid--compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.admin-form-grid--compact {
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
 
 .admin-artwork-upload {
     display: grid;
-    grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr);
-    gap: 1rem;
+    grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr);
+    gap: 1.25rem;
     align-items: start;
     min-width: 0;
-}
-/* When the picker is nested inside a form-grid (legacy callers) it should
-   span all columns. Direct children of .admin-detail__columns occupy a
-   single column instead. */
-.admin-form-grid > .admin-artwork-upload {
-    grid-column: 1 / -1;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--admin-border);
+    border-radius: 3px;
+    background: var(--admin-bg-soft);
 }
 
 .admin-artwork-upload__preview {
@@ -776,8 +783,6 @@
    Responsive
    -------------------------------------------------------------- */
 @media (max-width: 1040px) {
-    .admin-form-grid,
-    .admin-form-grid--compact,
     .admin-rum-grid {
         grid-template-columns: 1fr;
     }
@@ -1139,17 +1144,6 @@
 }
 .admin-section__collapse:hover {
     color: var(--admin-moss-bright);
-}
-
-.admin-detail__columns {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 1.25rem;
-}
-@media (min-width: 800px) {
-    .admin-detail__columns {
-        grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
-    }
 }
 
 /* ---- tracklist (new layout) ---- */

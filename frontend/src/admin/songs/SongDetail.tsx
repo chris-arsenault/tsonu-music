@@ -262,43 +262,41 @@ export function SongDetail({
 
             {tab === 'metadata' ? (
                 <section className="admin-section">
-                    <div className="admin-detail__columns">
-                        <ArtworkPicker
-                            label="Song artwork"
-                            src={artworkSrc}
-                            artwork={draft.artwork}
-                            altText={`${draft.title} artwork`}
-                            artworkChoices={artworkChoices}
-                            canUpload={!isNew}
-                            uploadHint={isNew ? 'Save the song before uploading artwork.' : (draft.artwork?.sources[0]?.path ?? 'Falls back to release artwork when empty.')}
-                            onUpload={uploadArtwork}
-                            onReuse={(choiceValue) => {
-                                const choice = artworkChoices.find((c) => c.value === choiceValue);
-                                if (choice) updateField('artwork', choice.artwork);
-                            }}
-                            onClear={() => updateField('artwork', undefined)}
-                        />
-                        <div className="admin-form-grid">
-                            <div className="admin-field">
-                                <label>Artist</label>
-                                <input value={draft.artistName} onChange={(event) => updateField('artistName', event.currentTarget.value)} />
-                            </div>
-                            <div className="admin-field">
-                                <label>Tags</label>
-                                <input value={tagsText} onChange={(event) => setTagsText(event.currentTarget.value)} placeholder="comma, separated" />
-                            </div>
-                            <div className="admin-field admin-field--wide">
-                                <label>Description</label>
-                                <textarea rows={3} value={draft.description ?? ''} onChange={(event) => updateField('description', event.currentTarget.value)} />
-                            </div>
-                            <div className="admin-field admin-field--wide">
-                                <label>Lyrics</label>
-                                <textarea rows={6} value={draft.lyrics ?? ''} onChange={(event) => updateField('lyrics', event.currentTarget.value)} />
-                            </div>
-                            <div className="admin-field admin-field--wide">
-                                <label>Credits JSON</label>
-                                <textarea rows={5} value={creditsText} onChange={(event) => setCreditsText(event.currentTarget.value)} />
-                            </div>
+                    <ArtworkPicker
+                        label="Song artwork"
+                        src={artworkSrc}
+                        artwork={draft.artwork}
+                        altText={`${draft.title} artwork`}
+                        artworkChoices={artworkChoices}
+                        canUpload={!isNew}
+                        uploadHint={isNew ? 'Save the song before uploading artwork.' : (draft.artwork?.sources[0]?.path ?? 'Falls back to release artwork when empty.')}
+                        onUpload={uploadArtwork}
+                        onReuse={(choiceValue) => {
+                            const choice = artworkChoices.find((c) => c.value === choiceValue);
+                            if (choice) updateField('artwork', choice.artwork);
+                        }}
+                        onClear={() => updateField('artwork', undefined)}
+                    />
+                    <div className="admin-form-grid">
+                        <div className="admin-field">
+                            <label>Artist</label>
+                            <input value={draft.artistName} onChange={(event) => updateField('artistName', event.currentTarget.value)} />
+                        </div>
+                        <div className="admin-field">
+                            <label>Tags</label>
+                            <input value={tagsText} onChange={(event) => setTagsText(event.currentTarget.value)} placeholder="comma, separated" />
+                        </div>
+                        <div className="admin-field admin-field--wide">
+                            <label>Description</label>
+                            <textarea rows={3} value={draft.description ?? ''} onChange={(event) => updateField('description', event.currentTarget.value)} />
+                        </div>
+                        <div className="admin-field admin-field--wide">
+                            <label>Lyrics</label>
+                            <textarea rows={6} value={draft.lyrics ?? ''} onChange={(event) => updateField('lyrics', event.currentTarget.value)} />
+                        </div>
+                        <div className="admin-field admin-field--wide">
+                            <label>Credits JSON</label>
+                            <textarea rows={5} value={creditsText} onChange={(event) => setCreditsText(event.currentTarget.value)} />
                         </div>
                     </div>
                 </section>
