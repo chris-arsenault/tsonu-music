@@ -436,9 +436,10 @@
 
 .admin-artwork-upload {
     display: grid;
-    grid-template-columns: 10rem minmax(0, 1fr);
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr);
     gap: 1rem;
-    align-items: stretch;
+    align-items: start;
     min-width: 0;
 }
 
@@ -484,6 +485,12 @@
     font-size: 0.78rem;
     font-weight: 500;
     overflow-wrap: anywhere;
+}
+
+.admin-artwork-upload input[type="file"] {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .admin-button-row {
