@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Activity, BarChart3, ListMusic, LogOut, Music2 } from 'lucide-react';
+import { Activity, ListMusic, LogOut, Music2 } from 'lucide-react';
 import { getRuntimeConfig } from '../runtime-config';
 import { useAuth } from '../use-auth';
 import { handleInternalLink, navigateTo, useCurrentRoute } from '../music/routes';
@@ -77,13 +77,6 @@ function AdminShellInner() {
                 >
                     <Activity aria-hidden="true" /> Activity
                 </a>
-                <a
-                    href="/admin/activity/stats"
-                    onClick={(event) => handleInternalLink(event, '/admin/activity/stats')}
-                    className={parsed.section === 'activity' && parsed.subview === 'stats' ? 'active' : undefined}
-                >
-                    <BarChart3 aria-hidden="true" /> Stats
-                </a>
             </nav>
 
             <main className="admin-main">
@@ -102,7 +95,7 @@ function AdminShellInner() {
                 ) : null}
                 {parsed.section === 'activity' ? (
                     <ActivityPage
-                        initialView={parsed.subview === 'stats' ? 'stats' : 'encoding'}
+                        view={parsed.subview === 'stats' ? 'stats' : 'encoding'}
                         onNavigateSong={setSelectedSongId}
                     />
                 ) : null}

@@ -5,6 +5,7 @@ import {
     nextReleaseTrack,
     parseLinks,
     parseTags,
+    sanitizeFilename,
     slugify,
     sortedReleaseTracks,
     stableId,
@@ -101,6 +102,42 @@ describe('parseTags / parseLinks', () => {
     test('parseLinks tolerates pipe characters inside the URL', () => {
         const parsed = parseLinks('Wiki | https://example.com/path|fragment');
         expect(parsed).toEqual([{ label: 'Wiki', url: 'https://example.com/path|fragment' }]);
+    });
+});
+
+describe('sanitizeFilename', () => {
+    test('replaces spaces and disallowed characters with underscores', () => {
+        expect(sanitizeFilename('My Demo (Final).wav')).toBe('My_Demo_Final.wav');
+    });
+
+    test('collapses runs of replacement chars', () => {
+        expect(sanitizeFilename('a    b   c.wav')).toBe('a_b_c.wav');
+    });
+
+    test('strips leading and trailing underscores', () => {
+        expect(sanitizeFilename(' .wav ')).toBe('.wav');
+        expect(sanitizeFilename(' track ')).toBe('track');
+    });
+
+    test('strips directory components', () => {
+        expect(sanitizeFilename('C:\\Users\\Me\\My Track.wav')).toBe('My_Track.wav');
+        expect(sanitizeFilename('/tmp/uploads/foo bar.flac')).toBe('foo_bar.flac');
+    });
+
+    test('preserves dashes, dots, and existing underscores', () => {
+        expect(sanitizeFilename('halcyon-v2_remaster.flac')).toBe('halcyon-v2_remaster.flac');
+    });
+
+    test('falls back to "file" when nothing survives', () => {
+        expect(sanitizeFilename('   ')).toBe('file');
+        expect(sanitizeFilename('___')).toBe('file');
+        expect(sanitizeFilename('!!!')).toBe('file');
+    });
+
+    test('keeps unicode-stripped filenames usable', () => {
+        // smart quotes and ellipsis collapse to underscores, then the underscore
+        // immediately before the extension dot is dropped for tidiness.
+        expect(sanitizeFilename('it’s a “test”….wav')).toBe('it_s_a_test.wav');
     });
 });
 

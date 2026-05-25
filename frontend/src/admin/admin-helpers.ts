@@ -182,6 +182,22 @@ export function parseOptionalJson(value: string): JsonValue | undefined {
     return trimmed ? JSON.parse(trimmed) as JsonValue : undefined;
 }
 
+/**
+ * Backend validation requires upload filenames to match /^[A-Za-z0-9._-]+$/.
+ * Strip path components, replace any disallowed character (including spaces)
+ * with an underscore, collapse consecutive underscores, and trim them from
+ * the edges. Falls back to "file" if the result is empty.
+ */
+export function sanitizeFilename(name: string): string {
+    const base = name.split(/[/\\]/).pop() ?? name;
+    const cleaned = base
+        .replace(/[^A-Za-z0-9._-]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/_+\./g, '.')
+        .replace(/^_+|_+$/g, '');
+    return cleaned || 'file';
+}
+
 export function readArtworkDimensions(file: File): Promise<{ width: number; height: number }> {
     return new Promise((resolve, reject) => {
         const objectUrl = URL.createObjectURL(file);

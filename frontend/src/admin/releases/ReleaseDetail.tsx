@@ -14,6 +14,7 @@ import {
     parseTags,
     readArtworkDimensions,
     releaseIdFromKey,
+    sanitizeFilename,
     slugify,
     uniqueStableId,
 } from '../admin-helpers';
@@ -182,7 +183,7 @@ export function ReleaseDetail({
             const upload = await requestArtworkUploadUrl({
                 ownerType: 'release',
                 ownerId: draft.releaseId,
-                filename: file.name,
+                filename: sanitizeFilename(file.name),
                 contentType: file.type || undefined,
                 width: dimensions.width,
                 height: dimensions.height,

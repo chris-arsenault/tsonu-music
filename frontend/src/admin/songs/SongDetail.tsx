@@ -9,6 +9,7 @@ import {
     parseOptionalJson,
     parseTags,
     readArtworkDimensions,
+    sanitizeFilename,
     slugify,
     songIdFromKey,
     uniqueStableId,
@@ -174,7 +175,7 @@ export function SongDetail({
             const upload = await requestArtworkUploadUrl({
                 ownerType: 'song',
                 ownerId: draft.songId,
-                filename: file.name,
+                filename: sanitizeFilename(file.name),
                 contentType: file.type || undefined,
                 width: dimensions.width,
                 height: dimensions.height,

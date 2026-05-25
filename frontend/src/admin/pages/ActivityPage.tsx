@@ -1,16 +1,18 @@
-import { useState } from 'react';
+import { navigateTo } from '../../music/routes';
 import { EncodingJobsFeed } from '../activity/EncodingJobsFeed';
 import { RumDashboard } from '../activity/RumDashboard';
 
 type View = 'encoding' | 'stats';
 
 interface Props {
-    initialView?: View;
+    view: View;
     onNavigateSong: (songId: string) => void;
 }
 
-export function ActivityPage({ initialView = 'encoding', onNavigateSong }: Props) {
-    const [view, setView] = useState<View>(initialView);
+export function ActivityPage({ view, onNavigateSong }: Props) {
+    function setView(next: View) {
+        navigateTo(next === 'stats' ? '/admin/activity/stats' : '/admin/activity');
+    }
 
     return (
         <div className="admin-page">

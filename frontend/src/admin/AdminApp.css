@@ -354,11 +354,16 @@
 
 .admin-artwork-upload {
     display: grid;
-    grid-column: 1 / -1;
     grid-template-columns: minmax(8rem, 10rem) minmax(0, 1fr);
     gap: 1rem;
     align-items: start;
     min-width: 0;
+}
+/* When the picker is nested inside a form-grid (legacy callers) it should
+   span all columns. Direct children of .admin-detail__columns occupy a
+   single column instead. */
+.admin-form-grid > .admin-artwork-upload {
+    grid-column: 1 / -1;
 }
 
 .admin-artwork-upload__preview {

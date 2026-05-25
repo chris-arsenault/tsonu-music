@@ -1,7 +1,7 @@
 import { CloudUpload, FileAudio, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { createEncodeJob, requestUploadUrl, uploadMasterFile } from '../admin-api';
-import { latestJobId, optionalText, slugify, formatRelativeTime } from '../admin-helpers';
+import { latestJobId, optionalText, sanitizeFilename, slugify, formatRelativeTime } from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRecording, DraftSong, EncodeJob } from '../admin-types';
@@ -37,7 +37,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
         await run('Uploading master', async () => {
             const upload = await requestUploadUrl({
                 recordingId: recording.recordingId,
-                filename: masterFile.name,
+                filename: sanitizeFilename(masterFile.name),
                 contentType: masterFile.type || undefined,
             });
             await uploadMasterFile(upload, masterFile);
