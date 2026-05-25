@@ -17,6 +17,7 @@ import {
     Upload,
 } from 'lucide-react';
 import type { ReleaseKind, ReleaseStatus, StableId, Visibility } from '../catalog/media-catalog';
+import { getArtworkUrl } from '../catalog/catalog-client';
 import { getRuntimeConfig } from '../runtime-config';
 import { useAuth } from '../use-auth';
 import { handleInternalLink, useCurrentRoute } from '../music/routes';
@@ -33,7 +34,9 @@ import {
     publishRelease,
     putDraftRelease,
     putDraftSong,
+    requestArtworkUploadUrl,
     requestUploadUrl,
+    uploadArtworkFile,
     uploadMasterFile,
 } from './admin-api';
 import type {
@@ -52,27 +55,10 @@ import './AdminApp.css';
 type BusyState = string | undefined;
 type AdminSection = typeof ADMIN_ROUTES[number];
 
-interface ArtworkForm {
-    assetId: string;
-    altText: string;
-    path: string;
-    url: string;
-    width: number;
-    height: number;
-    mimeType: string;
-}
-
 const ADMIN_ROUTES = ['releases', 'songs', 'encoding', 'publish', 'stats'] as const;
 const RELEASE_KINDS: ReleaseKind[] = ['album', 'ep', 'single', 'demo', 'preview', 'collection', 'prerelease'];
 const RELEASE_STATUSES: ReleaseStatus[] = ['official', 'demo', 'promo', 'prerelease', 'bootleg'];
-const PUBLISH_STATES: DraftRelease['publishState'][] = ['draft', 'ready', 'published', 'withdrawn'];
 const VERSION_TYPES: DraftRecording['versionType'][] = ['studio_master', 'album_master', 'single_master', 'demo', 'preview', 'live', 'alternate', 'remaster'];
-const DEFAULT_ARTWORK_WIDTH = 3000;
-const DEFAULT_ARTWORK_HEIGHT = 3000;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function optionalText(value: string | undefined): string | undefined {
     const trimmed = value?.trim() ?? '';
@@ -201,46 +187,6 @@ function latestJob(recording: DraftRecording | undefined, jobDetails: Record<str
     return jobId ? jobDetails[jobId] : undefined;
 }
 
-function artworkFormFromValue(value: JsonValue | undefined, release: DraftRelease | undefined): ArtworkForm {
-    const source = isRecord(value) && Array.isArray(value.sources) && isRecord(value.sources[0])
-        ? value.sources[0]
-        : undefined;
-
-    return {
-        assetId: isRecord(value) && typeof value.assetId === 'string'
-            ? value.assetId
-            : release ? stableId('asset', `${release.slug}_cover`) : 'asset_cover',
-        altText: isRecord(value) && typeof value.altText === 'string'
-            ? value.altText
-            : release ? `${release.title} cover art` : 'Cover art',
-        path: source && typeof source.path === 'string' ? source.path : '',
-        url: source && typeof source.url === 'string' ? source.url : '',
-        width: source && typeof source.width === 'number' ? source.width : DEFAULT_ARTWORK_WIDTH,
-        height: source && typeof source.height === 'number' ? source.height : DEFAULT_ARTWORK_HEIGHT,
-        mimeType: source && typeof source.mimeType === 'string' ? source.mimeType : 'image/jpeg',
-    };
-}
-
-function artworkValueFromForm(form: ArtworkForm): JsonValue | undefined {
-    if (!optionalText(form.path) && !optionalText(form.url)) {
-        return undefined;
-    }
-
-    return {
-        assetId: optionalText(form.assetId) ?? 'asset_cover',
-        altText: optionalText(form.altText) ?? 'Cover art',
-        sources: [
-            {
-                path: optionalText(form.path) ?? optionalText(form.url) ?? '',
-                ...(optionalText(form.url) ? { url: optionalText(form.url) } : {}),
-                width: Number.isFinite(form.width) && form.width > 0 ? form.width : DEFAULT_ARTWORK_WIDTH,
-                height: Number.isFinite(form.height) && form.height > 0 ? form.height : DEFAULT_ARTWORK_HEIGHT,
-                mimeType: optionalText(form.mimeType) ?? 'image/jpeg',
-            },
-        ],
-    };
-}
-
 function formatLinks(links: DraftRelease['links']): string {
     return links?.map((link) => `${link.label} | ${link.url}`).join('\n') ?? '';
 }
@@ -273,6 +219,27 @@ function parseTags(value: string): string[] | undefined {
 function parseOptionalJson(value: string): JsonValue | undefined {
     const trimmed = value.trim();
     return trimmed ? JSON.parse(trimmed) as JsonValue : undefined;
+}
+
+function readArtworkDimensions(file: File): Promise<{ width: number; height: number }> {
+    return new Promise((resolve, reject) => {
+        const objectUrl = URL.createObjectURL(file);
+        const image = new Image();
+
+        image.onload = () => {
+            URL.revokeObjectURL(objectUrl);
+            if (!image.naturalWidth || !image.naturalHeight) {
+                reject(new Error('Artwork file has no readable dimensions.'));
+                return;
+            }
+            resolve({ width: image.naturalWidth, height: image.naturalHeight });
+        };
+        image.onerror = () => {
+            URL.revokeObjectURL(objectUrl);
+            reject(new Error('Artwork file is not a readable image.'));
+        };
+        image.src = objectUrl;
+    });
 }
 
 function formatPercent(value: number): string {
@@ -324,7 +291,8 @@ export default function AdminApp() {
     const [releaseIdInput, setReleaseIdInput] = useState('release_demos');
     const [selectedRecordingId, setSelectedRecordingId] = useState<string>();
     const [selectedReleaseTrackId, setSelectedReleaseTrackId] = useState<string>();
-    const [artworkForm, setArtworkForm] = useState<ArtworkForm>(() => artworkFormFromValue(undefined, undefined));
+    const [releaseArtworkFile, setReleaseArtworkFile] = useState<File>();
+    const [songArtworkFile, setSongArtworkFile] = useState<File>();
     const [releaseTagsText, setReleaseTagsText] = useState('');
     const [songTagsText, setSongTagsText] = useState('');
     const [linksText, setLinksText] = useState('');
@@ -353,10 +321,11 @@ export default function AdminApp() {
     const releaseObjects = releaseList?.objects ?? [];
     const jobObjects = jobList?.objects ?? [];
     const currentRecordingJob = latestJob(selectedRecording, jobDetails);
+    const releaseArtworkSrc = release?.artwork ? getArtworkUrl(runtimeConfig.mediaBaseUrl, release.artwork) : undefined;
+    const songArtworkSrc = song?.artwork ? getArtworkUrl(runtimeConfig.mediaBaseUrl, song.artwork) : undefined;
     const publishChecks = [
         { label: 'Release date', ok: Boolean(release?.releaseDate) },
         { label: 'Artwork', ok: Boolean(release?.artwork) },
-        { label: 'Ready state', ok: release?.publishState === 'ready' || release?.publishState === 'published' },
         { label: 'Tracks', ok: releaseTracks.length > 0 },
         {
             label: 'Successful encodes',
@@ -387,6 +356,30 @@ export default function AdminApp() {
         setSongCache((current) => ({ ...current, [nextSong.songId]: nextSong }));
     }
 
+    function newSongFromInput(): DraftSong {
+        return newDraftSong(normalizeId('song', songIdInput));
+    }
+
+    function newReleaseFromInput(): DraftRelease {
+        return newDraftRelease(normalizeId('release', releaseIdInput));
+    }
+
+    function ensureSongDraft(): void {
+        setSong((current) => {
+            if (current) {
+                return current;
+            }
+
+            const next = newSongFromInput();
+            cacheSong(next);
+            return next;
+        });
+    }
+
+    function ensureReleaseDraft(): void {
+        setRelease((current) => current ?? newReleaseFromInput());
+    }
+
     function syncSongForms(nextSong: DraftSong): void {
         setSongIdInput(nextSong.songId);
         setSelectedRecordingId(nextSong.recordings[0]?.recordingId);
@@ -398,10 +391,20 @@ export default function AdminApp() {
     function syncReleaseForms(nextRelease: DraftRelease): void {
         setReleaseIdInput(nextRelease.releaseId);
         setSelectedReleaseTrackId(nextRelease.tracks[0]?.trackId);
-        setArtworkForm(artworkFormFromValue(nextRelease.artwork, nextRelease));
         setReleaseTagsText(nextRelease.tags?.join(', ') ?? '');
         setLinksText(formatLinks(nextRelease.links));
         setReleaseCreditsText(nextRelease.credits ? JSON.stringify(nextRelease.credits, null, 2) : '');
+    }
+
+    function prepareSongDraftForSave(draft: DraftSong): DraftSong {
+        return {
+            ...draft,
+            description: optionalText(draft.description),
+            lyrics: optionalText(draft.lyrics),
+            credits: parseOptionalJson(songCreditsText),
+            tags: parseTags(songTagsText),
+            updatedAt: new Date().toISOString(),
+        };
     }
 
     function prepareSongForSave(): DraftSong {
@@ -409,12 +412,20 @@ export default function AdminApp() {
             throw new Error('No draft song is loaded.');
         }
 
+        return prepareSongDraftForSave(song);
+    }
+
+    function prepareReleaseDraftForSave(draft: DraftRelease): DraftRelease {
         return {
-            ...song,
-            description: optionalText(song.description),
-            lyrics: optionalText(song.lyrics),
-            credits: parseOptionalJson(songCreditsText),
-            tags: parseTags(songTagsText),
+            ...draft,
+            subtitle: optionalText(draft.subtitle),
+            releaseDate: optionalText(draft.releaseDate),
+            description: optionalText(draft.description),
+            copyright: optionalText(draft.copyright),
+            credits: parseOptionalJson(releaseCreditsText),
+            links: parseLinks(linksText),
+            tags: parseTags(releaseTagsText),
+            tracks: sortedReleaseTracks(draft),
             updatedAt: new Date().toISOString(),
         };
     }
@@ -424,27 +435,69 @@ export default function AdminApp() {
             throw new Error('No draft release is loaded.');
         }
 
-        return {
-            ...release,
-            subtitle: optionalText(release.subtitle),
-            releaseDate: optionalText(release.releaseDate),
-            description: optionalText(release.description),
-            copyright: optionalText(release.copyright),
-            artwork: artworkValueFromForm(artworkForm),
-            credits: parseOptionalJson(releaseCreditsText),
-            links: parseLinks(linksText),
-            tags: parseTags(releaseTagsText),
-            tracks: sortedReleaseTracks(release),
-            updatedAt: new Date().toISOString(),
-        };
+        return prepareReleaseDraftForSave(release);
     }
 
     function updateSongField<K extends keyof DraftSong>(key: K, value: DraftSong[K]): void {
-        setSong((current) => current ? { ...current, [key]: value } : current);
+        setSong((current) => {
+            const next: DraftSong = {
+                ...(current ?? newSongFromInput()),
+                [key]: value,
+            };
+            if (key === 'title') {
+                const nextSlug = slugify(String(value));
+                next.slug = nextSlug;
+                if (!songETag && next.recordings.length === 0) {
+                    next.songId = stableId('song', nextSlug);
+                    setSongIdInput(next.songId);
+                }
+            }
+            cacheSong(next);
+            return next;
+        });
     }
 
     function updateReleaseField<K extends keyof DraftRelease>(key: K, value: DraftRelease[K]): void {
-        setRelease((current) => current ? { ...current, [key]: value } : current);
+        setRelease((current) => {
+            const next: DraftRelease = {
+                ...(current ?? newReleaseFromInput()),
+                [key]: value,
+            };
+            if (key === 'title') {
+                const nextSlug = slugify(String(value));
+                next.slug = nextSlug;
+                if (!releaseETag && next.tracks.length === 0) {
+                    next.releaseId = stableId('release', nextSlug);
+                    setReleaseIdInput(next.releaseId);
+                }
+            }
+            return next;
+        });
+    }
+
+    function updateSongTagsText(value: string): void {
+        ensureSongDraft();
+        setSongTagsText(value);
+    }
+
+    function updateSongCreditsText(value: string): void {
+        ensureSongDraft();
+        setSongCreditsText(value);
+    }
+
+    function updateReleaseTagsText(value: string): void {
+        ensureReleaseDraft();
+        setReleaseTagsText(value);
+    }
+
+    function updateLinksText(value: string): void {
+        ensureReleaseDraft();
+        setLinksText(value);
+    }
+
+    function updateReleaseCreditsText(value: string): void {
+        ensureReleaseDraft();
+        setReleaseCreditsText(value);
     }
 
     function updateRecording(recording: DraftRecording): void {
@@ -464,6 +517,39 @@ export default function AdminApp() {
         setSelectedRecordingId(recording.recordingId);
     }
 
+    function updateSelectedRecordingField<K extends keyof DraftRecording>(key: K, value: DraftRecording[K]): void {
+        const recordingId = selectedRecording?.recordingId;
+        if (!recordingId) {
+            return;
+        }
+
+        setSong((current) => {
+            if (!current) {
+                return current;
+            }
+            const nextRecordings = current.recordings.map((recording) => {
+                if (recording.recordingId !== recordingId) {
+                    return recording;
+                }
+                const nextRecording = { ...recording, [key]: value };
+                if (key === 'title') {
+                    nextRecording.slug = slugify(String(value));
+                }
+                return nextRecording;
+            });
+            const next = {
+                ...current,
+                recordings: nextRecordings,
+            };
+            cacheSong(next);
+            return next;
+        });
+
+        if (key === 'recordingId') {
+            setSelectedRecordingId(value as string);
+        }
+    }
+
     function updateReleaseTrack(track: DraftReleaseTrack): void {
         setRelease((current) => {
             if (!current) {
@@ -477,6 +563,31 @@ export default function AdminApp() {
             };
         });
         setSelectedReleaseTrackId(track.trackId);
+    }
+
+    function updateSelectedReleaseTrackField<K extends keyof DraftReleaseTrack>(key: K, value: DraftReleaseTrack[K]): void {
+        const trackId = selectedReleaseTrack?.trackId;
+        if (!trackId) {
+            return;
+        }
+
+        setRelease((current) => current ? {
+            ...current,
+            tracks: current.tracks.map((track) => {
+                if (track.trackId !== trackId) {
+                    return track;
+                }
+                const nextTrack = { ...track, [key]: value };
+                if (key === 'title') {
+                    nextTrack.slug = slugify(String(value));
+                }
+                return nextTrack;
+            }),
+        } : current);
+
+        if (key === 'trackId') {
+            setSelectedReleaseTrackId(value as string);
+        }
     }
 
     async function refreshLists(): Promise<void> {
@@ -583,6 +694,65 @@ export default function AdminApp() {
         setRelease(nextRelease);
         setReleaseETag(write.eTag);
         setNotice(`Saved ${write.key}`);
+    }
+
+    async function uploadReleaseArtwork(): Promise<void> {
+        if (!releaseArtworkFile) {
+            throw new Error('Choose release artwork before uploading.');
+        }
+
+        const baseRelease = release ?? newReleaseFromInput();
+        const dimensions = await readArtworkDimensions(releaseArtworkFile);
+        const upload = await requestArtworkUploadUrl({
+            ownerType: 'release',
+            ownerId: baseRelease.releaseId,
+            filename: releaseArtworkFile.name,
+            contentType: releaseArtworkFile.type || undefined,
+            width: dimensions.width,
+            height: dimensions.height,
+            altText: `${baseRelease.title} cover art`,
+        });
+        await uploadArtworkFile(upload, releaseArtworkFile);
+
+        const nextRelease = prepareReleaseDraftForSave({
+            ...baseRelease,
+            artwork: upload.artwork,
+        });
+        const write = await putDraftRelease(nextRelease, releaseETag);
+        setRelease(nextRelease);
+        setReleaseETag(write.eTag);
+        setReleaseArtworkFile(undefined);
+        setNotice(`Uploaded artwork for ${nextRelease.title}`);
+    }
+
+    async function uploadSongArtwork(): Promise<void> {
+        if (!songArtworkFile) {
+            throw new Error('Choose song artwork before uploading.');
+        }
+
+        const baseSong = song ?? newSongFromInput();
+        const dimensions = await readArtworkDimensions(songArtworkFile);
+        const upload = await requestArtworkUploadUrl({
+            ownerType: 'song',
+            ownerId: baseSong.songId,
+            filename: songArtworkFile.name,
+            contentType: songArtworkFile.type || undefined,
+            width: dimensions.width,
+            height: dimensions.height,
+            altText: `${baseSong.title} artwork`,
+        });
+        await uploadArtworkFile(upload, songArtworkFile);
+
+        const nextSong = prepareSongDraftForSave({
+            ...baseSong,
+            artwork: upload.artwork,
+        });
+        const write = await putDraftSong(nextSong, songETag);
+        setSong(nextSong);
+        setSongETag(write.eTag);
+        cacheSong(nextSong);
+        setSongArtworkFile(undefined);
+        setNotice(`Uploaded artwork for ${nextSong.title}`);
     }
 
     async function addRecording(): Promise<void> {
@@ -805,10 +975,6 @@ export default function AdminApp() {
                                     <input value={release?.title ?? ''} onChange={(event) => updateReleaseField('title', event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field">
-                                    <label>Slug</label>
-                                    <input value={release?.slug ?? ''} onChange={(event) => updateReleaseField('slug', slugify(event.currentTarget.value))} />
-                                </div>
-                                <div className="admin-field">
                                     <label>Artist</label>
                                     <input value={release?.artistName ?? ''} onChange={(event) => updateReleaseField('artistName', event.currentTarget.value)} />
                                 </div>
@@ -829,12 +995,6 @@ export default function AdminApp() {
                                     <input type="date" value={release?.releaseDate ?? ''} onChange={(event) => updateReleaseField('releaseDate', event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field">
-                                    <label>Publish State</label>
-                                    <select value={release?.publishState ?? 'draft'} onChange={(event) => updateReleaseField('publishState', event.currentTarget.value as DraftRelease['publishState'])}>
-                                        {PUBLISH_STATES.map((state) => <option key={state} value={state}>{state}</option>)}
-                                    </select>
-                                </div>
-                                <div className="admin-field">
                                     <label>Subtitle</label>
                                     <input value={release?.subtitle ?? ''} onChange={(event) => updateReleaseField('subtitle', event.currentTarget.value)} />
                                 </div>
@@ -844,7 +1004,7 @@ export default function AdminApp() {
                                 </div>
                                 <div className="admin-field">
                                     <label>Tags</label>
-                                    <input value={releaseTagsText} onChange={(event) => setReleaseTagsText(event.currentTarget.value)} />
+                                    <input value={releaseTagsText} onChange={(event) => updateReleaseTagsText(event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field">
                                     <label>Copyright</label>
@@ -852,32 +1012,39 @@ export default function AdminApp() {
                                 </div>
                                 <div className="admin-field admin-field--wide">
                                     <label>Links</label>
-                                    <textarea rows={3} value={linksText} onChange={(event) => setLinksText(event.currentTarget.value)} />
+                                    <textarea rows={3} value={linksText} onChange={(event) => updateLinksText(event.currentTarget.value)} />
                                 </div>
                             </div>
 
                             <div className="admin-subgrid">
-                                <div className="admin-form-grid">
-                                    <div className="admin-field">
-                                        <label>Artwork Asset ID</label>
-                                        <input value={artworkForm.assetId} onChange={(event) => setArtworkForm((current) => ({ ...current, assetId: event.currentTarget.value }))} />
+                                <div className="admin-artwork-upload">
+                                    <div className="admin-artwork-upload__preview">
+                                        {releaseArtworkSrc
+                                            ? <img src={releaseArtworkSrc} alt={release?.artwork?.altText ?? 'Release artwork'} />
+                                            : <ListMusic aria-hidden="true" />}
                                     </div>
-                                    <div className="admin-field">
-                                        <label>Artwork Path</label>
-                                        <input value={artworkForm.path} onChange={(event) => setArtworkForm((current) => ({ ...current, path: event.currentTarget.value }))} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Artwork URL</label>
-                                        <input value={artworkForm.url} onChange={(event) => setArtworkForm((current) => ({ ...current, url: event.currentTarget.value }))} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Alt Text</label>
-                                        <input value={artworkForm.altText} onChange={(event) => setArtworkForm((current) => ({ ...current, altText: event.currentTarget.value }))} />
+                                    <div className="admin-artwork-upload__body">
+                                        <span>Release Artwork</span>
+                                        <strong>{release?.artwork ? release.artwork.sources[0]?.path : 'No artwork uploaded'}</strong>
+                                        <div className="admin-field">
+                                            <label>Upload Image</label>
+                                            <input
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp,image/avif"
+                                                onChange={(event) => {
+                                                    ensureReleaseDraft();
+                                                    setReleaseArtworkFile(event.currentTarget.files?.[0]);
+                                                }}
+                                            />
+                                        </div>
+                                        <button className="admin-button" disabled={!releaseArtworkFile} onClick={() => void withBusy('Uploading release artwork', uploadReleaseArtwork)}>
+                                            <Upload /> Upload Artwork
+                                        </button>
                                     </div>
                                 </div>
                                 <div className="admin-field">
                                     <label>Credits JSON</label>
-                                    <textarea rows={8} value={releaseCreditsText} onChange={(event) => setReleaseCreditsText(event.currentTarget.value)} />
+                                    <textarea rows={8} value={releaseCreditsText} onChange={(event) => updateReleaseCreditsText(event.currentTarget.value)} />
                                 </div>
                             </div>
                         </section>
@@ -894,44 +1061,35 @@ export default function AdminApp() {
                             </div>
 
                             <div className="admin-track-list">
-                                {releaseTracks.map((track) => (
-                                    <button
-                                        key={track.trackId}
-                                        className={`admin-track-row ${selectedReleaseTrack?.trackId === track.trackId ? 'admin-track-row--active' : ''}`}
-                                        onClick={() => setSelectedReleaseTrackId(track.trackId)}
-                                    >
-                                        <span>{track.discNumber}.{track.trackNumber}</span>
-                                        <strong>{track.title}</strong>
-                                        <span>{track.songId}</span>
-                                    </button>
-                                ))}
+                                {releaseTracks.map((track) => {
+                                    const sourceSong = songCache[track.songId];
+                                    return (
+                                        <button
+                                            key={track.trackId}
+                                            className={`admin-track-row ${selectedReleaseTrack?.trackId === track.trackId ? 'admin-track-row--active' : ''}`}
+                                            onClick={() => setSelectedReleaseTrackId(track.trackId)}
+                                        >
+                                            <span>{track.discNumber}.{track.trackNumber}</span>
+                                            <strong>{track.title}</strong>
+                                            <span>{sourceSong?.title ?? 'Song'}</span>
+                                        </button>
+                                    );
+                                })}
                             </div>
 
                             {selectedReleaseTrack ? (
                                 <div className="admin-form-grid admin-form-grid--compact">
                                     <div className="admin-field">
                                         <label>Track Title</label>
-                                        <input value={selectedReleaseTrack.title} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, title: event.currentTarget.value })} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Slug</label>
-                                        <input value={selectedReleaseTrack.slug} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, slug: slugify(event.currentTarget.value) })} />
+                                        <input value={selectedReleaseTrack.title} onChange={(event) => updateSelectedReleaseTrackField('title', event.currentTarget.value)} />
                                     </div>
                                     <div className="admin-field">
                                         <label>Disc</label>
-                                        <input type="number" value={selectedReleaseTrack.discNumber} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, discNumber: Number(event.currentTarget.value) })} />
+                                        <input type="number" value={selectedReleaseTrack.discNumber} onChange={(event) => updateSelectedReleaseTrackField('discNumber', Number(event.currentTarget.value))} />
                                     </div>
                                     <div className="admin-field">
                                         <label>Track</label>
-                                        <input type="number" value={selectedReleaseTrack.trackNumber} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, trackNumber: Number(event.currentTarget.value) })} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Song ID</label>
-                                        <input value={selectedReleaseTrack.songId} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, songId: event.currentTarget.value as StableId })} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Recording ID</label>
-                                        <input value={selectedReleaseTrack.recordingId} onChange={(event) => updateReleaseTrack({ ...selectedReleaseTrack, recordingId: event.currentTarget.value as StableId })} />
+                                        <input type="number" value={selectedReleaseTrack.trackNumber} onChange={(event) => updateSelectedReleaseTrackField('trackNumber', Number(event.currentTarget.value))} />
                                     </div>
                                 </div>
                             ) : null}
@@ -958,16 +1116,12 @@ export default function AdminApp() {
                                     <input value={song?.title ?? ''} onChange={(event) => updateSongField('title', event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field">
-                                    <label>Slug</label>
-                                    <input value={song?.slug ?? ''} onChange={(event) => updateSongField('slug', slugify(event.currentTarget.value))} />
-                                </div>
-                                <div className="admin-field">
                                     <label>Artist</label>
                                     <input value={song?.artistName ?? ''} onChange={(event) => updateSongField('artistName', event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field">
                                     <label>Tags</label>
-                                    <input value={songTagsText} onChange={(event) => setSongTagsText(event.currentTarget.value)} />
+                                    <input value={songTagsText} onChange={(event) => updateSongTagsText(event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-field admin-field--wide">
                                     <label>Description</label>
@@ -979,7 +1133,35 @@ export default function AdminApp() {
                                 </div>
                                 <div className="admin-field admin-field--wide">
                                     <label>Credits JSON</label>
-                                    <textarea rows={5} value={songCreditsText} onChange={(event) => setSongCreditsText(event.currentTarget.value)} />
+                                    <textarea rows={5} value={songCreditsText} onChange={(event) => updateSongCreditsText(event.currentTarget.value)} />
+                                </div>
+                            </div>
+
+                            <div className="admin-subgrid">
+                                <div className="admin-artwork-upload">
+                                    <div className="admin-artwork-upload__preview">
+                                        {songArtworkSrc
+                                            ? <img src={songArtworkSrc} alt={song?.artwork?.altText ?? 'Song artwork'} />
+                                            : <ListMusic aria-hidden="true" />}
+                                    </div>
+                                    <div className="admin-artwork-upload__body">
+                                        <span>Song Artwork</span>
+                                        <strong>{song?.artwork ? song.artwork.sources[0]?.path : 'Falls back to release artwork'}</strong>
+                                        <div className="admin-field">
+                                            <label>Upload Image</label>
+                                            <input
+                                                type="file"
+                                                accept="image/jpeg,image/png,image/webp,image/avif"
+                                                onChange={(event) => {
+                                                    ensureSongDraft();
+                                                    setSongArtworkFile(event.currentTarget.files?.[0]);
+                                                }}
+                                            />
+                                        </div>
+                                        <button className="admin-button" disabled={!songArtworkFile} onClick={() => void withBusy('Uploading song artwork', uploadSongArtwork)}>
+                                            <Upload /> Upload Artwork
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </section>
@@ -1016,38 +1198,26 @@ export default function AdminApp() {
                             {selectedRecording ? (
                                 <div className="admin-form-grid admin-form-grid--compact">
                                     <div className="admin-field">
-                                        <label>Recording ID</label>
-                                        <input value={selectedRecording.recordingId} onChange={(event) => updateRecording({ ...selectedRecording, recordingId: event.currentTarget.value as StableId })} />
-                                    </div>
-                                    <div className="admin-field">
                                         <label>Title</label>
-                                        <input value={selectedRecording.title} onChange={(event) => updateRecording({ ...selectedRecording, title: event.currentTarget.value })} />
-                                    </div>
-                                    <div className="admin-field">
-                                        <label>Slug</label>
-                                        <input value={selectedRecording.slug} onChange={(event) => updateRecording({ ...selectedRecording, slug: slugify(event.currentTarget.value) })} />
+                                        <input value={selectedRecording.title} onChange={(event) => updateSelectedRecordingField('title', event.currentTarget.value)} />
                                     </div>
                                     <div className="admin-field">
                                         <label>Version</label>
-                                        <input value={selectedRecording.versionTitle ?? ''} onChange={(event) => updateRecording({ ...selectedRecording, versionTitle: event.currentTarget.value })} />
+                                        <input value={selectedRecording.versionTitle ?? ''} onChange={(event) => updateSelectedRecordingField('versionTitle', event.currentTarget.value)} />
                                     </div>
                                     <div className="admin-field">
                                         <label>Version Type</label>
-                                        <select value={selectedRecording.versionType} onChange={(event) => updateRecording({ ...selectedRecording, versionType: event.currentTarget.value as DraftRecording['versionType'] })}>
+                                        <select value={selectedRecording.versionType} onChange={(event) => updateSelectedRecordingField('versionType', event.currentTarget.value as DraftRecording['versionType'])}>
                                             {VERSION_TYPES.map((versionType) => <option key={versionType} value={versionType}>{versionType}</option>)}
                                         </select>
                                     </div>
-                                    <div className="admin-field">
-                                        <label>Duration Seconds</label>
-                                        <input type="number" value={selectedRecording.durationSeconds ?? 0} onChange={(event) => updateRecording({ ...selectedRecording, durationSeconds: Number(event.currentTarget.value) })} />
-                                    </div>
                                     <label className="admin-check">
-                                        <input type="checkbox" checked={selectedRecording.explicit} onChange={(event) => updateRecording({ ...selectedRecording, explicit: event.currentTarget.checked })} />
+                                        <input type="checkbox" checked={selectedRecording.explicit} onChange={(event) => updateSelectedRecordingField('explicit', event.currentTarget.checked)} />
                                         Explicit
                                     </label>
                                     <div className="admin-field">
                                         <label>ISRC</label>
-                                        <input value={selectedRecording.isrc ?? ''} onChange={(event) => updateRecording({ ...selectedRecording, isrc: event.currentTarget.value })} />
+                                        <input value={selectedRecording.isrc ?? ''} onChange={(event) => updateSelectedRecordingField('isrc', event.currentTarget.value)} />
                                     </div>
                                 </div>
                             ) : null}

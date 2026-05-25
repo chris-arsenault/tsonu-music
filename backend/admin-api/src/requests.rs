@@ -39,6 +39,73 @@ pub(crate) struct UploadUrlResponse {
     pub(crate) source_master: SourceMasterDraft,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtworkUploadUrlRequest {
+    pub(crate) owner_type: ArtworkOwnerType,
+    pub(crate) owner_id: String,
+    pub(crate) filename: String,
+    #[serde(default)]
+    pub(crate) content_type: Option<String>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) alt_text: String,
+    #[serde(default)]
+    pub(crate) expires_in_seconds: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ArtworkOwnerType {
+    Release,
+    Song,
+}
+
+impl ArtworkOwnerType {
+    pub(crate) fn stable_id_prefix(&self) -> &'static str {
+        match self {
+            Self::Release => "release",
+            Self::Song => "song",
+        }
+    }
+
+    pub(crate) fn path_segment(&self) -> &'static str {
+        match self {
+            Self::Release => "releases",
+            Self::Song => "songs",
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtworkUploadUrlResponse {
+    pub(crate) bucket: String,
+    pub(crate) key: String,
+    pub(crate) url: String,
+    pub(crate) method: &'static str,
+    pub(crate) headers: UploadHeaders,
+    pub(crate) expires_in_seconds: u64,
+    pub(crate) artwork: ArtworkDraft,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtworkDraft {
+    pub(crate) asset_id: String,
+    pub(crate) alt_text: String,
+    pub(crate) sources: Vec<ArtworkSourceDraft>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ArtworkSourceDraft {
+    pub(crate) path: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) mime_type: String,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct UploadHeaders {
     #[serde(rename = "Content-Type")]

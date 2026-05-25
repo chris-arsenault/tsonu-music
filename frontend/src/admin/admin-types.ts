@@ -1,4 +1,4 @@
-import type { ExternalLink, ReleaseKind, ReleaseStatus, StableId, Visibility } from '../catalog/media-catalog';
+import type { CatalogArtwork, ExternalLink, ReleaseKind, ReleaseStatus, StableId, Visibility } from '../catalog/media-catalog';
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 
@@ -40,6 +40,7 @@ export interface DraftSong {
     lyrics?: string;
     credits?: JsonValue;
     tags?: string[];
+    artwork?: CatalogArtwork;
     updatedAt?: string;
     recordings: DraftRecording[];
 }
@@ -72,7 +73,7 @@ export interface DraftRelease {
     publishState: 'draft' | 'ready' | 'published' | 'withdrawn';
     description?: string;
     copyright?: string;
-    artwork?: JsonValue;
+    artwork?: CatalogArtwork;
     credits?: JsonValue;
     links?: ExternalLink[];
     tags?: string[];
@@ -116,6 +117,29 @@ export interface UploadUrlResponse {
     };
     expiresInSeconds: number;
     sourceMaster: DraftSourceMaster;
+}
+
+export interface ArtworkUploadUrlRequest {
+    ownerType: 'release' | 'song';
+    ownerId: StableId;
+    filename: string;
+    contentType?: string;
+    width: number;
+    height: number;
+    altText: string;
+    expiresInSeconds?: number;
+}
+
+export interface ArtworkUploadUrlResponse {
+    bucket: string;
+    key: string;
+    url: string;
+    method: 'PUT';
+    headers: {
+        'Content-Type': string;
+    };
+    expiresInSeconds: number;
+    artwork: CatalogArtwork;
 }
 
 export type EncodeStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled';

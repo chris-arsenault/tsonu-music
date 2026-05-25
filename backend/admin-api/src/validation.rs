@@ -335,6 +335,29 @@ pub(crate) fn validate_optional_seconds(
     Ok(())
 }
 
+pub(crate) fn validate_artwork_dimensions(width: u32, height: u32) -> Result<(), ApiError> {
+    if width == 0 || height == 0 || width > 12_000 || height > 12_000 {
+        return Err(ApiError::bad_request(
+            "invalid_artwork_dimensions",
+            "artwork width and height must be between 1 and 12000 pixels",
+        ));
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_artwork_alt_text(value: &str) -> Result<(), ApiError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.len() > 180 || trimmed.chars().any(char::is_control) {
+        return Err(ApiError::bad_request(
+            "invalid_artwork_alt_text",
+            "artwork altText must be non-empty text up to 180 characters",
+        ));
+    }
+
+    Ok(())
+}
+
 pub(crate) fn validate_slug(value: &str, field: &'static str) -> Result<(), ApiError> {
     if value.is_empty() || value.len() > 120 {
         return Err(ApiError::bad_request(
@@ -401,6 +424,62 @@ pub(crate) fn validate_filename(filename: &str) -> Result<(), ApiError> {
     }
 
     Ok(())
+}
+
+pub(crate) fn infer_artwork_format(
+    filename: &str,
+    requested_content_type: Option<&str>,
+) -> Result<UploadFormat<'static>, ApiError> {
+    let lower = filename.to_ascii_lowercase();
+    let format = if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        UploadFormat {
+            extension: "jpg",
+            format: "jpeg",
+            content_type: "image/jpeg",
+        }
+    } else if lower.ends_with(".png") {
+        UploadFormat {
+            extension: "png",
+            format: "png",
+            content_type: "image/png",
+        }
+    } else if lower.ends_with(".webp") {
+        UploadFormat {
+            extension: "webp",
+            format: "webp",
+            content_type: "image/webp",
+        }
+    } else if lower.ends_with(".avif") {
+        UploadFormat {
+            extension: "avif",
+            format: "avif",
+            content_type: "image/avif",
+        }
+    } else {
+        return Err(ApiError::bad_request(
+            "unsupported_artwork_format",
+            "artwork must be JPG, PNG, WEBP, or AVIF",
+        ));
+    };
+
+    if let Some(requested) = requested_content_type {
+        let allowed = match format.format {
+            "jpeg" => ["image/jpeg", "image/jpg", "image/pjpeg"].as_slice(),
+            "png" => ["image/png"].as_slice(),
+            "webp" => ["image/webp"].as_slice(),
+            "avif" => ["image/avif"].as_slice(),
+            _ => &[],
+        };
+
+        if !allowed.contains(&requested) {
+            return Err(ApiError::bad_request(
+                "content_type_mismatch",
+                format!("{requested} is not valid for artwork {}", format.extension),
+            ));
+        }
+    }
+
+    Ok(format)
 }
 
 pub(crate) fn infer_upload_format(

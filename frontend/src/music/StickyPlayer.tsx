@@ -41,7 +41,7 @@ export default function StickyPlayer() {
                     onClick={(event) => handleInternalLink(event, releasePath(player.releaseManifest!.slug))}
                     aria-label={`Open ${player.releaseManifest.title}`}
                 >
-                    <img src={player.artworkSrc} alt={player.releaseManifest.artwork.altText} />
+                    <img src={player.artworkSrc} alt={player.artworkAltText} />
                 </a>
 
                 <div className="bottom-player__now-playing">

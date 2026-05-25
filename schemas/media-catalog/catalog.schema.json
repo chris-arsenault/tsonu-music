@@ -83,6 +83,7 @@
           "slug": { "$ref": "common.defs.schema.json#/$defs/slug" },
           "title": { "type": "string", "minLength": 1 },
           "artistName": { "type": "string", "minLength": 1 },
+          "artwork": { "$ref": "common.defs.schema.json#/$defs/artwork" },
           "tags": {
             "type": "array",
             "items": { "$ref": "common.defs.schema.json#/$defs/slug" },

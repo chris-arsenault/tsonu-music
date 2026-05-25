@@ -96,6 +96,7 @@ impl AppState {
             .await?;
 
         let invalidation_paths = vec![
+            "/catalog".to_string(),
             "/music".to_string(),
             format!("/releases/{}", published_release.slug),
             format!("/catalog/releases/{}", published_release.slug),

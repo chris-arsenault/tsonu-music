@@ -18,6 +18,8 @@ pub(crate) struct DraftSong {
     pub(crate) credits: Option<Value>,
     #[serde(default)]
     pub(crate) tags: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) artwork: Option<Value>,
     pub(crate) recordings: Vec<DraftRecording>,
 }
 
@@ -211,6 +213,8 @@ pub(crate) struct PublishedReleaseTrack {
     pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credits: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artwork: Option<Value>,
     pub(crate) playback: TrackPlayback,
 }
 
@@ -282,6 +286,8 @@ pub(crate) struct PublishedSong {
     pub(crate) credits: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artwork: Option<Value>,
     pub(crate) placements: Vec<PublishedSongPlacement>,
 }
 
@@ -296,6 +302,7 @@ pub(crate) struct PublishedSongPlacement {
     pub(crate) track_slug: String,
     pub(crate) recording_id: String,
     pub(crate) track_number: u32,
+    pub(crate) release_artwork: Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -348,6 +355,8 @@ pub(crate) struct PublishedCatalogSong {
     pub(crate) artist_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) artwork: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]

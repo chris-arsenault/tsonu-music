@@ -1,7 +1,8 @@
 use crate::{
     db, normalize_updated_at, parse_rum_summary_query, validate_draft_release_document,
     validate_draft_song_document, validate_slug, validate_stable_id, write_preconditions, ApiError,
-    AppState, EncodeJobRequest, PlayEventRequest, PublishRequest, UploadUrlRequest,
+    AppState, ArtworkUploadUrlRequest, EncodeJobRequest, PlayEventRequest, PublishRequest,
+    UploadUrlRequest,
 };
 use lambda_http::http::{Method, StatusCode};
 use lambda_http::{Body, Error, Request, Response};
@@ -132,9 +133,8 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             let query = parse_rum_summary_query(request.uri().query())?;
             json_response(StatusCode::OK, state.get_rum_summary(query).await?)
         }
-        (&Method::POST, ApiPath::AdminUploadUrl) => {
-            let request: UploadUrlRequest = parse_json_body(request.body())?;
-            json_response(StatusCode::OK, state.create_upload_url(request).await?)
+        (&Method::POST, path @ (ApiPath::AdminUploadUrl | ApiPath::AdminArtworkUploadUrl)) => {
+            upload_url_response(path, request, state).await
         }
         (&Method::POST, ApiPath::AdminEncodeJobs) => {
             let request: EncodeJobRequest = parse_json_body(request.body())?;
@@ -153,6 +153,27 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
         }
         (_, ApiPath::NotFound) => Err(ApiError::not_found("route not found")),
         _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn upload_url_response(
+    path: ApiPath,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    match path {
+        ApiPath::AdminUploadUrl => {
+            let request: UploadUrlRequest = parse_json_body(request.body())?;
+            json_response(StatusCode::OK, state.create_upload_url(request).await?)
+        }
+        ApiPath::AdminArtworkUploadUrl => {
+            let request: ArtworkUploadUrlRequest = parse_json_body(request.body())?;
+            json_response(
+                StatusCode::OK,
+                state.create_artwork_upload_url(request).await?,
+            )
+        }
+        _ => unreachable!("upload_url_response only handles upload routes"),
     }
 }
 
@@ -191,6 +212,7 @@ pub(crate) fn parse_path(path: &str) -> ApiPath {
         },
         ["admin", "rum", "summary"] => ApiPath::AdminRumSummary,
         ["admin", "upload-url"] => ApiPath::AdminUploadUrl,
+        ["admin", "artwork-upload-url"] => ApiPath::AdminArtworkUploadUrl,
         ["admin", "encode-jobs"] => ApiPath::AdminEncodeJobs,
         ["admin", "publish", release_id] => ApiPath::AdminPublish {
             release_id: (*release_id).to_string(),
@@ -295,6 +317,7 @@ pub(crate) enum ApiPath {
     AdminJob { job_id: String },
     AdminRumSummary,
     AdminUploadUrl,
+    AdminArtworkUploadUrl,
     AdminEncodeJobs,
     AdminPublish { release_id: String },
     NotFound,

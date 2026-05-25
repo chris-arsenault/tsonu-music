@@ -1,6 +1,8 @@
 import { getIdToken } from '../auth';
 import { getRuntimeConfig } from '../runtime-config';
 import type {
+    ArtworkUploadUrlRequest,
+    ArtworkUploadUrlResponse,
     DraftRelease,
     DraftSong,
     EncodeJob,
@@ -142,6 +144,10 @@ export async function requestUploadUrl(request: UploadUrlRequest): Promise<Uploa
     return (await requestJson<UploadUrlResponse>('/admin/upload-url', jsonInit('POST', request))).data;
 }
 
+export async function requestArtworkUploadUrl(request: ArtworkUploadUrlRequest): Promise<ArtworkUploadUrlResponse> {
+    return (await requestJson<ArtworkUploadUrlResponse>('/admin/artwork-upload-url', jsonInit('POST', request))).data;
+}
+
 export async function uploadMasterFile(upload: UploadUrlResponse, file: File): Promise<void> {
     const response = await fetch(upload.url, {
         method: upload.method,
@@ -151,6 +157,18 @@ export async function uploadMasterFile(upload: UploadUrlResponse, file: File): P
 
     if (!response.ok) {
         throw new AdminApiError(`Master upload failed: ${response.status} ${response.statusText}`, response.status);
+    }
+}
+
+export async function uploadArtworkFile(upload: ArtworkUploadUrlResponse, file: File): Promise<void> {
+    const response = await fetch(upload.url, {
+        method: upload.method,
+        headers: upload.headers,
+        body: file,
+    });
+
+    if (!response.ok) {
+        throw new AdminApiError(`Artwork upload failed: ${response.status} ${response.statusText}`, response.status);
     }
 }
 

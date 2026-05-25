@@ -22,6 +22,7 @@ pub(crate) fn build_published_song(draft: &DraftSong) -> PublishedSong {
         lyrics: draft.lyrics.clone(),
         credits: draft.credits.clone(),
         tags: draft.tags.clone(),
+        artwork: draft.artwork.clone(),
         placements: Vec::new(),
     }
 }
@@ -138,6 +139,7 @@ pub(crate) fn build_published_track(
         isrc: track.isrc.clone().or_else(|| recording.isrc.clone()),
         description: track.description.clone(),
         credits: track.credits.clone(),
+        artwork: song.artwork.clone(),
         playback: TrackPlayback {
             hls: PlaybackHls {
                 asset_id: hls_asset.asset_id.clone(),

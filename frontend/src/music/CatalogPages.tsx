@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play } from 'lucide-react';
 import { fetchReleaseManifest, fetchReleaseManifestBySlug, fetchSongManifestBySlug, getArtworkUrl } from '../catalog/catalog-client';
-import type { CatalogReleaseSummary, PublishedReleaseManifest, PublishedReleaseTrack, PublishedSongManifest } from '../catalog/media-catalog';
+import type {
+    CatalogArtwork,
+    CatalogReleaseSummary,
+    PublishedReleaseManifest,
+    PublishedReleaseTrack,
+    PublishedSongManifest,
+} from '../catalog/media-catalog';
 import {
     formatTime,
     useMusicPlayer,
@@ -126,10 +132,14 @@ function PageStatus({ error }: { error?: string }) {
     );
 }
 
-function ReleaseArtwork({ release, className }: { release: PublishedReleaseManifest | CatalogReleaseSummary; className: string }) {
+function ArtworkImage({ artwork, className }: { artwork: CatalogArtwork | undefined; className: string }) {
     const { mediaBaseUrl } = useMusicPlayer();
-    const src = getArtworkUrl(mediaBaseUrl, release.artwork);
-    return src ? <img className={className} src={src} alt={release.artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
+    const src = artwork ? getArtworkUrl(mediaBaseUrl, artwork) : undefined;
+    return src && artwork ? <img className={className} src={src} alt={artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
+}
+
+function ReleaseArtwork({ release, className }: { release: PublishedReleaseManifest | CatalogReleaseSummary; className: string }) {
+    return <ArtworkImage artwork={release.artwork} className={className} />;
 }
 
 function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest; activeTrack?: PublishedReleaseTrack }) {
@@ -280,7 +290,7 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     return (
         <main className="music-page">
             <section className="track-page-hero">
-                <ReleaseArtwork release={release} className="track-page-hero__art" />
+                <ArtworkImage artwork={track.artwork ?? release.artwork} className="track-page-hero__art" />
                 <div className="track-page-hero__copy">
                     <p className="section-eyebrow">{release.title}</p>
                     <h1>{track.title}</h1>
@@ -308,6 +318,7 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
 }
 
 export function SongPage({ slug }: SongPageProps) {
+    const player = useMusicPlayer();
     const state = useSongBySlug(slug);
 
     if (state.error) {
@@ -319,14 +330,18 @@ export function SongPage({ slug }: SongPageProps) {
     }
 
     const song = state.song;
+    const fallbackReleaseArtwork = song.placements[0]?.releaseArtwork ?? player.catalog?.releases.find((release) => release.releaseId === song.placements[0]?.releaseId)?.artwork;
 
     return (
         <main className="music-page">
-            <header className="catalog-header">
-                <p className="section-eyebrow">Song</p>
-                <h1>{song.title}</h1>
-                {song.description ? <p>{song.description}</p> : null}
-            </header>
+            <section className="track-page-hero">
+                <ArtworkImage artwork={song.artwork ?? fallbackReleaseArtwork} className="track-page-hero__art" />
+                <div className="track-page-hero__copy">
+                    <p className="section-eyebrow">Song</p>
+                    <h1>{song.title}</h1>
+                    {song.description ? <p>{song.description}</p> : null}
+                </div>
+            </section>
             <section className="album-page-tracks" aria-label={`${song.title} placements`}>
                 <ol className="catalog-track-list">
                     {song.placements.map((placement) => (

@@ -41,6 +41,10 @@ fn parses_admin_paths() {
     );
     assert_eq!(parse_path("/admin/rum/summary"), ApiPath::AdminRumSummary);
     assert_eq!(
+        parse_path("/admin/artwork-upload-url"),
+        ApiPath::AdminArtworkUploadUrl
+    );
+    assert_eq!(
         parse_path("/admin/publish/release_so-we-sleep"),
         ApiPath::AdminPublish {
             release_id: "release_so-we-sleep".to_string()
@@ -153,6 +157,24 @@ fn infers_lossless_upload_formats() {
 }
 
 #[test]
+fn infers_artwork_upload_formats() {
+    assert_eq!(
+        infer_artwork_format("cover.jpeg", Some("image/jpeg"))
+            .unwrap()
+            .extension,
+        "jpg"
+    );
+    assert_eq!(
+        infer_artwork_format("cover.webp", None)
+            .unwrap()
+            .content_type,
+        "image/webp"
+    );
+    assert!(infer_artwork_format("cover.svg", None).is_err());
+    assert!(infer_artwork_format("cover.png", Some("image/jpeg")).is_err());
+}
+
+#[test]
 fn validates_canonical_source_master_keys() {
     let source = DraftSourceMaster {
         bucket: "tsonu-music-masters".to_string(),
@@ -245,6 +267,10 @@ fn builds_published_track_from_succeeded_encode_job() {
         );
     assert_eq!(published.song_id, "song_opening-dream");
     assert_eq!(published.recording_id, "recording_opening-dream_demo");
+    assert_eq!(
+        published.artwork.as_ref().unwrap()["assetId"],
+        "asset_opening-dream_art"
+    );
     assert_eq!(published.playback.formats.len(), 3);
     assert!(published
         .playback
@@ -389,6 +415,18 @@ fn sample_draft_song() -> DraftSong {
         lyrics: None,
         credits: None,
         tags: Some(vec!["demo".to_string()]),
+        artwork: Some(json!({
+            "assetId": "asset_opening-dream_art",
+            "altText": "Opening Dream artwork",
+            "sources": [
+                {
+                    "path": "artwork/songs/song_opening-dream/cover-1024.jpg",
+                    "width": 1024,
+                    "height": 1024,
+                    "mimeType": "image/jpeg"
+                }
+            ]
+        })),
         recordings: vec![sample_recording(vec![
             "job_so-we-sleep_01_encode_20260523".to_string()
         ])],

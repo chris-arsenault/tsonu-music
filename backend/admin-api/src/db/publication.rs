@@ -263,6 +263,7 @@ pub async fn get_public_catalog(pool: &PgPool) -> Result<PublishedCatalog, ApiEr
                             "stored public song tags cannot be parsed",
                         )
                     })?,
+                artwork: document.get("artwork").cloned(),
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -324,6 +325,7 @@ pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<Publis
 
     let placement_rows = sqlx::query(
         "SELECT r.release_id, r.slug AS release_slug, r.title AS release_title, r.release_kind,
+                r.artwork AS release_artwork,
                 t.track_id, t.slug AS track_slug, t.recording_id, t.track_number
          FROM music_published_release_tracks t
          JOIN music_published_releases r ON r.release_id = t.release_id
@@ -346,6 +348,7 @@ pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<Publis
             track_slug: row.get("track_slug"),
             recording_id: row.get("recording_id"),
             track_number: row.get::<i32, _>("track_number") as u32,
+            release_artwork: row.get::<Json<Value>, _>("release_artwork").0,
         })
         .collect();
 

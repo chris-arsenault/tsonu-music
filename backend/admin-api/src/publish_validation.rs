@@ -30,10 +30,13 @@ pub(crate) fn validate_publishable_release(
         ));
     }
 
-    if !matches!(release.publish_state.as_str(), "ready" | "published") {
+    if !matches!(
+        release.publish_state.as_str(),
+        "draft" | "ready" | "published" | "withdrawn"
+    ) {
         return Err(ApiError::bad_request(
-            "release_not_ready",
-            "draft release publishState must be ready or published before publishing",
+            "invalid_publish_state",
+            "draft release publishState has an invalid value",
         ));
     }
 

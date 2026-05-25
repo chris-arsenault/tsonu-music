@@ -15,6 +15,7 @@ import {
     resolveMediaUrl,
 } from '../catalog/catalog-client';
 import type {
+    CatalogArtwork,
     CatalogReleaseSummary,
     PlaybackFormat,
     PlaybackQuality,
@@ -71,6 +72,7 @@ export interface MusicPlayerContextValue {
     currentTime: number;
     duration: number;
     artworkSrc: string;
+    artworkAltText: string;
     canGoBack: boolean;
     canGoForward: boolean;
     playRelease: (releaseId: StableId) => void;
@@ -222,7 +224,6 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
-    const [artworkSrc, setArtworkSrc] = useState(fallbackArtworkSrc);
 
     const selectedReleaseSummary = useMemo(
         () => (
@@ -240,6 +241,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         () => selectedTrack ? getPlaybackSource(mediaBaseUrl, selectedTrack, selectedQuality) : undefined,
         [mediaBaseUrl, selectedQuality, selectedTrack],
     );
+    const selectedArtwork: CatalogArtwork | undefined = selectedTrack?.artwork ?? releaseManifest?.artwork;
+    const artworkSrc = selectedArtwork ? getArtworkUrl(mediaBaseUrl, selectedArtwork) ?? fallbackArtworkSrc : fallbackArtworkSrc;
+    const artworkAltText = selectedArtwork?.altText ?? 'Cover art';
 
     useEffect(() => {
         const controller = new AbortController();
@@ -337,7 +341,6 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             return;
         }
 
-        setArtworkSrc(getArtworkUrl(mediaBaseUrl, releaseManifest.artwork) ?? fallbackArtworkSrc);
         recordReleaseView({
             releaseId: releaseManifest.releaseId,
             assetId: releaseManifest.artwork.assetId,
@@ -354,7 +357,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
                 durationSeconds: track.durationSeconds,
             });
         });
-    }, [releaseManifest, fallbackArtworkSrc, mediaBaseUrl]);
+    }, [releaseManifest]);
 
     useEffect(() => {
         setCurrentTime(0);
@@ -801,6 +804,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         currentTime,
         duration,
         artworkSrc,
+        artworkAltText,
         canGoBack,
         canGoForward,
         playRelease,

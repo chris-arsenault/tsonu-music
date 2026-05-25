@@ -74,6 +74,7 @@ export interface CatalogSongSummary {
     slug: string;
     title: string;
     artistName: string;
+    artwork?: CatalogArtwork;
     tags?: string[];
 }
 
@@ -115,6 +116,7 @@ export interface PublishedReleaseTrack {
     isrc?: string;
     description?: string;
     credits?: CatalogCredit[];
+    artwork?: CatalogArtwork;
     playback: TrackPlayback;
 }
 
@@ -129,6 +131,7 @@ export interface PublishedSongManifest {
     lyrics?: string;
     credits?: CatalogCredit[];
     tags?: string[];
+    artwork?: CatalogArtwork;
     placements: PublishedSongPlacement[];
 }
 
@@ -141,6 +144,7 @@ export interface PublishedSongPlacement {
     trackSlug: string;
     recordingId: StableId;
     trackNumber: number;
+    releaseArtwork?: CatalogArtwork;
 }
 
 export interface TrackPlayback {

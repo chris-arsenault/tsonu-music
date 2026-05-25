@@ -37,6 +37,7 @@ data "aws_iam_policy_document" "admin_api" {
 
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/artwork/*",
       "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
     ]
   }
@@ -51,6 +52,7 @@ data "aws_iam_policy_document" "admin_api" {
 
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/artwork/*",
     ]
   }
 
