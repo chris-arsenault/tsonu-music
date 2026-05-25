@@ -25,6 +25,24 @@ DNS records for the three `tsonu.com` hostnames live in the `tsonu.com.` Route53
 - **Media**: private source-master and generated-media S3 buckets. Public HLS, artwork, and lossless assets are served through CloudFront.
 - **Analytics**: CloudWatch RUM custom player events and an admin dashboard for player stats.
 
+## Admin app layout
+
+`frontend/src/admin/` is organized so each top-level surface owns its own folder:
+
+- `AdminApp.tsx` — slim shell: topbar, nav, route dispatch, providers (~120 lines)
+- `admin-routes.ts` — pure `parseAdminRoute` / `buildAdminPath` helpers
+- `admin-api.ts`, `admin-types.ts`, `admin-helpers.ts` — transport, types, pure helpers
+- `catalog-store.tsx` — React context store: songs/releases/jobs caches + actions
+- `catalog-selectors.ts` — pure selector functions (releasesContainingSong, songsGroupedByRelease, publishReadinessFor)
+- `notifications.tsx` — toast queue
+- `pages/` — `ReleasesPage`, `SongsPage`, `ActivityPage`
+- `releases/` — `ReleaseList`, `ReleaseDetail`, `ReleaseTracklist`, `PublishDrawer`
+- `songs/` — `SongList`, `SongDetail`, `RecordingsTable`, `RecordingEditor`, `AppearsOnList`
+- `activity/` — `EncodingJobsFeed`, `RumDashboard`
+- `shared/` — `ListDetailLayout`, `StickyDetailHeader`, `StatusPill`, `EmptyState`, `ArtworkPicker`, `SongPicker`, `ReleasePicker`, `PickerDialog`, `RowActionMenu`, `ConfirmPopover`, `ToastRegion`, `ErrorBoundary`, `useBusy`, `useJobPolling`, `useSearchParam`, `useArrowKeyList`, `useObjectUrl`, `LoadingState`
+
+Three top-level routes: `/admin/releases`, `/admin/songs`, `/admin/activity`. Legacy `/admin/publish`, `/admin/encoding`, `/admin/stats` are redirected or remapped (publish → drawer on release; encoding/stats → activity views). Selected ids and list filters live in the URL so back/forward and deep links work.
+
 ## Build and deploy
 
 - **Local dev**: `cd frontend && pnpm install && pnpm dev` → http://localhost:3000
