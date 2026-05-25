@@ -297,10 +297,55 @@
     border-radius: 3px;
 }
 
-.admin-toolbar-band {
+.admin-toolbar-band,
+.admin-context-band {
     display: flex;
     align-items: end;
     gap: 0.75rem;
+}
+
+.admin-context-band {
+    align-items: stretch;
+}
+
+.admin-context-card {
+    display: grid;
+    gap: 0.18rem;
+    flex: 1 1 16rem;
+    min-width: 0;
+    border: 1px solid var(--admin-border);
+    border-radius: 2px;
+    background: var(--admin-bg-soft);
+    padding: 0.7rem 0.85rem;
+}
+
+.admin-context-card span,
+.admin-context-card small {
+    color: var(--admin-muted);
+    font-family: var(--admin-font-mono);
+    font-size: 0.68rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.admin-context-card strong {
+    min-width: 0;
+    color: var(--admin-text);
+    font-family: var(--admin-font-display);
+    font-size: 1.05rem;
+    font-style: italic;
+    font-weight: 400;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.admin-context-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 0.65rem;
 }
 
 /* --------------------------------------------------------------
@@ -333,9 +378,19 @@
 }
 
 .admin-panel--album,
+.admin-panel--editor,
 .admin-panel--preview,
 .admin-panel--rum {
     grid-column: 1 / -1;
+}
+
+.admin-panel--editor {
+    grid-column: 1;
+}
+
+.admin-panel--browser {
+    grid-column: 2;
+    align-self: start;
 }
 
 .admin-panel__header {
@@ -484,6 +539,14 @@
     font-family: var(--admin-font-mono);
     font-size: 0.78rem;
     font-weight: 500;
+    overflow-wrap: anywhere;
+}
+
+.admin-artwork-upload__body > small {
+    color: var(--admin-muted);
+    font-family: var(--admin-font-mono);
+    font-size: 0.74rem;
+    line-height: 1.45;
     overflow-wrap: anywhere;
 }
 
@@ -656,11 +719,26 @@
 .admin-object-list button {
     grid-template-columns: minmax(0, 1fr) auto;
 }
+
+.admin-object-list--library button {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .admin-object-list span {
     color: var(--admin-muted);
     font-family: var(--admin-font-mono);
     font-size: 0.74rem;
     min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.admin-object-list small {
+    grid-column: 1 / -1;
+    color: var(--admin-whisper);
+    font-family: var(--admin-font-mono);
+    font-size: 0.68rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -673,13 +751,28 @@
 .admin-track-row--active,
 .admin-track-row:hover,
 .admin-job-row:hover,
-.admin-object-list button:hover {
+.admin-object-list button:hover,
+.admin-object-list button.is-active {
     border-color: var(--admin-moss);
     background: rgba(143, 191, 106, 0.06);
 }
 .admin-track-row--active {
     border-color: var(--admin-gold);
     background: rgba(212, 175, 55, 0.08);
+}
+
+.admin-object-list button.is-active {
+    border-color: var(--admin-gold);
+    background: rgba(212, 175, 55, 0.08);
+}
+
+.admin-empty-state {
+    border: 1px dashed var(--admin-border);
+    border-radius: 2px;
+    color: var(--admin-muted);
+    padding: 0.85rem;
+    font-family: var(--admin-font-mono);
+    font-size: 0.78rem;
 }
 
 /* --------------------------------------------------------------
@@ -1074,6 +1167,8 @@
     }
 
     .admin-panel--album,
+    .admin-panel--editor,
+    .admin-panel--browser,
     .admin-panel--preview,
     .admin-panel--rum {
         grid-column: auto;
@@ -1083,6 +1178,7 @@
 @media (max-width: 720px) {
     .admin-topbar,
     .admin-toolbar-band,
+    .admin-context-band,
     .admin-preview-player,
     .admin-rum-controls {
         align-items: stretch;

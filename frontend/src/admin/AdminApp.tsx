@@ -13,14 +13,13 @@ import {
     RefreshCw,
     Rocket,
     Save,
-    Search,
     Upload,
 } from 'lucide-react';
 import type { ReleaseKind, ReleaseStatus, StableId, Visibility } from '../catalog/media-catalog';
 import { getArtworkUrl } from '../catalog/catalog-client';
 import { getRuntimeConfig } from '../runtime-config';
 import { useAuth } from '../use-auth';
-import { handleInternalLink, useCurrentRoute } from '../music/routes';
+import { handleInternalLink, navigateTo, useCurrentRoute } from '../music/routes';
 import {
     AdminApiError,
     createEncodeJob,
@@ -108,6 +107,25 @@ function titleFromId(id: string, prefix: string): string {
         .filter(Boolean)
         .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
         .join(' ') || 'Untitled';
+}
+
+function uniqueStableId(
+    prefix: 'song' | 'release',
+    value: string,
+    existingIds: Set<string>,
+): StableId {
+    const base = stableId(prefix, value);
+    let candidate = base;
+    let index = 2;
+    while (existingIds.has(candidate)) {
+        candidate = `${base}_${index}` as StableId;
+        index += 1;
+    }
+    return candidate;
+}
+
+function temporaryDraftId(prefix: 'song' | 'release'): StableId {
+    return stableId(prefix, `draft ${Date.now().toString(36)}`);
 }
 
 function newDraftSong(songId: StableId): DraftSong {
@@ -242,6 +260,23 @@ function readArtworkDimensions(file: File): Promise<{ width: number; height: num
     });
 }
 
+function useObjectUrl(file: File | undefined): string | undefined {
+    const [url, setUrl] = useState<string>();
+
+    useEffect(() => {
+        if (!file) {
+            setUrl(undefined);
+            return undefined;
+        }
+
+        const nextUrl = URL.createObjectURL(file);
+        setUrl(nextUrl);
+        return () => URL.revokeObjectURL(nextUrl);
+    }, [file]);
+
+    return url;
+}
+
 function formatPercent(value: number): string {
     return `${Math.round(value * 100)}%`;
 }
@@ -266,7 +301,19 @@ function formatBytes(bytes: number | undefined): string {
 
 function errorMessage(error: unknown): string {
     if (error instanceof AdminApiError) {
-        return `${error.status}${error.code ? ` ${error.code}` : ''}: ${error.message}`;
+        if (error.code === 'write_precondition_failed') {
+            return error.message.includes('already exists')
+                ? 'A draft with that title already exists. Open it from the draft list, or change the title before saving a new draft.'
+                : 'This draft changed after it was loaded. Reload it from the draft list, then apply your edits again.';
+        }
+
+        if (error.status === 304) {
+            return 'The browser returned a cached admin response. Refresh the draft list and try again.';
+        }
+
+        return error.code
+            ? `${error.code}: ${error.message}`
+            : `${error.status}: ${error.message}`;
     }
     return error instanceof Error ? error.message : String(error);
 }
@@ -287,8 +334,8 @@ export default function AdminApp() {
     const [songCache, setSongCache] = useState<Record<string, DraftSong>>({});
     const [release, setRelease] = useState<DraftRelease>();
     const [releaseETag, setReleaseETag] = useState<string>();
-    const [songIdInput, setSongIdInput] = useState('song_untitled');
-    const [releaseIdInput, setReleaseIdInput] = useState('release_demos');
+    const [songIdInput, setSongIdInput] = useState(() => temporaryDraftId('song'));
+    const [releaseIdInput, setReleaseIdInput] = useState(() => temporaryDraftId('release'));
     const [selectedRecordingId, setSelectedRecordingId] = useState<string>();
     const [selectedReleaseTrackId, setSelectedReleaseTrackId] = useState<string>();
     const [releaseArtworkFile, setReleaseArtworkFile] = useState<File>();
@@ -320,9 +367,35 @@ export default function AdminApp() {
     const songObjects = songList?.objects ?? [];
     const releaseObjects = releaseList?.objects ?? [];
     const jobObjects = jobList?.objects ?? [];
+    const songIds = useMemo(() => new Set(songObjects.map((object) => songIdFromKey(object.key))), [songObjects]);
+    const releaseIds = useMemo(() => new Set(releaseObjects.map((object) => releaseIdFromKey(object.key))), [releaseObjects]);
     const currentRecordingJob = latestJob(selectedRecording, jobDetails);
     const releaseArtworkSrc = release?.artwork ? getArtworkUrl(runtimeConfig.mediaBaseUrl, release.artwork) : undefined;
     const songArtworkSrc = song?.artwork ? getArtworkUrl(runtimeConfig.mediaBaseUrl, song.artwork) : undefined;
+    const releaseArtworkPreviewSrc = useObjectUrl(releaseArtworkFile) ?? releaseArtworkSrc;
+    const songArtworkPreviewSrc = useObjectUrl(songArtworkFile) ?? songArtworkSrc;
+    const releaseSaved = Boolean(release && releaseETag);
+    const songSaved = Boolean(song && songETag);
+    const releaseTitleReady = Boolean(release?.title.trim());
+    const songTitleReady = Boolean(song?.title.trim());
+    const canSaveRelease = Boolean(release && releaseTitleReady);
+    const canSaveSong = Boolean(song && songTitleReady);
+    const canUploadReleaseArtwork = Boolean(releaseArtworkFile && releaseSaved);
+    const canUploadSongArtwork = Boolean(songArtworkFile && songSaved);
+    const releaseArtworkStatus = !release
+        ? 'Create or open a release first'
+        : !releaseSaved
+            ? 'Save this release before uploading artwork'
+            : releaseArtworkFile
+                ? releaseArtworkFile.name
+                : release.artwork?.sources[0]?.path ?? 'No artwork uploaded';
+    const songArtworkStatus = !song
+        ? 'Create or open a song first'
+        : !songSaved
+            ? 'Save this song before uploading artwork'
+            : songArtworkFile
+                ? songArtworkFile.name
+                : song.artwork?.sources[0]?.path ?? 'Uses release artwork when empty';
     const publishChecks = [
         { label: 'Release date', ok: Boolean(release?.releaseDate) },
         { label: 'Artwork', ok: Boolean(release?.artwork) },
@@ -448,7 +521,7 @@ export default function AdminApp() {
                 const nextSlug = slugify(String(value));
                 next.slug = nextSlug;
                 if (!songETag && next.recordings.length === 0) {
-                    next.songId = stableId('song', nextSlug);
+                    next.songId = uniqueStableId('song', nextSlug, songIds);
                     setSongIdInput(next.songId);
                 }
             }
@@ -467,7 +540,7 @@ export default function AdminApp() {
                 const nextSlug = slugify(String(value));
                 next.slug = nextSlug;
                 if (!releaseETag && next.tracks.length === 0) {
-                    next.releaseId = stableId('release', nextSlug);
+                    next.releaseId = uniqueStableId('release', nextSlug, releaseIds);
                     setReleaseIdInput(next.releaseId);
                 }
             }
@@ -636,6 +709,7 @@ export default function AdminApp() {
         const result = await getDraftSong(songId);
         setSong(result.data);
         setSongETag(result.eTag);
+        setSongArtworkFile(undefined);
         syncSongForms(result.data);
         await refreshKnownJobs(result.data);
         return result.data;
@@ -645,6 +719,7 @@ export default function AdminApp() {
         const result = await getDraftRelease(releaseId);
         setRelease(result.data);
         setReleaseETag(result.eTag);
+        setReleaseArtworkFile(undefined);
         setPublishResult(undefined);
         syncReleaseForms(result.data);
         const songIds = Array.from(new Set(result.data.tracks.map((track) => track.songId)));
@@ -660,48 +735,73 @@ export default function AdminApp() {
     }
 
     async function createSong(): Promise<void> {
-        const nextSong = newDraftSong(normalizeId('song', songIdInput));
-        const write = await putDraftSong(nextSong);
+        const nextSong = {
+            ...newDraftSong(temporaryDraftId('song')),
+            slug: '',
+            title: '',
+            updatedAt: undefined,
+        };
         setSong(nextSong);
-        setSongETag(write.eTag);
+        setSongETag(undefined);
+        setSongArtworkFile(undefined);
         syncSongForms(nextSong);
-        await refreshLists();
-        setNotice(`Created ${write.key}`);
+        setSelectedRecordingId(undefined);
+        setNotice('Started a new unsaved song.');
+        navigateTo('/admin/songs');
     }
 
     async function createRelease(): Promise<void> {
-        const nextRelease = newDraftRelease(normalizeId('release', releaseIdInput));
-        const write = await putDraftRelease(nextRelease);
+        const nextRelease = {
+            ...newDraftRelease(temporaryDraftId('release')),
+            slug: '',
+            title: '',
+            releaseDate: '',
+            updatedAt: undefined,
+        };
         setRelease(nextRelease);
-        setReleaseETag(write.eTag);
+        setReleaseETag(undefined);
+        setReleaseArtworkFile(undefined);
         syncReleaseForms(nextRelease);
-        await refreshLists();
-        setNotice(`Created ${write.key}`);
+        setSelectedReleaseTrackId(undefined);
+        setPublishResult(undefined);
+        setNotice('Started a new unsaved release.');
+        navigateTo('/admin/releases');
     }
 
     async function saveSong(): Promise<void> {
+        if (!songTitleReady) {
+            throw new Error('Add a song title before saving.');
+        }
         const nextSong = prepareSongForSave();
         const write = await putDraftSong(nextSong, songETag);
         setSong(nextSong);
         setSongETag(write.eTag);
         cacheSong(nextSong);
-        setNotice(`Saved ${write.key}`);
+        await refreshLists();
+        setNotice(`Saved ${nextSong.title}`);
     }
 
     async function saveRelease(): Promise<void> {
+        if (!releaseTitleReady) {
+            throw new Error('Add a release title before saving.');
+        }
         const nextRelease = prepareReleaseForSave();
         const write = await putDraftRelease(nextRelease, releaseETag);
         setRelease(nextRelease);
         setReleaseETag(write.eTag);
-        setNotice(`Saved ${write.key}`);
+        await refreshLists();
+        setNotice(`Saved ${nextRelease.title}`);
     }
 
     async function uploadReleaseArtwork(): Promise<void> {
         if (!releaseArtworkFile) {
             throw new Error('Choose release artwork before uploading.');
         }
+        if (!release || !releaseETag) {
+            throw new Error('Save the release before uploading artwork.');
+        }
 
-        const baseRelease = release ?? newReleaseFromInput();
+        const baseRelease = release;
         const dimensions = await readArtworkDimensions(releaseArtworkFile);
         const upload = await requestArtworkUploadUrl({
             ownerType: 'release',
@@ -729,8 +829,11 @@ export default function AdminApp() {
         if (!songArtworkFile) {
             throw new Error('Choose song artwork before uploading.');
         }
+        if (!song || !songETag) {
+            throw new Error('Save the song before uploading artwork.');
+        }
 
-        const baseSong = song ?? newSongFromInput();
+        const baseSong = song;
         const dimensions = await readArtworkDimensions(songArtworkFile);
         const upload = await requestArtworkUploadUrl({
             ownerType: 'song',
@@ -884,6 +987,79 @@ export default function AdminApp() {
         setNotice(`Published ${result.manifestPath}`);
     }
 
+    function draftObjectLabel(kind: 'song' | 'release', id: string): string {
+        if (kind === 'song') {
+            return songCache[id]?.title || (song?.songId === id ? song.title : '') || titleFromId(id, 'song');
+        }
+
+        return release?.releaseId === id && release.title ? release.title : titleFromId(id, 'release');
+    }
+
+    function draftObjectStatus(kind: 'song' | 'release', id: string): string {
+        if (kind === 'song' && song?.songId === id) {
+            return songETag ? 'Open' : 'Unsaved';
+        }
+        if (kind === 'release' && release?.releaseId === id) {
+            return releaseETag ? 'Open' : 'Unsaved';
+        }
+        return 'Draft';
+    }
+
+    function renderDraftBrowser(kind: 'song' | 'release') {
+        const objects = kind === 'song' ? songObjects : releaseObjects;
+        const activeId = kind === 'song' ? song?.songId : release?.releaseId;
+        const title = kind === 'song' ? 'Songs' : 'Releases';
+        const createLabel = kind === 'song' ? 'New Song' : 'New Release';
+        const createAction = kind === 'song' ? createSong : createRelease;
+
+        return (
+            <section className="admin-panel admin-panel--browser">
+                <div className="admin-panel__header">
+                    <div>
+                        <p className="admin-kicker">Draft Library</p>
+                        <h2>{title}</h2>
+                    </div>
+                    <div className="admin-button-row">
+                        <button className="admin-button" type="button" onClick={() => void withBusy(`Starting ${kind}`, createAction)}>
+                            <Plus /> {createLabel}
+                        </button>
+                        <button className="admin-icon-button" type="button" title={`Refresh ${title.toLowerCase()}`} onClick={() => void withBusy('Refreshing drafts', refreshLists)}>
+                            <RefreshCw />
+                        </button>
+                    </div>
+                </div>
+
+                <div className="admin-object-list admin-object-list--library">
+                    {objects.length === 0 ? (
+                        <div className="admin-empty-state">No draft {title.toLowerCase()} yet.</div>
+                    ) : objects.map((object) => {
+                        const id = kind === 'song' ? songIdFromKey(object.key) : releaseIdFromKey(object.key);
+                        return (
+                            <button
+                                key={object.key}
+                                className={activeId === id ? 'is-active' : undefined}
+                                type="button"
+                                onClick={() => void withBusy(`Opening ${draftObjectLabel(kind, id)}`, async () => {
+                                    if (kind === 'song') {
+                                        await loadSong(id);
+                                        navigateTo('/admin/songs');
+                                    } else {
+                                        await loadRelease(id);
+                                        navigateTo('/admin/releases');
+                                    }
+                                })}
+                            >
+                                <strong>{draftObjectLabel(kind, id)}</strong>
+                                <span>{draftObjectStatus(kind, id)}</span>
+                                <small>{id}</small>
+                            </button>
+                        );
+                    })}
+                </div>
+            </section>
+        );
+    }
+
     useEffect(() => {
         void withBusy('Loading admin data', async () => {
             await Promise.all([refreshLists(), refreshRum()]);
@@ -929,42 +1105,42 @@ export default function AdminApp() {
             {error ? <div className="admin-alert admin-alert--error">{error}</div> : null}
             {notice ? <div className="admin-alert admin-alert--notice">{notice}</div> : null}
 
-            <section className="admin-band admin-toolbar-band">
-                <div className="admin-field admin-field--grow">
-                    <label htmlFor="song-id">Song ID</label>
-                    <input id="song-id" value={songIdInput} onChange={(event) => setSongIdInput(event.currentTarget.value)} />
+            <section className="admin-band admin-context-band">
+                <div className="admin-context-card">
+                    <span>Release</span>
+                    <strong>{release?.title || 'None selected'}</strong>
+                    <small>{release ? (releaseSaved ? 'Saved draft' : 'Unsaved draft') : 'Choose from Releases'}</small>
                 </div>
-                <button className="admin-button" onClick={() => void withBusy('Loading song', () => loadSong(songIdInput))}>
-                    <Search /> Load Song
-                </button>
-                <button className="admin-button" onClick={() => void withBusy('Creating song', createSong)}>
-                    <Plus /> Song
-                </button>
-                <div className="admin-field admin-field--grow">
-                    <label htmlFor="release-id">Release ID</label>
-                    <input id="release-id" value={releaseIdInput} onChange={(event) => setReleaseIdInput(event.currentTarget.value)} />
+                <div className="admin-context-card">
+                    <span>Song</span>
+                    <strong>{song?.title || 'None selected'}</strong>
+                    <small>{song ? (songSaved ? 'Saved draft' : 'Unsaved draft') : 'Choose from Songs'}</small>
                 </div>
-                <button className="admin-button" onClick={() => void withBusy('Loading release', () => loadRelease(releaseIdInput))}>
-                    <Search /> Load Release
-                </button>
-                <button className="admin-button" onClick={() => void withBusy('Creating release', createRelease)}>
-                    <Plus /> Release
-                </button>
-                <button className="admin-icon-button" title="Refresh lists" onClick={() => void withBusy('Refreshing lists', refreshLists)}>
-                    <RefreshCw />
-                </button>
+                <div className="admin-context-actions">
+                    <button className="admin-button" type="button" onClick={() => void withBusy('Starting release', createRelease)}>
+                        <Plus /> New Release
+                    </button>
+                    <button className="admin-button" type="button" onClick={() => void withBusy('Starting song', createSong)}>
+                        <Plus /> New Song
+                    </button>
+                    <button className="admin-icon-button" type="button" title="Refresh drafts" onClick={() => void withBusy('Refreshing drafts', refreshLists)}>
+                        <RefreshCw />
+                    </button>
+                </div>
             </section>
 
             <main className="admin-grid">
                 {adminRoute === 'releases' ? (
                     <>
-                        <section className="admin-panel admin-panel--album">
+                        {renderDraftBrowser('release')}
+
+                        <section className="admin-panel admin-panel--editor">
                             <div className="admin-panel__header">
                                 <div>
                                     <p className="admin-kicker">Release Metadata</p>
-                                    <h2>{release?.title ?? 'No Release Loaded'}</h2>
+                                    <h2>{release?.title || 'New Release'}</h2>
                                 </div>
-                                <button className="admin-button admin-button--primary" disabled={!release} onClick={() => void withBusy('Saving release', saveRelease)}>
+                                <button className="admin-button admin-button--primary" disabled={!canSaveRelease} onClick={() => void withBusy('Saving release', saveRelease)}>
                                     <Save /> Save Release
                                 </button>
                             </div>
@@ -1019,25 +1195,26 @@ export default function AdminApp() {
                             <div className="admin-subgrid">
                                 <div className="admin-artwork-upload">
                                     <div className="admin-artwork-upload__preview">
-                                        {releaseArtworkSrc
-                                            ? <img src={releaseArtworkSrc} alt={release?.artwork?.altText ?? 'Release artwork'} />
+                                        {releaseArtworkPreviewSrc
+                                            ? <img src={releaseArtworkPreviewSrc} alt={release?.artwork?.altText ?? 'Release artwork'} />
                                             : <ListMusic aria-hidden="true" />}
                                     </div>
                                     <div className="admin-artwork-upload__body">
                                         <span>Release Artwork</span>
-                                        <strong>{release?.artwork ? release.artwork.sources[0]?.path : 'No artwork uploaded'}</strong>
+                                        <strong>{release?.title ? `Attached to ${release.title}` : 'No release selected'}</strong>
+                                        <small>{releaseArtworkStatus}</small>
                                         <div className="admin-field">
                                             <label>Upload Image</label>
                                             <input
                                                 type="file"
                                                 accept="image/jpeg,image/png,image/webp,image/avif"
+                                                disabled={!releaseSaved}
                                                 onChange={(event) => {
-                                                    ensureReleaseDraft();
                                                     setReleaseArtworkFile(event.currentTarget.files?.[0]);
                                                 }}
                                             />
                                         </div>
-                                        <button className="admin-button" disabled={!releaseArtworkFile} onClick={() => void withBusy('Uploading release artwork', uploadReleaseArtwork)}>
+                                        <button className="admin-button" disabled={!canUploadReleaseArtwork} onClick={() => void withBusy('Uploading release artwork', uploadReleaseArtwork)}>
                                             <Upload /> Upload Artwork
                                         </button>
                                     </div>
@@ -1099,13 +1276,15 @@ export default function AdminApp() {
 
                 {adminRoute === 'songs' ? (
                     <>
+                        {renderDraftBrowser('song')}
+
                         <section className="admin-panel">
                             <div className="admin-panel__header">
                                 <div>
                                     <p className="admin-kicker">Song</p>
-                                    <h2>{song?.title ?? 'No Song Loaded'}</h2>
+                                    <h2>{song?.title || 'New Song'}</h2>
                                 </div>
-                                <button className="admin-button admin-button--primary" disabled={!song} onClick={() => void withBusy('Saving song', saveSong)}>
+                                <button className="admin-button admin-button--primary" disabled={!canSaveSong} onClick={() => void withBusy('Saving song', saveSong)}>
                                     <Save /> Save Song
                                 </button>
                             </div>
@@ -1140,25 +1319,26 @@ export default function AdminApp() {
                             <div className="admin-subgrid">
                                 <div className="admin-artwork-upload">
                                     <div className="admin-artwork-upload__preview">
-                                        {songArtworkSrc
-                                            ? <img src={songArtworkSrc} alt={song?.artwork?.altText ?? 'Song artwork'} />
+                                        {songArtworkPreviewSrc
+                                            ? <img src={songArtworkPreviewSrc} alt={song?.artwork?.altText ?? 'Song artwork'} />
                                             : <ListMusic aria-hidden="true" />}
                                     </div>
                                     <div className="admin-artwork-upload__body">
                                         <span>Song Artwork</span>
-                                        <strong>{song?.artwork ? song.artwork.sources[0]?.path : 'Falls back to release artwork'}</strong>
+                                        <strong>{song?.title ? `Attached to ${song.title}` : 'No song selected'}</strong>
+                                        <small>{songArtworkStatus}</small>
                                         <div className="admin-field">
                                             <label>Upload Image</label>
                                             <input
                                                 type="file"
                                                 accept="image/jpeg,image/png,image/webp,image/avif"
+                                                disabled={!songSaved}
                                                 onChange={(event) => {
-                                                    ensureSongDraft();
                                                     setSongArtworkFile(event.currentTarget.files?.[0]);
                                                 }}
                                             />
                                         </div>
-                                        <button className="admin-button" disabled={!songArtworkFile} onClick={() => void withBusy('Uploading song artwork', uploadSongArtwork)}>
+                                        <button className="admin-button" disabled={!canUploadSongArtwork} onClick={() => void withBusy('Uploading song artwork', uploadSongArtwork)}>
                                             <Upload /> Upload Artwork
                                         </button>
                                     </div>
@@ -1536,34 +1716,6 @@ export default function AdminApp() {
                     </section>
                 ) : null}
 
-                {adminRoute === 'songs' || adminRoute === 'releases' ? (
-                    <section className="admin-panel">
-                        <div className="admin-panel__header">
-                            <div>
-                                <p className="admin-kicker">Draft Objects</p>
-                                <h2>{adminRoute === 'songs' ? 'Songs' : 'Releases'}</h2>
-                            </div>
-                            <RefreshCw />
-                        </div>
-                        <div className="admin-object-list">
-                            {(adminRoute === 'songs' ? songObjects : releaseObjects).map((object) => {
-                                const id = adminRoute === 'songs' ? songIdFromKey(object.key) : releaseIdFromKey(object.key);
-                                return (
-                                    <button key={object.key} onClick={() => void withBusy(`Loading ${id}`, async () => {
-                                        if (adminRoute === 'songs') {
-                                            await loadSong(id);
-                                        } else {
-                                            await loadRelease(id);
-                                        }
-                                    })}>
-                                        <strong>{id}</strong>
-                                        <span>{object.eTag ?? 'no etag'}</span>
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </section>
-                ) : null}
             </main>
         </div>
     );

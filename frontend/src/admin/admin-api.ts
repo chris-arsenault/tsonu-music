@@ -58,7 +58,8 @@ async function readError(response: Response): Promise<AdminApiError> {
     }
 
     const code = parsed?.error?.code;
-    const message = parsed?.error?.message ?? `${response.status} ${response.statusText}`;
+    const message = parsed?.error?.message
+        ?? (response.statusText || `Request failed with status ${response.status}`);
     return new AdminApiError(message, response.status, code);
 }
 
@@ -76,6 +77,7 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<Api
     const response = await fetch(adminUrl(path), {
         ...init,
         headers,
+        cache: 'no-store',
     });
 
     if (!response.ok) {
