@@ -102,7 +102,13 @@ describe('player analytics', () => {
         });
 
         await vi.waitFor(() => expect(recordEvent).toHaveBeenCalledTimes(1));
-        await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+        // Two fetches: the dataplane reachability probe (HEAD) and the
+        // first-party play analytics POST.
+        await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+        expect(fetch).toHaveBeenCalledWith(
+            'https://dataplane.rum.us-east-1.amazonaws.com/',
+            expect.objectContaining({ method: 'HEAD', mode: 'cors' }),
+        );
 
         expect(AwsRum).toHaveBeenCalledWith(
             'rum-app-id',
@@ -299,5 +305,73 @@ describe('player analytics', () => {
         await Promise.resolve();
         expect(AwsRum).not.toHaveBeenCalled();
         expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    test('does not load the RUM client when the browser would block the dataplane', async () => {
+        vi.resetModules();
+        const AwsRum = vi.fn();
+        vi.doMock('aws-rum-web', () => ({
+            AwsRum,
+        }));
+        vi.stubGlobal('crypto', {
+            randomUUID: () => 'session-test-blocked',
+        });
+        // The dataplane probe rejects (content blocker / Safari ITP). The
+        // first-party analytics POST should still go through unaffected, so
+        // we mock per-URL rather than per-call-order.
+        const fetchMock = vi.fn((input: RequestInfo | URL) => {
+            const url = typeof input === 'string' ? input : input.toString();
+            if (url.startsWith('https://dataplane.rum.')) {
+                return Promise.reject(new TypeError('Fetch API cannot load'));
+            }
+            return Promise.resolve({ ok: true });
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        vi.stubGlobal('window', {
+            __APP_CONFIG__: {
+                app: {
+                    adminApiBaseUrl: 'https://api.music.tsonu.com',
+                    mediaBaseUrl: 'https://media.tsonu.com',
+                    rum: {
+                        enabled: true,
+                        applicationId: 'rum-app-id',
+                        applicationRegion: 'us-east-1',
+                        endpoint: 'https://dataplane.rum.us-east-1.amazonaws.com',
+                        identityPoolId: 'us-east-1:identity-pool',
+                        guestRoleArn: 'arn:aws:iam::123456789012:role/rum',
+                        sessionSampleRate: 1,
+                        telemetries: ['errors'],
+                    },
+                },
+            },
+            location: {
+                pathname: '/',
+                search: '',
+                hash: '',
+            },
+            sessionStorage: createSessionStorage(),
+        });
+
+        const analytics = await import('./player-analytics');
+        analytics.recordPlayStart({
+            releaseId: 'release_so-we-sleep_2026',
+            songId: 'song_so-we-sleep_01',
+            recordingId: 'recording_so-we-sleep_01',
+            trackId: 'track_so-we-sleep_01',
+        });
+
+        await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+        // RUM SDK never loaded — probe rejected.
+        expect(AwsRum).not.toHaveBeenCalled();
+        // Probe fetch was attempted with HEAD + cors.
+        expect(fetchMock).toHaveBeenCalledWith(
+            'https://dataplane.rum.us-east-1.amazonaws.com/',
+            expect.objectContaining({ method: 'HEAD', mode: 'cors' }),
+        );
+        // First-party analytics POST is unaffected.
+        expect(fetchMock).toHaveBeenCalledWith(
+            'https://api.music.tsonu.com/analytics/play',
+            expect.objectContaining({ method: 'POST' }),
+        );
     });
 });

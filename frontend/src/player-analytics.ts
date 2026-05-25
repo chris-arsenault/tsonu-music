@@ -176,6 +176,48 @@ export function hasPrivacyOptOutSignal(): boolean {
     );
 }
 
+/**
+ * Probe the AWS RUM dataplane with a cheap HEAD request before we instantiate
+ * the SDK. If the request is rejected by the browser (content blocker, Safari
+ * ITP, network policy, etc.), `fetch` throws a TypeError and we skip RUM
+ * entirely for the rest of the session — no client construction, no event
+ * queue, no failed beacons spamming the console. A 4xx response means the
+ * endpoint is reachable and CORS works; that's all we need to know.
+ */
+async function isRumDataplaneReachable(endpoint: string): Promise<boolean> {
+    if (typeof fetch === 'undefined' || typeof AbortController === 'undefined') {
+        return true;
+    }
+
+    let probeUrl: string;
+    try {
+        const origin = new URL(endpoint).origin;
+        probeUrl = `${origin}/`;
+    } catch {
+        return true;
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+        await fetch(probeUrl, {
+            method: 'HEAD',
+            mode: 'cors',
+            cache: 'no-store',
+            credentials: 'omit',
+            signal: controller.signal,
+        });
+        // Reaching here means the network roundtrip completed and the CORS
+        // check passed. The actual HTTP status doesn't matter — AWS RUM will
+        // 4xx an unauthenticated HEAD anyway.
+        return true;
+    } catch {
+        return false;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Promise<AwsRumClient | undefined> {
     if (rumClient) {
         return Promise.resolve(rumClient);
@@ -190,36 +232,46 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
         return rumInitializationPromise;
     }
 
-    rumInitializationPromise = import('aws-rum-web').then(({ AwsRum }) => {
-        const rumConfig: AwsRumConfig = {
-            allowCookies: config.rum.allowCookies ?? false,
-            disableAutoPageView: true,
-            enableXRay: false,
-            endpoint: config.rum.endpoint,
-            guestRoleArn: config.rum.guestRoleArn,
-            identityPoolId: config.rum.identityPoolId,
-            sessionSampleRate: clampSampleRate(config.rum.sessionSampleRate),
-            telemetries: config.rum.telemetries as AwsRumConfig['telemetries'],
-        };
+    rumInitializationPromise = (async () => {
+        const reachable = await isRumDataplaneReachable(config.rum.endpoint);
+        if (!reachable) {
+            // Browser is going to block RUM beacons. Don't load the SDK at all;
+            // every recordEvent() call will short-circuit on a null client.
+            return undefined;
+        }
 
-        rumClient = new AwsRum(
-            config.rum.applicationId!,
-            config.rum.applicationVersion ?? '0.1.0',
-            config.rum.applicationRegion!,
-            rumConfig,
-        );
+        try {
+            const { AwsRum } = await import('aws-rum-web');
+            const rumConfig: AwsRumConfig = {
+                allowCookies: config.rum.allowCookies ?? false,
+                disableAutoPageView: true,
+                enableXRay: false,
+                endpoint: config.rum.endpoint,
+                guestRoleArn: config.rum.guestRoleArn,
+                identityPoolId: config.rum.identityPoolId,
+                sessionSampleRate: clampSampleRate(config.rum.sessionSampleRate),
+                telemetries: config.rum.telemetries as AwsRumConfig['telemetries'],
+            };
 
-        rumClient.addSessionAttributes({
-            siteSessionId: getSiteSessionId(),
-            playbackSessionId: getPlaybackSessionId(),
-        });
+            rumClient = new AwsRum(
+                config.rum.applicationId!,
+                config.rum.applicationVersion ?? '0.1.0',
+                config.rum.applicationRegion!,
+                rumConfig,
+            );
 
-        return rumClient;
-    }).catch((error: unknown) => {
-        console.warn('CloudWatch RUM initialization failed.', error);
-        rumClient = undefined;
-        return undefined;
-    });
+            rumClient.addSessionAttributes({
+                siteSessionId: getSiteSessionId(),
+                playbackSessionId: getPlaybackSessionId(),
+            });
+
+            return rumClient;
+        } catch (error) {
+            console.warn('CloudWatch RUM initialization failed.', error);
+            rumClient = undefined;
+            return undefined;
+        }
+    })();
 
     return rumInitializationPromise;
 }
