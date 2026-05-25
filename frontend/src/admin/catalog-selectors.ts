@@ -84,7 +84,8 @@ export function unreleasedSongs(
 export function publishReadinessFor(
     release: DraftRelease | undefined,
     songs: Record<string, DraftSong>,
-    jobs: Record<string, EncodeJob>,
+    // jobs accepted for signature compatibility with older callers; not used.
+    _jobs?: Record<string, EncodeJob>,
 ): PublishReadiness {
     const checks: PublishCheck[] = [
         { label: 'Release date', ok: Boolean(release?.releaseDate) },
@@ -96,10 +97,12 @@ export function publishReadinessFor(
     for (const track of release?.tracks ?? []) {
         const song = songs[track.songId];
         const recording = song?.recordings.find((r) => r.recordingId === track.recordingId);
-        const latestId = recording?.encodeJobIds?.[recording.encodeJobIds.length - 1];
-        const latestJob = latestId ? jobs[latestId] : undefined;
-        if (latestId && latestJob?.status === 'succeeded') {
-            trackJobIds[track.trackId] = latestId;
+        // The recording is the source of truth: a present encodeOutput means a
+        // successful encode has been stamped onto it by the encoder. No need
+        // to consult job-status records — they're an operational artifact.
+        const output = recording?.encodeOutput;
+        if (output?.jobId) {
+            trackJobIds[track.trackId] = output.jobId;
         } else {
             allEncoded = false;
         }

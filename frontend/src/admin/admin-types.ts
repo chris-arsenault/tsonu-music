@@ -14,6 +14,28 @@ export interface DraftSourceMaster {
     channels?: number;
 }
 
+export interface RecordingEncodeAsset {
+    assetId: StableId;
+    path: string;
+    mimeType: string;
+    fileSizeBytes?: number;
+    checksumSha256?: string;
+}
+
+/**
+ * Snapshot of the most recent successful encode, stamped onto the recording
+ * by the encoder. When present, the recording is publishable; the EncodeJob
+ * record exists only for operational history.
+ */
+export interface RecordingEncodeOutput {
+    jobId: StableId;
+    bucket: string;
+    prefix: string;
+    finishedAt: string;
+    assets: RecordingEncodeAsset[];
+    durationSeconds?: number;
+}
+
 export interface DraftRecording {
     recordingId: StableId;
     slug: string;
@@ -27,6 +49,7 @@ export interface DraftRecording {
     description?: string;
     sourceMaster?: DraftSourceMaster;
     encodeJobIds?: StableId[];
+    encodeOutput?: RecordingEncodeOutput;
 }
 
 export interface DraftSong {

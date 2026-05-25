@@ -400,7 +400,9 @@ mod helper_tests {
     }
     impl std::error::Error for ChainErr {
         fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.source.as_deref().map(|err| err as &dyn std::error::Error)
+            self.source
+                .as_deref()
+                .map(|err| err as &dyn std::error::Error)
         }
     }
 

@@ -3,19 +3,30 @@ use crate::{
     draft_release_key, draft_song_key, ApiError, DraftRelease, DraftSong, ObjectList,
     ObjectSummary, WriteResult,
 };
+use encode_contract::RecordingEncodeOutput;
 use serde_json::Value;
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
-use tracing::error;
+use tracing::{error, warn};
 
 pub async fn get_draft_song(pool: &PgPool, song_id: &str) -> Result<DbJsonObject, ApiError> {
-    get_json_object(
+    let object = get_json_object(
         pool,
         "SELECT document::text AS document, revision FROM music_draft_songs WHERE song_id = $1",
         song_id,
         || ApiError::not_found(format!("draft song not found: {song_id}")),
     )
-    .await
+    .await?;
+
+    // Backfill: any recording with encodeJobIds but no encodeOutput predates the
+    // recording-as-source-of-truth model. Look up the most recent succeeded job
+    // for that recording, stamp it back onto the recording, and return the
+    // freshly-patched document. Idempotent — once stamped, the lookup is skipped.
+    let Some(patched) = backfill_recording_encode_outputs(pool, song_id, &object.text).await?
+    else {
+        return Ok(object);
+    };
+    Ok(patched)
 }
 
 pub async fn get_draft_release(pool: &PgPool, release_id: &str) -> Result<DbJsonObject, ApiError> {
@@ -356,4 +367,156 @@ fn draft_release_fields(release_id: &str, document: &Value) -> Result<DraftRelea
 
 fn revision_etag(revision: i64) -> String {
     format!("\"rev-{revision}\"")
+}
+
+/// For each recording on the song that has `encodeJobIds` but no `encodeOutput`,
+/// resolve the latest succeeded job from `music_encode_jobs` and stamp the
+/// snapshot onto the recording. Persists the patch in a single statement and
+/// returns the updated document. If nothing needed patching, returns `None`.
+async fn backfill_recording_encode_outputs(
+    pool: &PgPool,
+    song_id: &str,
+    document_text: &str,
+) -> Result<Option<DbJsonObject>, ApiError> {
+    let parsed: DraftSong = match serde_json::from_str(document_text) {
+        Ok(value) => value,
+        Err(_) => return Ok(None), // get_draft_song's own validation will surface this
+    };
+
+    let candidates: Vec<(String, Vec<String>)> = parsed
+        .recordings
+        .iter()
+        .filter(|recording| {
+            recording.encode_output.is_none() && !recording.encode_job_ids.is_empty()
+        })
+        .map(|recording| {
+            (
+                recording.recording_id.clone(),
+                recording.encode_job_ids.clone(),
+            )
+        })
+        .collect();
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let mut outputs: Vec<(String, RecordingEncodeOutput)> = Vec::new();
+    for (recording_id, job_ids) in candidates {
+        // Walk from most-recently-appended back; the first succeeded job wins.
+        for job_id in job_ids.into_iter().rev() {
+            match super::get_encode_job(pool, &job_id).await {
+                Ok(job) => {
+                    if job.recording_id != recording_id {
+                        continue;
+                    }
+                    if let Some(output) = RecordingEncodeOutput::from_succeeded_job(&job) {
+                        outputs.push((recording_id, output));
+                        break;
+                    }
+                }
+                Err(api_err) => {
+                    if api_err.status == lambda_http::http::StatusCode::NOT_FOUND {
+                        continue;
+                    }
+                    warn!(
+                        song_id,
+                        recording_id,
+                        job_id,
+                        message = %api_err.message,
+                        "Failed to load encode job during backfill"
+                    );
+                    continue;
+                }
+            }
+        }
+    }
+
+    if outputs.is_empty() {
+        return Ok(None);
+    }
+
+    let updated_revision = apply_recording_encode_outputs(pool, song_id, &outputs).await?;
+
+    let Some(refreshed) = sqlx::query(
+        "SELECT document::text AS document, revision FROM music_draft_songs WHERE song_id = $1",
+    )
+    .bind(song_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(map_db_read_error)?
+    else {
+        return Ok(None);
+    };
+
+    tracing::info!(
+        song_id,
+        stamped = outputs.len(),
+        revision = updated_revision,
+        "Backfilled missing recording.encodeOutput from succeeded jobs"
+    );
+
+    Ok(Some(DbJsonObject {
+        text: refreshed.get::<String, _>("document"),
+        e_tag: Some(revision_etag(refreshed.get::<i64, _>("revision"))),
+    }))
+}
+
+async fn apply_recording_encode_outputs(
+    pool: &PgPool,
+    song_id: &str,
+    outputs: &[(String, RecordingEncodeOutput)],
+) -> Result<i64, ApiError> {
+    let mut tx = pool.begin().await.map_err(map_db_write_error)?;
+    for (recording_id, output) in outputs {
+        let output_json =
+            serde_json::to_value(output).map_err(|err| sqlx::Error::Encode(Box::new(err)));
+        let output_json = match output_json {
+            Ok(value) => value,
+            Err(err) => {
+                return Err(map_db_write_error(err));
+            }
+        };
+
+        sqlx::query(
+            "UPDATE music_draft_songs
+             SET document = jsonb_set(
+                     document,
+                     '{recordings}',
+                     COALESCE(
+                         (
+                             SELECT jsonb_agg(
+                                 CASE WHEN recording->>'recordingId' = $2
+                                     THEN recording || jsonb_build_object('encodeOutput', $3::jsonb)
+                                     ELSE recording
+                                 END
+                             )
+                             FROM jsonb_array_elements(document->'recordings') AS recording
+                         ),
+                         '[]'::jsonb
+                     ),
+                     true
+                 ),
+                 revision = revision + 1,
+                 updated_at = now()
+             WHERE song_id = $1
+               AND document->'recordings' @> jsonb_build_array(
+                   jsonb_build_object('recordingId', $2)
+               )",
+        )
+        .bind(song_id)
+        .bind(recording_id)
+        .bind(Json(output_json))
+        .execute(&mut *tx)
+        .await
+        .map_err(map_db_write_error)?;
+    }
+    let revision: i64 = sqlx::query("SELECT revision FROM music_draft_songs WHERE song_id = $1")
+        .bind(song_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(map_db_read_error)?
+        .get("revision");
+    tx.commit().await.map_err(map_db_write_error)?;
+    Ok(revision)
 }

@@ -1,3 +1,4 @@
+use encode_contract::RecordingEncodeOutput;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,6 +46,12 @@ pub(crate) struct DraftRecording {
     pub(crate) source_master: Option<DraftSourceMaster>,
     #[serde(default)]
     pub(crate) encode_job_ids: Vec<String>,
+    /// Snapshot of the most recent successful encode, stamped onto the
+    /// recording by the encoder Lambda. When present, this is the
+    /// authoritative answer to "is this recording publishable?" — the
+    /// `EncodeJob` record exists only for operational history.
+    #[serde(default)]
+    pub(crate) encode_output: Option<RecordingEncodeOutput>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

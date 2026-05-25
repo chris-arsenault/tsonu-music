@@ -179,6 +179,39 @@ pub struct AssetRef {
     pub checksum_sha256: Option<String>,
 }
 
+/// Snapshot of an encode result, stamped onto a `DraftRecording` once the
+/// corresponding `EncodeJob` reaches `Succeeded`. The recording itself
+/// becomes the source of truth for "is this publishable?" — code that
+/// asks the question should not need to read the job record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingEncodeOutput {
+    pub job_id: String,
+    pub bucket: String,
+    pub prefix: String,
+    pub finished_at: String,
+    pub assets: Vec<AssetRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_seconds: Option<f64>,
+}
+
+impl RecordingEncodeOutput {
+    pub fn from_succeeded_job(job: &EncodeJob) -> Option<Self> {
+        if job.status != EncodeStatus::Succeeded {
+            return None;
+        }
+        let finished_at = job.finished_at.clone()?;
+        Some(Self {
+            job_id: job.job_id.clone(),
+            bucket: job.output.bucket.clone(),
+            prefix: job.output.prefix.clone(),
+            finished_at,
+            assets: job.output.assets.clone(),
+            duration_seconds: job.metadata.as_ref().map(|m| m.duration_seconds),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FfmpegDetails {
@@ -358,6 +391,54 @@ mod tests {
             .assets
             .iter()
             .any(|asset| asset.path.ends_with("/metadata.json")));
+    }
+
+    #[test]
+    fn recording_encode_output_only_from_succeeded_jobs() {
+        let output = planned_output("job_x_encode_20260523t195530z", "media", false);
+        let mut job = EncodeJob::queued(
+            "job_x_encode_20260523t195530z".to_string(),
+            "song_x".to_string(),
+            "recording_x".to_string(),
+            "2026-05-23T19:55:30Z".to_string(),
+            ObjectRef {
+                bucket: "masters".to_string(),
+                key: "masters/recording_x/source.wav".to_string(),
+                version_id: None,
+                etag: None,
+            },
+            output.clone(),
+        );
+
+        // Not yet succeeded
+        assert!(RecordingEncodeOutput::from_succeeded_job(&job).is_none());
+
+        job.mark_running("2026-05-23T19:55:31Z".to_string());
+        assert!(RecordingEncodeOutput::from_succeeded_job(&job).is_none());
+
+        job.mark_succeeded(
+            "2026-05-23T19:55:42Z".to_string(),
+            output.clone(),
+            EncodeMetadata {
+                duration_seconds: 215.4,
+                codec_name: "pcm_s16le".to_string(),
+                sample_rate_hz: 48_000,
+                channels: 2,
+                loudness: None,
+            },
+            FfmpegDetails {
+                version: Some("ffmpeg 6.0".to_string()),
+                args: vec!["-i".to_string()],
+            },
+        );
+
+        let snapshot = RecordingEncodeOutput::from_succeeded_job(&job).expect("succeeded job");
+        assert_eq!(snapshot.job_id, "job_x_encode_20260523t195530z");
+        assert_eq!(snapshot.bucket, "media");
+        assert_eq!(snapshot.prefix, output.prefix);
+        assert_eq!(snapshot.finished_at, "2026-05-23T19:55:42Z");
+        assert_eq!(snapshot.assets, output.assets);
+        assert_eq!(snapshot.duration_seconds, Some(215.4));
     }
 
     #[test]

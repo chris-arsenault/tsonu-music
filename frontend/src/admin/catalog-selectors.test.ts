@@ -10,7 +10,6 @@ import type {
     DraftRecording,
     DraftRelease,
     DraftSong,
-    EncodeJob,
 } from './admin-types';
 import type { CatalogArtwork, StableId } from '../catalog/media-catalog';
 
@@ -56,20 +55,6 @@ function recording(id: StableId, encodeJobIds: StableId[] = []): DraftRecording 
         versionType: 'studio_master',
         explicit: false,
         encodeJobIds,
-    };
-}
-
-function job(id: StableId, status: EncodeJob['status']): EncodeJob {
-    return {
-        schemaVersion: 1,
-        entityType: 'encodeJob',
-        jobId: id,
-        songId: stableId('song', 'any'),
-        recordingId: stableId('recording', 'any'),
-        status,
-        requestedAt: '2026-01-01T00:00:00Z',
-        input: { bucket: 'b', key: 'k' },
-        output: { bucket: 'b', prefix: 'p', assets: [] },
     };
 }
 
@@ -149,24 +134,42 @@ describe('publishReadinessFor', () => {
     const songId = stableId('song', 'halcyon');
     const recordingId = stableId('recording', 'halcyon-master');
     const jobId = stableId('asset', 'job-success');
-    const songs: Record<string, DraftSong> = {
+
+    function recordingWithOutput(id: StableId, encodeJobId: StableId): DraftRecording {
+        return {
+            ...recording(id, [encodeJobId]),
+            encodeOutput: {
+                jobId: encodeJobId,
+                bucket: 'media',
+                prefix: `draft/encodes/${encodeJobId}`,
+                finishedAt: '2026-05-23T20:00:00Z',
+                assets: [],
+            },
+        };
+    }
+
+    const readySongs: Record<string, DraftSong> = {
+        [songId]: song({
+            songId,
+            title: 'Halcyon',
+            recordings: [recordingWithOutput(recordingId, jobId)],
+        }),
+    };
+    const notEncodedSongs: Record<string, DraftSong> = {
         [songId]: song({
             songId,
             title: 'Halcyon',
             recordings: [recording(recordingId, [jobId])],
         }),
     };
-    const jobs: Record<string, EncodeJob> = {
-        [jobId]: job(jobId, 'succeeded'),
-    };
 
-    test('all checks pass for a ready release', () => {
+    test('all checks pass when every track recording has encodeOutput', () => {
         const ready = release({
             releaseId: 'release_ready' as StableId,
             artwork,
             tracks: [{ trackId: 't1' as StableId, songId, recordingId, discNumber: 1, trackNumber: 1, slug: 'h', title: 'Halcyon' }],
         });
-        const result = publishReadinessFor(ready, songs, jobs);
+        const result = publishReadinessFor(ready, readySongs);
         expect(result.canPublish).toBe(true);
         expect(result.checks.map((c) => `${c.label}:${c.ok}`)).toEqual([
             'Release date:true',
@@ -182,21 +185,18 @@ describe('publishReadinessFor', () => {
             releaseId: 'release_noart' as StableId,
             tracks: [{ trackId: 't1' as StableId, songId, recordingId, discNumber: 1, trackNumber: 1, slug: 'h', title: 'Halcyon' }],
         });
-        const result = publishReadinessFor(noArt, songs, jobs);
+        const result = publishReadinessFor(noArt, readySongs);
         expect(result.canPublish).toBe(false);
         expect(result.checks.find((c) => c.label === 'Artwork')?.ok).toBe(false);
     });
 
-    test('blocks when a track has no successful encode', () => {
-        const notDoneJob: Record<string, EncodeJob> = {
-            [jobId]: job(jobId, 'running'),
-        };
+    test('blocks when a track recording has no encodeOutput, regardless of job-status state', () => {
         const rel = release({
             releaseId: 'release_running' as StableId,
             artwork,
             tracks: [{ trackId: 't1' as StableId, songId, recordingId, discNumber: 1, trackNumber: 1, slug: 'h', title: 'Halcyon' }],
         });
-        const result = publishReadinessFor(rel, songs, notDoneJob);
+        const result = publishReadinessFor(rel, notEncodedSongs);
         expect(result.canPublish).toBe(false);
         expect(result.checks.find((c) => c.label === 'Successful encodes')?.ok).toBe(false);
         expect(result.trackJobIds).toEqual({});
@@ -204,7 +204,7 @@ describe('publishReadinessFor', () => {
 
     test('blocks when there are zero tracks', () => {
         const empty = release({ releaseId: 'release_empty' as StableId, artwork });
-        const result = publishReadinessFor(empty, songs, jobs);
+        const result = publishReadinessFor(empty, readySongs);
         expect(result.canPublish).toBe(false);
         expect(result.checks.find((c) => c.label === 'Tracks')?.ok).toBe(false);
     });

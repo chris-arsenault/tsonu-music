@@ -490,6 +490,7 @@ fn sample_recording(encode_job_ids: Vec<String>) -> DraftRecording {
             channels: None,
         }),
         encode_job_ids,
+        encode_output: None,
     }
 }
 
