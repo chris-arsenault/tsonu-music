@@ -182,13 +182,11 @@ module "admin_api" {
         },
         {
           # Public first-party analytics beacon (backend play counts).
-          # Browsers send a CORS preflight (OPTIONS) before the POST, so
-          # both methods must be allowed at the ALB layer; the Lambda
-          # decorates every response — including 204 OPTIONS replies —
-          # with the right Access-Control-Allow-* headers.
+          # OPTIONS preflight is handled globally by the Ahara CORS layer;
+          # only the POST itself needs to be routed to the Lambda.
           priority      = 242
           paths         = ["/analytics", "/analytics/*"]
-          methods       = ["POST", "OPTIONS"]
+          methods       = ["POST"]
           authenticated = false
         },
         {
