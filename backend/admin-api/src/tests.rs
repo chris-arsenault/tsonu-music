@@ -3,7 +3,6 @@ use crate::http::{parse_path, ApiPath};
 use encode_contract::{
     planned_output, EncodeJob, EncodeMetadata, EncodeStatus, ObjectRef, ACTION_ENCODE_TRACK,
 };
-use lambda_http::http::{HeaderMap, HeaderValue, StatusCode};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -326,34 +325,6 @@ fn validates_draft_documents() {
     assert!(validate_draft_song_document("song_opening-dream", &song).is_ok());
     assert!(validate_draft_release_document("release_so-we-sleep", &release).is_ok());
     assert!(validate_draft_song_document("song_other", &song).is_err());
-}
-
-#[test]
-fn rejects_ambiguous_or_missing_write_preconditions() {
-    let mut headers = HeaderMap::new();
-    assert_eq!(
-        write_preconditions(&headers).unwrap_err().status,
-        StatusCode::PRECONDITION_REQUIRED
-    );
-
-    headers.insert("if-match", HeaderValue::from_static("\"etag\""));
-    headers.insert("if-none-match", HeaderValue::from_static("*"));
-
-    let error = write_preconditions(&headers).unwrap_err();
-    assert_eq!(error.status, StatusCode::BAD_REQUEST);
-    assert_eq!(error.code, "ambiguous_precondition");
-}
-
-#[test]
-fn requires_delete_precondition() {
-    let mut headers = HeaderMap::new();
-    assert_eq!(
-        delete_precondition(&headers).unwrap_err().status,
-        StatusCode::PRECONDITION_REQUIRED
-    );
-
-    headers.insert("if-match", HeaderValue::from_static("\"rev-1\""));
-    assert_eq!(delete_precondition(&headers).unwrap(), "\"rev-1\"");
 }
 
 #[test]

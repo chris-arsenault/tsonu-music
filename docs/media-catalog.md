@@ -10,15 +10,21 @@ Shared Ahara RDS stores catalog metadata in:
 
 ```text
 music_draft_albums
+music_draft_releases
+music_draft_songs
 music_encode_jobs
 music_published_albums
+music_published_releases
+music_published_release_tracks
+music_published_songs
 music_published_tracks
 ```
 
-Draft album edits update `music_draft_albums` with optimistic revision ETags.
-Encode status is mirrored into `music_encode_jobs`. Publishing copies generated
-media into immutable public S3 prefixes, writes the public album/track snapshot
-tables, marks the draft album published, and invalidates the frontend catalog
+Draft song and release edits are written through normal admin REST endpoints:
+`POST` creates drafts, `PUT` updates drafts, and `DELETE` removes drafts. Encode
+status is mirrored into `music_encode_jobs`. Publishing copies generated media
+into immutable public S3 prefixes, writes the public release/song/track snapshot
+tables, marks the draft release published, and invalidates the frontend catalog
 routes.
 
 ## S3 Layout
@@ -43,8 +49,9 @@ S3 version IDs, or upload ETags. Those fields are draft/admin-only.
 
 ## Write Discipline
 
-- Use stable IDs for albums, releases, tracks, assets, and jobs.
-- Write draft metadata through the admin API using the previous revision ETag.
+- Use stable IDs for songs, releases, recordings, tracks, assets, and jobs.
+- Write draft metadata through the admin API's JSON REST endpoints; do not use
+  HTTP conditional request headers for draft writes.
 - Publish by writing fresh immutable media paths and public RDS snapshots.
 - Keep generated media paths versioned or content-addressed so public playback
   paths do not need replacement.

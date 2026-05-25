@@ -101,67 +101,25 @@ pub async fn list_draft_releases(pool: &PgPool) -> Result<ObjectList, ApiError> 
     })
 }
 
-pub async fn put_draft_song(
+pub async fn create_draft_song(
     pool: &PgPool,
     song_id: &str,
     document: &Value,
-    if_match: Option<&str>,
-    if_none_match: Option<&str>,
 ) -> Result<WriteResult, ApiError> {
     let song = draft_song_fields(song_id, document)?;
-    let revision = if if_none_match == Some("*") {
-        let row = sqlx::query(
-            "INSERT INTO music_draft_songs (song_id, slug, title, document)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (song_id) DO NOTHING
-             RETURNING revision",
-        )
-        .bind(song_id)
-        .bind(&song.slug)
-        .bind(&song.title)
-        .bind(Json(document.clone()))
-        .fetch_optional(pool)
-        .await
-        .map_err(map_db_write_error)?;
-
-        row.map(|row| row.get("revision")).ok_or_else(|| {
-            ApiError::precondition_failed(
-                "write_precondition_failed",
-                "draft song already exists; fetch the current revision and retry",
-            )
-        })?
-    } else if let Some(if_match) = if_match {
-        let expected_revision = parse_revision_etag(if_match)?;
-        let row = sqlx::query(
-            "UPDATE music_draft_songs
-             SET slug = $2,
-                 title = $3,
-                 document = $4,
-                 revision = revision + 1,
-                 updated_at = now()
-             WHERE song_id = $1 AND revision = $5
-             RETURNING revision",
-        )
-        .bind(song_id)
-        .bind(&song.slug)
-        .bind(&song.title)
-        .bind(Json(document.clone()))
-        .bind(expected_revision)
-        .fetch_optional(pool)
-        .await
-        .map_err(map_db_write_error)?;
-
-        row.map(|row| row.get("revision")).ok_or_else(|| {
-            ApiError::precondition_failed(
-                "write_precondition_failed",
-                "draft song revision changed; fetch the latest revision and retry",
-            )
-        })?
-    } else {
-        return Err(ApiError::precondition_required(
-            "send If-None-Match: * to create or If-Match: <revision> to update",
-        ));
-    };
+    let revision = sqlx::query(
+        "INSERT INTO music_draft_songs (song_id, slug, title, document)
+         VALUES ($1, $2, $3, $4)
+         RETURNING revision",
+    )
+    .bind(song_id)
+    .bind(&song.slug)
+    .bind(&song.title)
+    .bind(Json(document.clone()))
+    .fetch_one(pool)
+    .await
+    .map_err(map_db_write_error)?
+    .get("revision");
 
     Ok(WriteResult {
         bucket: "rds".to_string(),
@@ -171,108 +129,79 @@ pub async fn put_draft_song(
     })
 }
 
-pub async fn delete_draft_song(
+pub async fn update_draft_song(
     pool: &PgPool,
     song_id: &str,
-    if_match: &str,
+    document: &Value,
 ) -> Result<WriteResult, ApiError> {
-    let expected_revision = parse_revision_etag(if_match)?;
-    let result = sqlx::query("DELETE FROM music_draft_songs WHERE song_id = $1 AND revision = $2")
+    let song = draft_song_fields(song_id, document)?;
+    let row = sqlx::query(
+        "UPDATE music_draft_songs
+         SET slug = $2,
+             title = $3,
+             document = $4,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE song_id = $1
+         RETURNING revision",
+    )
+    .bind(song_id)
+    .bind(&song.slug)
+    .bind(&song.title)
+    .bind(Json(document.clone()))
+    .fetch_optional(pool)
+    .await
+    .map_err(map_db_write_error)?
+    .ok_or_else(|| ApiError::not_found(format!("draft song not found: {song_id}")))?;
+
+    Ok(WriteResult {
+        bucket: "rds".to_string(),
+        key: draft_song_key(song_id),
+        e_tag: Some(revision_etag(row.get("revision"))),
+        version_id: None,
+    })
+}
+
+pub async fn delete_draft_song(pool: &PgPool, song_id: &str) -> Result<(), ApiError> {
+    let result = sqlx::query("DELETE FROM music_draft_songs WHERE song_id = $1")
         .bind(song_id)
-        .bind(expected_revision)
         .execute(pool)
         .await
         .map_err(map_db_write_error)?;
 
     if result.rows_affected() == 0 {
-        return Err(ApiError::precondition_failed(
-            "delete_precondition_failed",
-            "draft song revision changed or no longer exists; refresh the draft list and retry",
-        ));
+        return Err(ApiError::not_found(format!(
+            "draft song not found: {song_id}"
+        )));
     }
 
-    Ok(WriteResult {
-        bucket: "rds".to_string(),
-        key: draft_song_key(song_id),
-        e_tag: None,
-        version_id: None,
-    })
+    Ok(())
 }
 
-pub async fn put_draft_release(
+pub async fn create_draft_release(
     pool: &PgPool,
     release_id: &str,
     document: &Value,
-    if_match: Option<&str>,
-    if_none_match: Option<&str>,
 ) -> Result<WriteResult, ApiError> {
     let release = draft_release_fields(release_id, document)?;
-    let revision = if if_none_match == Some("*") {
-        let row = sqlx::query(
-            "INSERT INTO music_draft_releases
-                (release_id, slug, title, release_kind, release_status, release_date, publish_state, document)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             ON CONFLICT (release_id) DO NOTHING
-             RETURNING revision",
-        )
-        .bind(release_id)
-        .bind(&release.slug)
-        .bind(&release.title)
-        .bind(&release.release_kind)
-        .bind(&release.release_status)
-        .bind(&release.release_date)
-        .bind(&release.publish_state)
-        .bind(Json(document.clone()))
-        .fetch_optional(pool)
-        .await
-        .map_err(map_db_write_error)?;
-
-        row.map(|row| row.get("revision")).ok_or_else(|| {
-            ApiError::precondition_failed(
-                "write_precondition_failed",
-                "draft release already exists; fetch the current revision and retry",
-            )
-        })?
-    } else if let Some(if_match) = if_match {
-        let expected_revision = parse_revision_etag(if_match)?;
-        let row = sqlx::query(
-            "UPDATE music_draft_releases
-             SET slug = $2,
-                 title = $3,
-                 release_kind = $4,
-                 release_status = $5,
-                 release_date = $6,
-                 publish_state = $7,
-                 document = $8,
-                 revision = revision + 1,
-                 updated_at = now()
-             WHERE release_id = $1 AND revision = $9
-             RETURNING revision",
-        )
-        .bind(release_id)
-        .bind(&release.slug)
-        .bind(&release.title)
-        .bind(&release.release_kind)
-        .bind(&release.release_status)
-        .bind(&release.release_date)
-        .bind(&release.publish_state)
-        .bind(Json(document.clone()))
-        .bind(expected_revision)
-        .fetch_optional(pool)
-        .await
-        .map_err(map_db_write_error)?;
-
-        row.map(|row| row.get("revision")).ok_or_else(|| {
-            ApiError::precondition_failed(
-                "write_precondition_failed",
-                "draft release revision changed; fetch the latest revision and retry",
-            )
-        })?
-    } else {
-        return Err(ApiError::precondition_required(
-            "send If-None-Match: * to create or If-Match: <revision> to update",
-        ));
-    };
+    let revision = sqlx::query(
+        "INSERT INTO music_draft_releases
+            (release_id, slug, title, release_kind, release_status, release_date, publish_state, document)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING revision",
+    )
+    .bind(release_id)
+    .bind(&release.slug)
+    .bind(&release.title)
+    .bind(&release.release_kind)
+    .bind(&release.release_status)
+    .bind(&release.release_date)
+    .bind(&release.publish_state)
+    .bind(Json(document.clone()))
+    .fetch_one(pool)
+    .await
+    .map_err(map_db_write_error)?
+    .get("revision");
 
     Ok(WriteResult {
         bucket: "rds".to_string(),
@@ -282,33 +211,61 @@ pub async fn put_draft_release(
     })
 }
 
-pub async fn delete_draft_release(
+pub async fn update_draft_release(
     pool: &PgPool,
     release_id: &str,
-    if_match: &str,
+    document: &Value,
 ) -> Result<WriteResult, ApiError> {
-    let expected_revision = parse_revision_etag(if_match)?;
-    let result =
-        sqlx::query("DELETE FROM music_draft_releases WHERE release_id = $1 AND revision = $2")
-            .bind(release_id)
-            .bind(expected_revision)
-            .execute(pool)
-            .await
-            .map_err(map_db_write_error)?;
-
-    if result.rows_affected() == 0 {
-        return Err(ApiError::precondition_failed(
-            "delete_precondition_failed",
-            "draft release revision changed or no longer exists; refresh the draft list and retry",
-        ));
-    }
+    let release = draft_release_fields(release_id, document)?;
+    let row = sqlx::query(
+        "UPDATE music_draft_releases
+         SET slug = $2,
+             title = $3,
+             release_kind = $4,
+             release_status = $5,
+             release_date = $6,
+             publish_state = $7,
+             document = $8,
+             revision = revision + 1,
+             updated_at = now()
+         WHERE release_id = $1
+         RETURNING revision",
+    )
+    .bind(release_id)
+    .bind(&release.slug)
+    .bind(&release.title)
+    .bind(&release.release_kind)
+    .bind(&release.release_status)
+    .bind(&release.release_date)
+    .bind(&release.publish_state)
+    .bind(Json(document.clone()))
+    .fetch_optional(pool)
+    .await
+    .map_err(map_db_write_error)?
+    .ok_or_else(|| ApiError::not_found(format!("draft release not found: {release_id}")))?;
 
     Ok(WriteResult {
         bucket: "rds".to_string(),
         key: draft_release_key(release_id),
-        e_tag: None,
+        e_tag: Some(revision_etag(row.get("revision"))),
         version_id: None,
     })
+}
+
+pub async fn delete_draft_release(pool: &PgPool, release_id: &str) -> Result<(), ApiError> {
+    let result = sqlx::query("DELETE FROM music_draft_releases WHERE release_id = $1")
+        .bind(release_id)
+        .execute(pool)
+        .await
+        .map_err(map_db_write_error)?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found(format!(
+            "draft release not found: {release_id}"
+        )));
+    }
+
+    Ok(())
 }
 
 fn draft_song_fields(song_id: &str, document: &Value) -> Result<DraftSong, ApiError> {
@@ -399,27 +356,4 @@ fn draft_release_fields(release_id: &str, document: &Value) -> Result<DraftRelea
 
 fn revision_etag(revision: i64) -> String {
     format!("\"rev-{revision}\"")
-}
-
-fn parse_revision_etag(value: &str) -> Result<i64, ApiError> {
-    let normalized = value
-        .trim()
-        .trim_start_matches("W/")
-        .trim_matches('"')
-        .strip_prefix("rev-")
-        .ok_or_else(|| {
-            ApiError::bad_request(
-                "invalid_revision",
-                "If-Match must be the revision ETag returned by the endpoint",
-            )
-        })?
-        .parse::<i64>()
-        .map_err(|_| {
-            ApiError::bad_request(
-                "invalid_revision",
-                "If-Match must be the revision ETag returned by the endpoint",
-            )
-        })?;
-
-    Ok(normalized)
 }

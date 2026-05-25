@@ -89,19 +89,17 @@ impl AppState {
         cors_origin: Option<String>,
     ) {
         let headers = response.headers_mut();
+        headers.insert(
+            "cache-control",
+            HeaderValue::from_static("no-store, max-age=0"),
+        );
         if let Some(origin) = cors_origin {
             if let Ok(origin) = HeaderValue::from_str(&origin) {
                 headers.insert("access-control-allow-origin", origin);
                 headers.insert("vary", HeaderValue::from_static("Origin"));
                 headers.insert(
-                    "access-control-expose-headers",
-                    HeaderValue::from_static("ETag, X-S3-Version-Id"),
-                );
-                headers.insert(
                     "access-control-allow-headers",
-                    HeaderValue::from_static(
-                        "Authorization, Content-Type, If-Match, If-None-Match",
-                    ),
+                    HeaderValue::from_static("Authorization, Content-Type"),
                 );
                 headers.insert(
                     "access-control-allow-methods",

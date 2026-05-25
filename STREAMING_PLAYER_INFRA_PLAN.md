@@ -53,7 +53,7 @@ Terraform in `infrastructure/terraform`.
    - Store published public snapshots in `music_published_albums` and `music_published_tracks`.
    - Include stable IDs for albums, tracks, releases, assets, and encode jobs.
    - Include album title, slug, release date, artwork, credits, track order, duration, explicit status, and available playback formats.
-   - Use optimistic revision ETags for draft edits.
+   - Use normal JSON REST endpoints for draft create, update, and delete.
 
 6. Build the admin API behind the shared ALB.
    - Use `ahara-tf-patterns/modules/alb-api`.

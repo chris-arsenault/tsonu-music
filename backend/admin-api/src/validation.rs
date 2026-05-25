@@ -1,61 +1,7 @@
-use crate::{ApiError, DraftSourceMaster, UploadFormat, WritePreconditions};
+use crate::{ApiError, DraftSourceMaster, UploadFormat};
 use chrono::{DateTime, SecondsFormat, Utc};
 use lambda_http::http::HeaderMap;
 use serde_json::Value;
-
-pub(crate) fn write_preconditions(headers: &HeaderMap) -> Result<WritePreconditions, ApiError> {
-    let if_match = optional_header(headers, "if-match")?;
-    let if_none_match = optional_header(headers, "if-none-match")?;
-
-    if if_match.is_some() && if_none_match.is_some() {
-        return Err(ApiError::bad_request(
-            "ambiguous_precondition",
-            "send either If-Match or If-None-Match, not both",
-        ));
-    }
-
-    if if_match.is_none() && if_none_match.is_none() {
-        return Err(ApiError::precondition_required(
-            "send If-None-Match: * to create or If-Match: <etag> to update",
-        ));
-    }
-
-    if let Some(value) = &if_none_match {
-        if value != "*" {
-            return Err(ApiError::bad_request(
-                "invalid_if_none_match",
-                "If-None-Match must be *",
-            ));
-        }
-    }
-
-    Ok(WritePreconditions {
-        if_match,
-        if_none_match,
-    })
-}
-
-pub(crate) fn delete_precondition(headers: &HeaderMap) -> Result<String, ApiError> {
-    optional_header(headers, "if-match")?
-        .ok_or_else(|| ApiError::precondition_required("send If-Match: <etag> to delete a draft"))
-}
-
-pub(crate) fn optional_header(
-    headers: &HeaderMap,
-    name: &'static str,
-) -> Result<Option<String>, ApiError> {
-    headers
-        .get(name)
-        .map(|value| {
-            value.to_str().map(str::to_string).map_err(|_| {
-                ApiError::bad_request(
-                    "invalid_header",
-                    format!("{name} contains non-UTF-8 header data"),
-                )
-            })
-        })
-        .transpose()
-}
 
 pub(crate) fn header_str<'a>(headers: &'a HeaderMap, name: &'static str) -> Option<&'a str> {
     headers.get(name).and_then(|value| value.to_str().ok())

@@ -50,18 +50,6 @@ impl ApiError {
         )
     }
 
-    pub(crate) fn precondition_required(message: impl Into<String>) -> Self {
-        Self::new(
-            StatusCode::PRECONDITION_REQUIRED,
-            "precondition_required",
-            message,
-        )
-    }
-
-    pub(crate) fn precondition_failed(code: &'static str, message: impl Into<String>) -> Self {
-        Self::new(StatusCode::PRECONDITION_FAILED, code, message)
-    }
-
     pub(crate) fn to_response(&self) -> Result<Response<Body>, Error> {
         let body = json!({
             "error": {

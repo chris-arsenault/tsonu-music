@@ -4,12 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug)]
-pub(crate) struct WritePreconditions {
-    pub(crate) if_match: Option<String>,
-    pub(crate) if_none_match: Option<String>,
-}
-
-#[derive(Debug)]
 pub(crate) struct UploadFormat<'a> {
     pub(crate) extension: &'a str,
     pub(crate) format: &'a str,

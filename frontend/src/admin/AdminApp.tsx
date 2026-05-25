@@ -24,6 +24,8 @@ import { handleInternalLink, navigateTo, useCurrentRoute } from '../music/routes
 import {
     AdminApiError,
     createEncodeJob,
+    createDraftRelease,
+    createDraftSong,
     deleteDraftRelease,
     deleteDraftSong,
     getDraftRelease,
@@ -34,10 +36,10 @@ import {
     listDraftSongs,
     listJobs,
     publishRelease,
-    putDraftRelease,
-    putDraftSong,
     requestArtworkUploadUrl,
     requestUploadUrl,
+    updateDraftRelease,
+    updateDraftSong,
     uploadArtworkFile,
     uploadMasterFile,
 } from './admin-api';
@@ -334,18 +336,8 @@ function formatBytes(bytes: number | undefined): string {
 
 function errorMessage(error: unknown): string {
     if (error instanceof AdminApiError) {
-        if (error.code === 'write_precondition_failed') {
-            return error.message.includes('already exists')
-                ? 'A draft with that title already exists. Open it from the draft list, or change the title before saving a new draft.'
-                : 'This draft changed after it was loaded. Reload it from the draft list, then apply your edits again.';
-        }
-
-        if (error.code === 'delete_precondition_failed') {
-            return 'This draft changed or was already deleted. Refresh the draft list and try again.';
-        }
-
-        if (error.status === 304) {
-            return 'The browser returned a cached admin response. Refresh the draft list and try again.';
+        if (error.status === 409) {
+            return 'A draft with that title already exists. Open it from the draft list, or change the title before saving a new draft.';
         }
 
         return error.code
@@ -367,10 +359,10 @@ export default function AdminApp() {
     const [releaseList, setReleaseList] = useState<ObjectList>();
     const [jobList, setJobList] = useState<ObjectList>();
     const [song, setSong] = useState<DraftSong>();
-    const [songETag, setSongETag] = useState<string>();
+    const [savedSongId, setSavedSongId] = useState<string>();
     const [songCache, setSongCache] = useState<Record<string, DraftSong>>({});
     const [release, setRelease] = useState<DraftRelease>();
-    const [releaseETag, setReleaseETag] = useState<string>();
+    const [savedReleaseId, setSavedReleaseId] = useState<string>();
     const [releaseCache, setReleaseCache] = useState<Record<string, DraftRelease>>({});
     const [songIdInput, setSongIdInput] = useState(() => temporaryDraftId('song'));
     const [releaseIdInput, setReleaseIdInput] = useState(() => temporaryDraftId('release'));
@@ -428,14 +420,16 @@ export default function AdminApp() {
     const songArtworkSrc = song?.artwork ? getArtworkUrl(runtimeConfig.mediaBaseUrl, song.artwork) : undefined;
     const releaseArtworkPreviewSrc = useObjectUrl(releaseArtworkFile) ?? releaseArtworkSrc;
     const songArtworkPreviewSrc = useObjectUrl(songArtworkFile) ?? songArtworkSrc;
-    const releaseSaved = Boolean(release && releaseETag);
-    const songSaved = Boolean(song && songETag);
+    const releaseSaved = Boolean(release && savedReleaseId === release.releaseId);
+    const songSaved = Boolean(song && savedSongId === song.songId);
     const releaseTitleReady = Boolean(release?.title.trim());
     const songTitleReady = Boolean(song?.title.trim());
     const canSaveRelease = Boolean(release && releaseTitleReady);
     const canSaveSong = Boolean(song && songTitleReady);
     const canUploadReleaseArtwork = Boolean(releaseArtworkFile && releaseSaved);
     const canUploadSongArtwork = Boolean(songArtworkFile && songSaved);
+    const canUploadMaster = Boolean(songSaved && selectedRecording && masterFile);
+    const canStartEncode = Boolean(songSaved && selectedRecording?.sourceMaster);
     const releaseArtworkStatus = !release
         ? 'Create or open a release first'
         : !releaseSaved
@@ -450,6 +444,18 @@ export default function AdminApp() {
             : songArtworkFile
                 ? songArtworkFile.name
                 : song.artwork?.sources[0]?.path ?? 'Uses release artwork when empty';
+    const masterFileStatus = !song
+        ? 'Open a song'
+        : !songSaved
+            ? 'Save this song'
+            : !selectedRecording
+                ? 'Choose a recording'
+                : masterFile
+                    ? masterFile.name
+                    : selectedRecording.sourceMaster?.key ?? 'Choose WAV, AIFF, or FLAC';
+    const latestEncodingStatus = currentRecordingJob
+        ? `${currentRecordingJob.status}: ${currentRecordingJob.jobId}`
+        : latestJobId(selectedRecording) ?? 'No encoding run';
     const publishChecks = [
         { label: 'Release date', ok: Boolean(release?.releaseDate) },
         { label: 'Artwork', ok: Boolean(release?.artwork) },
@@ -485,6 +491,30 @@ export default function AdminApp() {
 
     function cacheRelease(nextRelease: DraftRelease): void {
         setReleaseCache((current) => ({ ...current, [nextRelease.releaseId]: nextRelease }));
+    }
+
+    function removeDraftSongFromLists(songId: string): void {
+        setSongList((current) => current ? {
+            ...current,
+            objects: current.objects.filter((object) => songIdFromKey(object.key) !== songId),
+        } : current);
+        setSongCache((current) => {
+            const next = { ...current };
+            delete next[songId];
+            return next;
+        });
+    }
+
+    function removeDraftReleaseFromLists(releaseId: string): void {
+        setReleaseList((current) => current ? {
+            ...current,
+            objects: current.objects.filter((object) => releaseIdFromKey(object.key) !== releaseId),
+        } : current);
+        setReleaseCache((current) => {
+            const next = { ...current };
+            delete next[releaseId];
+            return next;
+        });
     }
 
     function newSongFromInput(): DraftSong {
@@ -578,7 +608,7 @@ export default function AdminApp() {
             if (key === 'title') {
                 const nextSlug = slugify(String(value));
                 next.slug = nextSlug;
-                if (!songETag && next.recordings.length === 0) {
+                if (!songSaved && next.recordings.length === 0) {
                     next.songId = uniqueStableId('song', nextSlug, songIds);
                     setSongIdInput(next.songId);
                 }
@@ -597,7 +627,7 @@ export default function AdminApp() {
             if (key === 'title') {
                 const nextSlug = slugify(String(value));
                 next.slug = nextSlug;
-                if (!releaseETag && next.tracks.length === 0) {
+                if (!releaseSaved && next.tracks.length === 0) {
                     next.releaseId = uniqueStableId('release', nextSlug, releaseIds);
                     setReleaseIdInput(next.releaseId);
                 }
@@ -770,14 +800,14 @@ export default function AdminApp() {
         const [loadedSongs, loadedReleases] = await Promise.all([
             Promise.all([...listedSongIds].map(async (songId) => {
                 try {
-                    return (await getDraftSong(songId)).data;
+                    return await getDraftSong(songId);
                 } catch {
                     return undefined;
                 }
             })),
             Promise.all([...listedReleaseIds].map(async (releaseId) => {
                 try {
-                    return (await getDraftRelease(releaseId)).data;
+                    return await getDraftRelease(releaseId);
                 } catch {
                     return undefined;
                 }
@@ -817,28 +847,28 @@ export default function AdminApp() {
 
     async function loadSong(songId: string): Promise<DraftSong> {
         const result = await getDraftSong(songId);
-        setSong(result.data);
-        setSongETag(result.eTag);
+        setSong(result);
+        setSavedSongId(result.songId);
         setSongArtworkFile(undefined);
-        syncSongForms(result.data);
-        await refreshKnownJobs(result.data);
-        return result.data;
+        syncSongForms(result);
+        await refreshKnownJobs(result);
+        return result;
     }
 
     async function loadRelease(releaseId: string): Promise<void> {
         const result = await getDraftRelease(releaseId);
-        setRelease(result.data);
-        setReleaseETag(result.eTag);
+        setRelease(result);
+        setSavedReleaseId(result.releaseId);
         setReleaseArtworkFile(undefined);
         setPublishResult(undefined);
-        cacheRelease(result.data);
-        syncReleaseForms(result.data);
-        const songIds = Array.from(new Set(result.data.tracks.map((track) => track.songId)));
+        cacheRelease(result);
+        syncReleaseForms(result);
+        const songIds = Array.from(new Set(result.tracks.map((track) => track.songId)));
         for (const trackSongId of songIds) {
             try {
                 const loaded = await getDraftSong(trackSongId);
-                cacheSong(loaded.data);
-                await refreshKnownJobs(loaded.data);
+                cacheSong(loaded);
+                await refreshKnownJobs(loaded);
             } catch {
                 // Publish validation will surface missing songs with the specific track context.
             }
@@ -853,7 +883,7 @@ export default function AdminApp() {
             updatedAt: undefined,
         };
         setSong(nextSong);
-        setSongETag(undefined);
+        setSavedSongId(undefined);
         setSongArtworkFile(undefined);
         syncSongForms(nextSong);
         setSelectedRecordingId(undefined);
@@ -870,7 +900,7 @@ export default function AdminApp() {
             updatedAt: undefined,
         };
         setRelease(nextRelease);
-        setReleaseETag(undefined);
+        setSavedReleaseId(undefined);
         setReleaseArtworkFile(undefined);
         syncReleaseForms(nextRelease);
         setSelectedReleaseTrackId(undefined);
@@ -884,9 +914,13 @@ export default function AdminApp() {
             throw new Error('Add a song title before saving.');
         }
         const nextSong = prepareSongForSave();
-        const write = await putDraftSong(nextSong, songETag);
+        if (songSaved) {
+            await updateDraftSong(nextSong);
+        } else {
+            await createDraftSong(nextSong);
+        }
         setSong(nextSong);
-        setSongETag(write.eTag);
+        setSavedSongId(nextSong.songId);
         cacheSong(nextSong);
         await refreshLists();
         setNotice(`Saved ${nextSong.title}`);
@@ -897,9 +931,13 @@ export default function AdminApp() {
             throw new Error('Add a release title before saving.');
         }
         const nextRelease = prepareReleaseForSave();
-        const write = await putDraftRelease(nextRelease, releaseETag);
+        if (releaseSaved) {
+            await updateDraftRelease(nextRelease);
+        } else {
+            await createDraftRelease(nextRelease);
+        }
         setRelease(nextRelease);
-        setReleaseETag(write.eTag);
+        setSavedReleaseId(nextRelease.releaseId);
         cacheRelease(nextRelease);
         await refreshLists();
         setNotice(`Saved ${nextRelease.title}`);
@@ -910,10 +948,11 @@ export default function AdminApp() {
             return;
         }
 
-        if (!songETag) {
+        if (!songSaved) {
             setSong(undefined);
             setSongArtworkFile(undefined);
             setSelectedRecordingId(undefined);
+            setSavedSongId(undefined);
             setNotice('Discarded unsaved song.');
             return;
         }
@@ -922,18 +961,16 @@ export default function AdminApp() {
             return;
         }
 
-        await deleteDraftSong(song.songId, songETag);
-        setSongCache((current) => {
-            const next = { ...current };
-            delete next[song.songId];
-            return next;
-        });
+        const deletedSongId = song.songId;
+        const deletedTitle = song.title;
+        await deleteDraftSong(deletedSongId);
+        removeDraftSongFromLists(deletedSongId);
         setSong(undefined);
-        setSongETag(undefined);
+        setSavedSongId(undefined);
         setSongArtworkFile(undefined);
         setSelectedRecordingId(undefined);
         await refreshLists();
-        setNotice(`Deleted ${song.title}`);
+        setNotice(`Deleted ${deletedTitle}`);
     }
 
     async function deleteCurrentRelease(): Promise<void> {
@@ -941,10 +978,11 @@ export default function AdminApp() {
             return;
         }
 
-        if (!releaseETag) {
+        if (!releaseSaved) {
             setRelease(undefined);
             setReleaseArtworkFile(undefined);
             setSelectedReleaseTrackId(undefined);
+            setSavedReleaseId(undefined);
             setPublishResult(undefined);
             setNotice('Discarded unsaved release.');
             return;
@@ -954,19 +992,17 @@ export default function AdminApp() {
             return;
         }
 
-        await deleteDraftRelease(release.releaseId, releaseETag);
-        setReleaseCache((current) => {
-            const next = { ...current };
-            delete next[release.releaseId];
-            return next;
-        });
+        const deletedReleaseId = release.releaseId;
+        const deletedTitle = release.title;
+        await deleteDraftRelease(deletedReleaseId);
+        removeDraftReleaseFromLists(deletedReleaseId);
         setRelease(undefined);
-        setReleaseETag(undefined);
+        setSavedReleaseId(undefined);
         setReleaseArtworkFile(undefined);
         setSelectedReleaseTrackId(undefined);
         setPublishResult(undefined);
         await refreshLists();
-        setNotice(`Deleted ${release.title}`);
+        setNotice(`Deleted ${deletedTitle}`);
     }
 
     function clearReleaseArtwork(): void {
@@ -1031,7 +1067,7 @@ export default function AdminApp() {
         if (!releaseArtworkFile) {
             throw new Error('Choose release artwork before uploading.');
         }
-        if (!release || !releaseETag) {
+        if (!release || !releaseSaved) {
             throw new Error('Save the release before uploading artwork.');
         }
 
@@ -1052,9 +1088,9 @@ export default function AdminApp() {
             ...baseRelease,
             artwork: upload.artwork,
         });
-        const write = await putDraftRelease(nextRelease, releaseETag);
+        await updateDraftRelease(nextRelease);
         setRelease(nextRelease);
-        setReleaseETag(write.eTag);
+        setSavedReleaseId(nextRelease.releaseId);
         cacheRelease(nextRelease);
         setReleaseArtworkFile(undefined);
         setNotice(`Uploaded artwork for ${nextRelease.title}`);
@@ -1064,7 +1100,7 @@ export default function AdminApp() {
         if (!songArtworkFile) {
             throw new Error('Choose song artwork before uploading.');
         }
-        if (!song || !songETag) {
+        if (!song || !songSaved) {
             throw new Error('Save the song before uploading artwork.');
         }
 
@@ -1085,9 +1121,9 @@ export default function AdminApp() {
             ...baseSong,
             artwork: upload.artwork,
         });
-        const write = await putDraftSong(nextSong, songETag);
+        await updateDraftSong(nextSong);
         setSong(nextSong);
-        setSongETag(write.eTag);
+        setSavedSongId(nextSong.songId);
         cacheSong(nextSong);
         setSongArtworkFile(undefined);
         setNotice(`Uploaded artwork for ${nextSong.title}`);
@@ -1108,7 +1144,7 @@ export default function AdminApp() {
     }
 
     async function uploadMaster(): Promise<void> {
-        if (!song || !songETag || !selectedRecording || !masterFile) {
+        if (!song || !songSaved || !selectedRecording || !masterFile) {
             throw new Error('Select a recording and a source master file.');
         }
 
@@ -1128,16 +1164,16 @@ export default function AdminApp() {
             ...song,
             recordings: song.recordings.map((recording) => recording.recordingId === nextRecording.recordingId ? nextRecording : recording),
         };
-        const write = await putDraftSong(nextSong, songETag);
+        await updateDraftSong(nextSong);
         setSong(nextSong);
-        setSongETag(write.eTag);
+        setSavedSongId(nextSong.songId);
         cacheSong(nextSong);
         setMasterFile(undefined);
         setNotice(`Uploaded ${masterFile.name}`);
     }
 
     async function startEncode(): Promise<void> {
-        if (!song || !songETag || !selectedRecording) {
+        if (!song || !songSaved || !selectedRecording) {
             throw new Error('Select a recording before starting an encode.');
         }
         if (!selectedRecording.sourceMaster?.bucket || !selectedRecording.sourceMaster.key) {
@@ -1158,9 +1194,9 @@ export default function AdminApp() {
             ...song,
             recordings: song.recordings.map((recording) => recording.recordingId === nextRecording.recordingId ? nextRecording : recording),
         };
-        const write = await putDraftSong(nextSong, songETag);
+        await updateDraftSong(nextSong);
         setSong(nextSong);
-        setSongETag(write.eTag);
+        setSavedSongId(nextSong.songId);
         cacheSong(nextSong);
         setSelectedRecordingId(nextRecording.recordingId);
         setJobDetails((current) => ({ ...current, [response.job.jobId]: response.job }));
@@ -1184,8 +1220,8 @@ export default function AdminApp() {
             .filter((songId) => !songCache[songId]);
         for (const songId of missingSongIds) {
             const loaded = await getDraftSong(songId);
-            cacheSong(loaded.data);
-            await refreshKnownJobs(loaded.data);
+            cacheSong(loaded);
+            await refreshKnownJobs(loaded);
         }
     }
 
@@ -1218,7 +1254,7 @@ export default function AdminApp() {
             publishState: 'published' as const,
         };
         setRelease(nextRelease);
-        setReleaseETag(result.draftWrite.eTag);
+        setSavedReleaseId(nextRelease.releaseId);
         cacheRelease(nextRelease);
         setNotice(`Published ${result.manifestPath}`);
     }
@@ -1233,10 +1269,10 @@ export default function AdminApp() {
 
     function draftObjectStatus(kind: 'song' | 'release', id: string): string {
         if (kind === 'song' && song?.songId === id) {
-            return songETag ? 'Open' : 'Unsaved';
+            return songSaved ? 'Open' : 'Unsaved';
         }
         if (kind === 'release' && release?.releaseId === id) {
-            return releaseETag ? 'Open' : 'Unsaved';
+            return releaseSaved ? 'Open' : 'Unsaved';
         }
         return 'Draft';
     }
@@ -1342,23 +1378,39 @@ export default function AdminApp() {
             {notice ? <div className="admin-alert admin-alert--notice">{notice}</div> : null}
 
             <section className="admin-band admin-context-band">
-                <div className="admin-context-card">
-                    <span>Release</span>
-                    <strong>{release?.title || 'None selected'}</strong>
-                    <small>{release ? (releaseSaved ? 'Saved draft' : 'Unsaved draft') : 'Choose from Releases'}</small>
-                </div>
+                {adminRoute !== 'encoding' ? (
+                    <div className="admin-context-card">
+                        <span>Release</span>
+                        <strong>{release?.title || 'None selected'}</strong>
+                        <small>{release ? (releaseSaved ? 'Saved draft' : 'Unsaved draft') : 'Choose from Releases'}</small>
+                    </div>
+                ) : null}
                 <div className="admin-context-card">
                     <span>Song</span>
                     <strong>{song?.title || 'None selected'}</strong>
                     <small>{song ? (songSaved ? 'Saved draft' : 'Unsaved draft') : 'Choose from Songs'}</small>
                 </div>
+                {adminRoute === 'encoding' ? (
+                    <div className="admin-context-card">
+                        <span>Recording</span>
+                        <strong>{selectedRecording?.title || 'None selected'}</strong>
+                        <small>{selectedRecording?.versionType ?? 'Choose from Recordings'}</small>
+                    </div>
+                ) : null}
                 <div className="admin-context-actions">
-                    <button className="admin-button" type="button" onClick={() => void withBusy('Starting release', createRelease)}>
-                        <Plus /> New Release
-                    </button>
+                    {adminRoute !== 'encoding' ? (
+                        <button className="admin-button" type="button" onClick={() => void withBusy('Starting release', createRelease)}>
+                            <Plus /> New Release
+                        </button>
+                    ) : null}
                     <button className="admin-button" type="button" onClick={() => void withBusy('Starting song', createSong)}>
                         <Plus /> New Song
                     </button>
+                    {adminRoute === 'encoding' ? (
+                        <button className="admin-button" type="button" disabled={!song} onClick={() => void withBusy('Adding recording', addRecording)}>
+                            <Plus /> Recording
+                        </button>
+                    ) : null}
                     <button className="admin-icon-button" type="button" title="Refresh drafts" onClick={() => void withBusy('Refreshing drafts', refreshLists)}>
                         <RefreshCw />
                     </button>
@@ -1378,7 +1430,7 @@ export default function AdminApp() {
                                 </div>
                                 <div className="admin-button-row">
                                     <button className="admin-button admin-button--danger" disabled={!release} onClick={() => void withBusy('Deleting release', deleteCurrentRelease)}>
-                                        <Trash2 /> {releaseETag ? 'Delete' : 'Discard'}
+                                        <Trash2 /> {releaseSaved ? 'Delete' : 'Discard'}
                                     </button>
                                     <button className="admin-button admin-button--primary" disabled={!canSaveRelease} onClick={() => void withBusy('Saving release', saveRelease)}>
                                         <Save /> Save Release
@@ -1550,7 +1602,7 @@ export default function AdminApp() {
                                 </div>
                                 <div className="admin-button-row">
                                     <button className="admin-button admin-button--danger" disabled={!song} onClick={() => void withBusy('Deleting song', deleteCurrentSong)}>
-                                        <Trash2 /> {songETag ? 'Delete' : 'Discard'}
+                                        <Trash2 /> {songSaved ? 'Delete' : 'Discard'}
                                     </button>
                                     <button className="admin-button admin-button--primary" disabled={!canSaveSong} onClick={() => void withBusy('Saving song', saveSong)}>
                                         <Save /> Save Song
@@ -1699,37 +1751,69 @@ export default function AdminApp() {
 
                 {adminRoute === 'encoding' ? (
                     <>
+                        {renderDraftBrowser('song')}
+
                         <section className="admin-panel">
                             <div className="admin-panel__header">
                                 <div>
-                                    <p className="admin-kicker">Masters And Encoding</p>
-                                    <h2>{selectedRecording?.title ?? 'Select A Recording'}</h2>
+                                    <p className="admin-kicker">Source Master</p>
+                                    <h2>{song?.title ?? 'Select A Song'}</h2>
                                 </div>
                                 <FileAudio />
                             </div>
 
                             <div className="admin-source-master">
                                 <div>
-                                    <span>Source Master</span>
-                                    <strong>{selectedRecording?.sourceMaster?.key ?? 'none'}</strong>
+                                    <span>Song</span>
+                                    <strong>{song?.title ?? 'None selected'}</strong>
                                 </div>
                                 <div>
-                                    <span>Latest Job</span>
-                                    <strong>{latestJobId(selectedRecording) ?? 'none'}</strong>
+                                    <span>Recording</span>
+                                    <strong>{selectedRecording?.title ?? 'None selected'}</strong>
                                 </div>
                                 <div>
-                                    <span>Status</span>
-                                    <strong className={jobClass(currentRecordingJob?.status)}>{currentRecordingJob?.status ?? 'no job'}</strong>
+                                    <span>Master</span>
+                                    <strong>{masterFileStatus}</strong>
                                 </div>
+                                <div>
+                                    <span>Latest Encoding Run</span>
+                                    <strong className={jobClass(currentRecordingJob?.status)}>{latestEncodingStatus}</strong>
+                                </div>
+                            </div>
+
+                            <div className="admin-track-list admin-track-list--compact">
+                                {recordings.length === 0 ? (
+                                    <div className="admin-empty-state">No recordings for this song.</div>
+                                ) : recordings.map((recording) => {
+                                    const job = latestJob(recording, jobDetails);
+                                    return (
+                                        <button
+                                            key={recording.recordingId}
+                                            className={`admin-track-row ${selectedRecording?.recordingId === recording.recordingId ? 'admin-track-row--active' : ''}`}
+                                            type="button"
+                                            onClick={() => setSelectedRecordingId(recording.recordingId)}
+                                        >
+                                            <span><Disc3 aria-hidden="true" /></span>
+                                            <strong>{recording.title}</strong>
+                                            <span>{recording.versionType}</span>
+                                            <span className={jobClass(job?.status)}>{job?.status ?? 'not encoded'}</span>
+                                        </button>
+                                    );
+                                })}
                             </div>
 
                             <div className="admin-form-grid admin-form-grid--compact">
                                 <div className="admin-field admin-field--wide">
                                     <label>Lossless Master</label>
-                                    <input type="file" accept=".wav,.aif,.aiff,.flac,audio/wav,audio/flac" onChange={(event) => setMasterFile(event.currentTarget.files?.[0])} />
+                                    <input
+                                        type="file"
+                                        accept=".wav,.wave,.aif,.aiff,.flac,audio/wav,audio/wave,audio/x-wav,audio/aiff,audio/x-aiff,audio/flac"
+                                        disabled={!songSaved || !selectedRecording}
+                                        onChange={(event) => setMasterFile(event.currentTarget.files?.[0])}
+                                    />
                                 </div>
                                 <div className="admin-button-row admin-field--wide">
-                                    <button className="admin-button" disabled={!selectedRecording || !masterFile} onClick={() => void withBusy('Uploading master', uploadMaster)}>
+                                    <button className="admin-button" disabled={!canUploadMaster} onClick={() => void withBusy('Uploading master', uploadMaster)}>
                                         <Upload /> Upload Master
                                     </button>
                                 </div>
@@ -1742,11 +1826,11 @@ export default function AdminApp() {
                                     <input value={requestedBy} onChange={(event) => setRequestedBy(event.currentTarget.value)} />
                                 </div>
                                 <div className="admin-button-row admin-field--wide">
-                                    <button className="admin-button admin-button--primary" disabled={!selectedRecording?.sourceMaster} onClick={() => void withBusy('Starting encode', startEncode)}>
+                                    <button className="admin-button admin-button--primary" disabled={!canStartEncode} onClick={() => void withBusy('Starting encode', startEncode)}>
                                         <CloudUpload /> Start Encode
                                     </button>
                                     <button className="admin-button" disabled={!song} onClick={() => void withBusy('Refreshing jobs', () => refreshKnownJobs())}>
-                                        <RefreshCw /> Status
+                                        <RefreshCw /> Refresh Jobs
                                     </button>
                                 </div>
                             </div>
@@ -1755,8 +1839,8 @@ export default function AdminApp() {
                         <section className="admin-panel">
                             <div className="admin-panel__header">
                                 <div>
-                                    <p className="admin-kicker">Encode Status</p>
-                                    <h2>Jobs</h2>
+                                    <p className="admin-kicker">Encoding Runs</p>
+                                    <h2>Recent Jobs</h2>
                                 </div>
                                 <button className="admin-icon-button" title="Refresh jobs" onClick={() => void withBusy('Refreshing jobs', refreshLists)}>
                                     <RefreshCw />

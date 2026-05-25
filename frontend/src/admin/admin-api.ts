@@ -15,17 +15,12 @@ import type {
     WriteResult,
 } from './admin-types';
 
-interface ApiJsonResult<T> {
-    data: T;
-    eTag?: string;
-    versionId?: string;
-}
-
 interface ApiErrorBody {
     error?: {
         code?: string;
         message?: string;
     };
+    message?: string;
 }
 
 export class AdminApiError extends Error {
@@ -59,11 +54,12 @@ async function readError(response: Response): Promise<AdminApiError> {
 
     const code = parsed?.error?.code;
     const message = parsed?.error?.message
+        ?? parsed?.message
         ?? (response.statusText || `Request failed with status ${response.status}`);
     return new AdminApiError(message, response.status, code);
 }
 
-async function requestJson<T>(path: string, init: RequestInit = {}): Promise<ApiJsonResult<T>> {
+async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     const token = await getIdToken();
 
@@ -85,11 +81,14 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<Api
     }
 
     const text = await response.text();
-    return {
-        data: text ? JSON.parse(text) as T : undefined as T,
-        eTag: response.headers.get('etag') ?? undefined,
-        versionId: response.headers.get('x-s3-version-id') ?? undefined,
-    };
+    return text.trim() ? JSON.parse(text) as T : undefined as T;
+}
+
+async function requestEmpty(path: string, init: RequestInit): Promise<void> {
+    const response = await requestJson<void>(path, init);
+    if (response !== undefined) {
+        throw new AdminApiError('Expected an empty response.', 502, 'unexpected_response_body');
+    }
 }
 
 function jsonInit(method: string, body: unknown, headers?: HeadersInit): RequestInit {
@@ -103,71 +102,71 @@ function jsonInit(method: string, body: unknown, headers?: HeadersInit): Request
 }
 
 export async function listDraftSongs(): Promise<ObjectList> {
-    return (await requestJson<ObjectList>('/admin/songs')).data;
+    return requestJson<ObjectList>('/admin/songs');
 }
 
-export async function getDraftSong(songId: string): Promise<ApiJsonResult<DraftSong>> {
+export async function getDraftSong(songId: string): Promise<DraftSong> {
     return requestJson<DraftSong>(`/admin/songs/${encodeURIComponent(songId)}`);
 }
 
-export async function putDraftSong(song: DraftSong, eTag?: string): Promise<WriteResult> {
-    const headers = eTag ? { 'If-Match': eTag } : { 'If-None-Match': '*' };
-    return (await requestJson<WriteResult>(
-        `/admin/songs/${encodeURIComponent(song.songId)}`,
-        jsonInit('PUT', song, headers),
-    )).data;
+export async function createDraftSong(song: DraftSong): Promise<WriteResult> {
+    return requestJson<WriteResult>(
+        '/admin/songs',
+        jsonInit('POST', song),
+    );
 }
 
-export async function deleteDraftSong(songId: string, eTag: string): Promise<WriteResult> {
-    return (await requestJson<WriteResult>(
-        `/admin/songs/${encodeURIComponent(songId)}`,
-        {
-            method: 'DELETE',
-            headers: { 'If-Match': eTag },
-        },
-    )).data;
+export async function updateDraftSong(song: DraftSong): Promise<WriteResult> {
+    return requestJson<WriteResult>(
+        `/admin/songs/${encodeURIComponent(song.songId)}`,
+        jsonInit('PUT', song),
+    );
+}
+
+export async function deleteDraftSong(songId: string): Promise<void> {
+    await requestEmpty(`/admin/songs/${encodeURIComponent(songId)}`, { method: 'DELETE' });
 }
 
 export async function listDraftReleases(): Promise<ObjectList> {
-    return (await requestJson<ObjectList>('/admin/releases')).data;
+    return requestJson<ObjectList>('/admin/releases');
 }
 
-export async function getDraftRelease(releaseId: string): Promise<ApiJsonResult<DraftRelease>> {
+export async function getDraftRelease(releaseId: string): Promise<DraftRelease> {
     return requestJson<DraftRelease>(`/admin/releases/${encodeURIComponent(releaseId)}`);
 }
 
-export async function putDraftRelease(release: DraftRelease, eTag?: string): Promise<WriteResult> {
-    const headers = eTag ? { 'If-Match': eTag } : { 'If-None-Match': '*' };
-    return (await requestJson<WriteResult>(
-        `/admin/releases/${encodeURIComponent(release.releaseId)}`,
-        jsonInit('PUT', release, headers),
-    )).data;
+export async function createDraftRelease(release: DraftRelease): Promise<WriteResult> {
+    return requestJson<WriteResult>(
+        '/admin/releases',
+        jsonInit('POST', release),
+    );
 }
 
-export async function deleteDraftRelease(releaseId: string, eTag: string): Promise<WriteResult> {
-    return (await requestJson<WriteResult>(
-        `/admin/releases/${encodeURIComponent(releaseId)}`,
-        {
-            method: 'DELETE',
-            headers: { 'If-Match': eTag },
-        },
-    )).data;
+export async function updateDraftRelease(release: DraftRelease): Promise<WriteResult> {
+    return requestJson<WriteResult>(
+        `/admin/releases/${encodeURIComponent(release.releaseId)}`,
+        jsonInit('PUT', release),
+    );
+}
+
+export async function deleteDraftRelease(releaseId: string): Promise<void> {
+    await requestEmpty(`/admin/releases/${encodeURIComponent(releaseId)}`, { method: 'DELETE' });
 }
 
 export async function listJobs(): Promise<ObjectList> {
-    return (await requestJson<ObjectList>('/admin/jobs')).data;
+    return requestJson<ObjectList>('/admin/jobs');
 }
 
 export async function getJob(jobId: string): Promise<EncodeJob> {
-    return (await requestJson<EncodeJob>(`/admin/jobs/${encodeURIComponent(jobId)}`)).data;
+    return requestJson<EncodeJob>(`/admin/jobs/${encodeURIComponent(jobId)}`);
 }
 
 export async function requestUploadUrl(request: UploadUrlRequest): Promise<UploadUrlResponse> {
-    return (await requestJson<UploadUrlResponse>('/admin/upload-url', jsonInit('POST', request))).data;
+    return requestJson<UploadUrlResponse>('/admin/upload-url', jsonInit('POST', request));
 }
 
 export async function requestArtworkUploadUrl(request: ArtworkUploadUrlRequest): Promise<ArtworkUploadUrlResponse> {
-    return (await requestJson<ArtworkUploadUrlResponse>('/admin/artwork-upload-url', jsonInit('POST', request))).data;
+    return requestJson<ArtworkUploadUrlResponse>('/admin/artwork-upload-url', jsonInit('POST', request));
 }
 
 export async function uploadMasterFile(upload: UploadUrlResponse, file: File): Promise<void> {
@@ -200,7 +199,7 @@ export async function createEncodeJob(request: {
     includeLossless?: boolean;
     requestedBy?: string;
 }): Promise<EncodeJobCreateResponse> {
-    return (await requestJson<EncodeJobCreateResponse>('/admin/encode-jobs', jsonInit('POST', request))).data;
+    return requestJson<EncodeJobCreateResponse>('/admin/encode-jobs', jsonInit('POST', request));
 }
 
 export async function publishRelease(releaseId: string, request: {
@@ -208,12 +207,12 @@ export async function publishRelease(releaseId: string, request: {
     trackJobIds?: Record<string, string>;
     publishedAt?: string;
 }): Promise<PublishResponse> {
-    return (await requestJson<PublishResponse>(
+    return requestJson<PublishResponse>(
         `/admin/publish/${encodeURIComponent(releaseId)}`,
         jsonInit('POST', request),
-    )).data;
+    );
 }
 
 export async function getRumSummary(hours: number): Promise<RumSummary> {
-    return (await requestJson<RumSummary>(`/admin/rum/summary?hours=${encodeURIComponent(hours)}`)).data;
+    return requestJson<RumSummary>(`/admin/rum/summary?hours=${encodeURIComponent(hours)}`);
 }

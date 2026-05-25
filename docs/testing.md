@@ -8,8 +8,8 @@
 - Terraform formatting check
 
 The first-party player has unit coverage for catalog manifest loading and RUM
-event payload emission. Backend tests cover manifest write preconditions, S3
-ETag conflict mapping, and encode job event construction.
+event payload emission. Backend tests cover manifest publication, media upload
+validation, RUM summary aggregation, and encode job event construction.
 
 ## Local Encode Fixture
 

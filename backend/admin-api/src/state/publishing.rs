@@ -273,14 +273,7 @@ impl AppState {
             Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
         );
 
-        db::put_draft_release(
-            &self.db,
-            release_id,
-            &document,
-            source.e_tag.as_deref(),
-            None,
-        )
-        .await
+        db::update_draft_release(&self.db, release_id, &document).await
     }
 
     async fn invalidate_manifest_paths(
