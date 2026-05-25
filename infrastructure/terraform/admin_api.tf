@@ -20,8 +20,11 @@ data "aws_iam_policy_document" "admin_api" {
       test     = "StringLike"
       variable = "s3:prefix"
       values = [
+        # Legacy album-era objects, kept readable for any straggling
+        # publications. Current code reads/writes under recordings/*.
         "albums/*",
         "draft/encodes/*",
+        "recordings/*",
       ]
     }
   }
@@ -39,6 +42,7 @@ data "aws_iam_policy_document" "admin_api" {
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
       "${aws_s3_bucket.media_storage["media"].arn}/artwork/*",
       "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/recordings/*",
     ]
   }
 
@@ -51,8 +55,14 @@ data "aws_iam_policy_document" "admin_api" {
     ]
 
     resources = [
+      # `recordings/*` is where the publish step copies encoded HLS / FLAC
+      # outputs out of `draft/encodes/*`. `artwork/*` is the destination
+      # for presigned cover-art uploads. `albums/*` is the pre-rename
+      # public prefix; left in for now so the role can re-publish any
+      # album-era release that hasn't been migrated.
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
       "${aws_s3_bucket.media_storage["media"].arn}/artwork/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/recordings/*",
     ]
   }
 
