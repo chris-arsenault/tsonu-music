@@ -40,7 +40,6 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
     info!(method = method.as_str(), path, "Admin API request");
 
     match (method, parse_path(path)) {
-        (&Method::OPTIONS, _) => empty_response(StatusCode::NO_CONTENT),
         (&Method::GET, ApiPath::Health) => json_response(
             StatusCode::OK,
             json!({ "ok": true, "mediaBaseUrl": state.media_base_url() }),
