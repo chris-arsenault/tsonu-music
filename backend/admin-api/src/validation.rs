@@ -35,6 +35,11 @@ pub(crate) fn write_preconditions(headers: &HeaderMap) -> Result<WritePreconditi
     })
 }
 
+pub(crate) fn delete_precondition(headers: &HeaderMap) -> Result<String, ApiError> {
+    optional_header(headers, "if-match")?
+        .ok_or_else(|| ApiError::precondition_required("send If-Match: <etag> to delete a draft"))
+}
+
 pub(crate) fn optional_header(
     headers: &HeaderMap,
     name: &'static str,

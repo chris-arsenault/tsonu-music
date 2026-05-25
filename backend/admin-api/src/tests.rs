@@ -345,6 +345,18 @@ fn rejects_ambiguous_or_missing_write_preconditions() {
 }
 
 #[test]
+fn requires_delete_precondition() {
+    let mut headers = HeaderMap::new();
+    assert_eq!(
+        delete_precondition(&headers).unwrap_err().status,
+        StatusCode::PRECONDITION_REQUIRED
+    );
+
+    headers.insert("if-match", HeaderValue::from_static("\"rev-1\""));
+    assert_eq!(delete_precondition(&headers).unwrap(), "\"rev-1\"");
+}
+
+#[test]
 fn builds_encode_job_event_with_lossless_outputs_and_source_identity() {
     let mut recording = sample_recording(vec![]);
     let source_master = recording.source_master.as_mut().unwrap();

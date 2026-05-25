@@ -1,8 +1,8 @@
 use crate::{
-    db, normalize_updated_at, parse_rum_summary_query, validate_draft_release_document,
-    validate_draft_song_document, validate_slug, validate_stable_id, write_preconditions, ApiError,
-    AppState, ArtworkUploadUrlRequest, EncodeJobRequest, PlayEventRequest, PublishRequest,
-    UploadUrlRequest,
+    db, delete_precondition, normalize_updated_at, parse_rum_summary_query,
+    validate_draft_release_document, validate_draft_song_document, validate_slug,
+    validate_stable_id, write_preconditions, ApiError, AppState, ArtworkUploadUrlRequest,
+    EncodeJobRequest, PlayEventRequest, PublishRequest, UploadUrlRequest,
 };
 use lambda_http::http::{Method, StatusCode};
 use lambda_http::{Body, Error, Request, Response};
@@ -73,50 +73,14 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
         (&Method::GET, ApiPath::AdminSongs) => {
             json_response(StatusCode::OK, db::list_draft_songs(state.db()).await?)
         }
-        (&Method::GET, ApiPath::AdminSong { song_id }) => {
-            validate_stable_id("song", &song_id, "songId")?;
-            let song = db::get_draft_song(state.db(), &song_id).await?;
-            raw_json_response(StatusCode::OK, song.text, song.e_tag.as_deref(), None)
-        }
-        (&Method::PUT, ApiPath::AdminSong { song_id }) => {
-            validate_stable_id("song", &song_id, "songId")?;
-            let preconditions = write_preconditions(request.headers())?;
-            let mut document: Value = parse_json_body(request.body())?;
-            validate_draft_song_document(&song_id, &document)?;
-            normalize_updated_at(&mut document);
-            let result = db::put_draft_song(
-                state.db(),
-                &song_id,
-                &document,
-                preconditions.if_match.as_deref(),
-                preconditions.if_none_match.as_deref(),
-            )
-            .await?;
-            json_response(StatusCode::OK, result)
+        (_, ApiPath::AdminSong { song_id }) => {
+            admin_song_response(method, song_id, request, state).await
         }
         (&Method::GET, ApiPath::AdminReleases) => {
             json_response(StatusCode::OK, db::list_draft_releases(state.db()).await?)
         }
-        (&Method::GET, ApiPath::AdminRelease { release_id }) => {
-            validate_stable_id("release", &release_id, "releaseId")?;
-            let release = db::get_draft_release(state.db(), &release_id).await?;
-            raw_json_response(StatusCode::OK, release.text, release.e_tag.as_deref(), None)
-        }
-        (&Method::PUT, ApiPath::AdminRelease { release_id }) => {
-            validate_stable_id("release", &release_id, "releaseId")?;
-            let preconditions = write_preconditions(request.headers())?;
-            let mut document: Value = parse_json_body(request.body())?;
-            validate_draft_release_document(&release_id, &document)?;
-            normalize_updated_at(&mut document);
-            let result = db::put_draft_release(
-                state.db(),
-                &release_id,
-                &document,
-                preconditions.if_match.as_deref(),
-                preconditions.if_none_match.as_deref(),
-            )
-            .await?;
-            json_response(StatusCode::OK, result)
+        (_, ApiPath::AdminRelease { release_id }) => {
+            admin_release_response(method, release_id, request, state).await
         }
         (&Method::GET, ApiPath::AdminJobs) => {
             json_response(StatusCode::OK, db::list_encode_jobs(state.db()).await?)
@@ -151,6 +115,88 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
             )
         }
         (_, ApiPath::NotFound) => Err(ApiError::not_found("route not found")),
+        _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn admin_song_response(
+    method: &Method,
+    song_id: String,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    validate_stable_id("song", &song_id, "songId")?;
+
+    match *method {
+        Method::GET => {
+            let song = db::get_draft_song(state.db(), &song_id).await?;
+            raw_json_response(StatusCode::OK, song.text, song.e_tag.as_deref(), None)
+        }
+        Method::PUT => {
+            let preconditions = write_preconditions(request.headers())?;
+            let mut document: Value = parse_json_body(request.body())?;
+            validate_draft_song_document(&song_id, &document)?;
+            normalize_updated_at(&mut document);
+            json_response(
+                StatusCode::OK,
+                db::put_draft_song(
+                    state.db(),
+                    &song_id,
+                    &document,
+                    preconditions.if_match.as_deref(),
+                    preconditions.if_none_match.as_deref(),
+                )
+                .await?,
+            )
+        }
+        Method::DELETE => {
+            let if_match = delete_precondition(request.headers())?;
+            json_response(
+                StatusCode::OK,
+                db::delete_draft_song(state.db(), &song_id, &if_match).await?,
+            )
+        }
+        _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn admin_release_response(
+    method: &Method,
+    release_id: String,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    validate_stable_id("release", &release_id, "releaseId")?;
+
+    match *method {
+        Method::GET => {
+            let release = db::get_draft_release(state.db(), &release_id).await?;
+            raw_json_response(StatusCode::OK, release.text, release.e_tag.as_deref(), None)
+        }
+        Method::PUT => {
+            let preconditions = write_preconditions(request.headers())?;
+            let mut document: Value = parse_json_body(request.body())?;
+            validate_draft_release_document(&release_id, &document)?;
+            normalize_updated_at(&mut document);
+            json_response(
+                StatusCode::OK,
+                db::put_draft_release(
+                    state.db(),
+                    &release_id,
+                    &document,
+                    preconditions.if_match.as_deref(),
+                    preconditions.if_none_match.as_deref(),
+                )
+                .await?,
+            )
+        }
+        Method::DELETE => {
+            let if_match = delete_precondition(request.headers())?;
+            json_response(
+                StatusCode::OK,
+                db::delete_draft_release(state.db(), &release_id, &if_match).await?,
+            )
+        }
         _ => Err(ApiError::method_not_allowed()),
     }
 }

@@ -118,6 +118,16 @@ export async function putDraftSong(song: DraftSong, eTag?: string): Promise<Writ
     )).data;
 }
 
+export async function deleteDraftSong(songId: string, eTag: string): Promise<WriteResult> {
+    return (await requestJson<WriteResult>(
+        `/admin/songs/${encodeURIComponent(songId)}`,
+        {
+            method: 'DELETE',
+            headers: { 'If-Match': eTag },
+        },
+    )).data;
+}
+
 export async function listDraftReleases(): Promise<ObjectList> {
     return (await requestJson<ObjectList>('/admin/releases')).data;
 }
@@ -131,6 +141,16 @@ export async function putDraftRelease(release: DraftRelease, eTag?: string): Pro
     return (await requestJson<WriteResult>(
         `/admin/releases/${encodeURIComponent(release.releaseId)}`,
         jsonInit('PUT', release, headers),
+    )).data;
+}
+
+export async function deleteDraftRelease(releaseId: string, eTag: string): Promise<WriteResult> {
+    return (await requestJson<WriteResult>(
+        `/admin/releases/${encodeURIComponent(releaseId)}`,
+        {
+            method: 'DELETE',
+            headers: { 'If-Match': eTag },
+        },
     )).data;
 }
 
