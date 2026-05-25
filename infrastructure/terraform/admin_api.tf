@@ -181,7 +181,18 @@ module "admin_api" {
           authenticated = false
         },
         {
+          # Public first-party analytics beacon (backend play counts).
+          # Browsers send a CORS preflight (OPTIONS) before the POST, so
+          # both methods must be allowed at the ALB layer; the Lambda
+          # decorates every response — including 204 OPTIONS replies —
+          # with the right Access-Control-Allow-* headers.
           priority      = 242
+          paths         = ["/analytics", "/analytics/*"]
+          methods       = ["POST", "OPTIONS"]
+          authenticated = false
+        },
+        {
+          priority      = 243
           paths         = ["/admin", "/admin/*"]
           authenticated = true
         },

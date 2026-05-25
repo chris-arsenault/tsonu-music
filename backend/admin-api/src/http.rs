@@ -38,6 +38,16 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
     let path = request.uri().path();
     info!(method = method.as_str(), path, "Admin API request");
 
+    // CORS preflight: any path that the ALB routes to us, we acknowledge with
+    // 204 No Content. decorate_response attaches the Access-Control-Allow-*
+    // headers based on the request origin; the browser only checks those.
+    if method == Method::OPTIONS {
+        let parsed = parse_path(path);
+        if !matches!(parsed, ApiPath::NotFound) {
+            return empty_response(StatusCode::NO_CONTENT);
+        }
+    }
+
     match (method, parse_path(path)) {
         (&Method::GET, ApiPath::Health) => json_response(
             StatusCode::OK,
