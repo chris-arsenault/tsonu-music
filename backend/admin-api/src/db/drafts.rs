@@ -3,7 +3,9 @@ use crate::{
     draft_release_key, draft_song_key, ApiError, DraftRelease, DraftSong, ObjectList,
     ObjectSummary, WriteResult,
 };
-use encode_contract::RecordingFileSet;
+use encode_contract::{
+    recording_files_root_prefix, RecordingFileKind, RecordingFileQuality, RecordingFileSet,
+};
 use serde_json::Value;
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
@@ -384,7 +386,9 @@ async fn backfill_recording_files(
     let candidates: Vec<(String, Vec<String>)> = parsed
         .recordings
         .iter()
-        .filter(|recording| recording.files.is_empty() && !recording.encode_job_ids.is_empty())
+        .filter(|recording| {
+            !has_current_recording_files(recording) && !recording.encode_job_ids.is_empty()
+        })
         .map(|recording| {
             (
                 recording.recording_id.clone(),
@@ -456,6 +460,32 @@ async fn backfill_recording_files(
         text: refreshed.get::<String, _>("document"),
         e_tag: Some(revision_etag(refreshed.get::<i64, _>("revision"))),
     }))
+}
+
+fn has_current_recording_files(recording: &crate::DraftRecording) -> bool {
+    let prefix = recording_files_root_prefix(&recording.recording_id);
+    let files = recording
+        .files
+        .iter()
+        .filter(|file| file.path.starts_with(&prefix))
+        .collect::<Vec<_>>();
+    let has_file = |kind, quality| {
+        files.iter().any(|file| {
+            file.kind == kind
+                && file.quality == quality
+                && !file.file_id.is_empty()
+                && file.path.starts_with(&prefix)
+        })
+    };
+    has_file(RecordingFileKind::HlsMaster, None)
+        && has_file(
+            RecordingFileKind::HlsRendition,
+            Some(RecordingFileQuality::Aac192),
+        )
+        && has_file(
+            RecordingFileKind::HlsRendition,
+            Some(RecordingFileQuality::Aac320),
+        )
 }
 
 async fn apply_recording_files(

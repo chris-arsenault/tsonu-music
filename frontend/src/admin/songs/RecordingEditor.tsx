@@ -30,7 +30,7 @@ interface Props {
 }
 
 export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemove }: Props) {
-    const { jobs, loadJob, saveSong, upsertSong } = useCatalog();
+    const { jobs, loadJob, loadSong, saveSong, upsertJob } = useCatalog();
     const { notify } = useNotifications();
     const { busy, run } = useBusy();
     const [masterFile, setMasterFile] = useState<File>();
@@ -86,24 +86,27 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                 notify('Recording is missing from this song.', 'error');
                 return;
             }
+            const savedSong = await saveSong(preparedSong, { isNew: false });
+            const savedRecording = savedSong.recordings.find((candidate) => candidate.recordingId === preparedRecording.recordingId);
+            if (!savedRecording) {
+                notify('Recording is missing from the saved song.', 'error');
+                return;
+            }
             const response = await createEncodeJob({
-                songId: preparedSong.songId,
-                recordingId: preparedRecording.recordingId,
+                songId: savedSong.songId,
+                recordingId: savedRecording.recordingId,
                 includeLossless,
                 requestedBy: optionalText(requestedBy),
             });
+            upsertJob(response.job);
             const next: DraftRecording = {
-                ...preparedRecording,
-                encodeJobIds: [...(preparedRecording.encodeJobIds ?? []), response.job.jobId],
+                ...savedRecording,
+                durationSeconds: undefined,
+                encodeJobIds: [...(savedRecording.encodeJobIds ?? []), response.job.jobId],
+                files: [],
             };
-            const nextSong: DraftSong = {
-                ...preparedSong,
-                recordings: preparedSong.recordings.map((r) => r.recordingId === next.recordingId ? next : r),
-                updatedAt: new Date().toISOString(),
-            };
-            await saveSong(nextSong, { isNew: false });
-            upsertSong(nextSong);
             onChange(next, recording.recordingId);
+            await loadSong(savedSong.songId).catch(() => undefined);
             notify(`Queued ${response.job.jobId}`);
         });
     }

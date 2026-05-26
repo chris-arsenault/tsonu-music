@@ -51,6 +51,7 @@ impl AppState {
         for prefix in &media_prefixes {
             self.delete_media_prefix(prefix).await?;
         }
+        db::remove_recording_files_with_prefixes(&self.db, &media_prefixes).await?;
         response.deleted.media_prefixes = media_prefixes.len();
         response.report = self.maintenance_report().await?;
         Ok(response)

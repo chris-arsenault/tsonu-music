@@ -38,6 +38,8 @@ export function useJobPolling(jobId: string | undefined): void {
             void tick();
         } else if (POLLABLE_STATUSES.includes(cached.status)) {
             timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+        } else if (cached.status === 'succeeded') {
+            void loadSong(cached.songId).catch(() => undefined);
         }
 
         return () => {

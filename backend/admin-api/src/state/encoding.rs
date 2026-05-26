@@ -83,6 +83,8 @@ impl AppState {
         let mut job = prepared.job;
         let job_key = prepared.job_key;
         db::put_encode_job(&self.db, &job).await?;
+        db::prepare_recording_for_encode(&self.db, &job.song_id, &job.recording_id, &job.job_id)
+            .await?;
 
         let payload = serde_json::to_vec(&prepared.event).map_err(|err| {
             error!(job_id = job.job_id, error = %err, "Failed to serialize encoder invocation payload");

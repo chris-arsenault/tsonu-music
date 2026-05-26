@@ -9,6 +9,7 @@ import {
     parseLinks,
     parseTags,
     prepareDraftSongForSave,
+    currentRecordingFiles,
     isRecordingEncoded,
     sanitizeFilename,
     slugify,
@@ -277,5 +278,31 @@ describe('isRecordingEncoded', () => {
                 },
             ],
         }))).toBe(true);
+    });
+
+    test('ignores legacy encode output paths', () => {
+        const recordingId = stableId('recording', 'encoded');
+        const recording = makeRecording({
+            recordingId,
+            files: [
+                {
+                    fileId: 'file_legacy_hls' as const,
+                    kind: 'hls-master',
+                    path: `recordings/${recordingId}/job_old/hls/master.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_current_hls' as const,
+                    kind: 'hls-master',
+                    path: `recordings/${recordingId}/files/20260526/hls/master.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+            ],
+        });
+
+        expect(currentRecordingFiles(recording).map((file) => file.fileId)).toEqual(['file_current_hls']);
+        expect(isRecordingEncoded(recording)).toBe(false);
+        expect(prepareDraftSongForSave(makeSong({ recordings: [recording] })).recordings[0].files)
+            .toEqual([recording.files?.[1]]);
     });
 });

@@ -1,11 +1,15 @@
 mod analytics;
+mod draft_encoding;
 mod drafts;
 mod maintenance;
+mod maintenance_media;
 mod publication;
 
 pub use analytics::*;
+pub use draft_encoding::*;
 pub use drafts::*;
 pub use maintenance::*;
+pub use maintenance_media::*;
 pub use publication::*;
 
 use super::{encode_job_key, ApiError, ObjectList, ObjectSummary, Visibility};

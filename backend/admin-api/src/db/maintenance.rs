@@ -5,6 +5,7 @@ use crate::{
     StalePublishedSong,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
+use encode_contract::recording_files_root_prefix;
 use serde_json::Value;
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
@@ -51,30 +52,6 @@ pub async fn maintenance_report(pool: &PgPool) -> Result<MaintenanceReport, ApiE
         stale_published_songs,
         totals,
     })
-}
-
-pub async fn active_media_paths(pool: &PgPool) -> Result<HashSet<String>, ApiError> {
-    let mut paths = HashSet::new();
-
-    let song_rows = sqlx::query("SELECT document FROM music_draft_songs")
-        .fetch_all(pool)
-        .await
-        .map_err(map_db_read_error)?;
-    for row in song_rows {
-        let document = row.get::<Json<Value>, _>("document").0;
-        collect_draft_recording_file_paths(&document, &mut paths);
-    }
-
-    let playback_rows = sqlx::query("SELECT playback FROM music_published_release_tracks")
-        .fetch_all(pool)
-        .await
-        .map_err(map_db_read_error)?;
-    for row in playback_rows {
-        let playback = row.get::<Json<Value>, _>("playback").0;
-        collect_playback_paths(&playback, &mut paths);
-    }
-
-    Ok(paths)
 }
 
 pub async fn cleanup_maintenance(
@@ -157,6 +134,49 @@ pub async fn cleanup_maintenance(
 
     let encode_job_ids = dedupe(request.encode_job_ids);
     if !encode_job_ids.is_empty() {
+        sqlx::query(
+            "UPDATE music_draft_songs
+             SET document = jsonb_set(
+                     document,
+                     '{recordings}',
+                     COALESCE(
+                         (
+                             SELECT jsonb_agg(
+                                 CASE WHEN recording ? 'encodeJobIds'
+                                     THEN recording || jsonb_build_object(
+                                         'encodeJobIds',
+                                         COALESCE(
+                                             (
+                                                 SELECT jsonb_agg(job_id)
+                                                 FROM jsonb_array_elements_text(recording->'encodeJobIds') AS job_id
+                                                 WHERE NOT job_id = ANY($1)
+                                             ),
+                                             '[]'::jsonb
+                                         )
+                                     )
+                                     ELSE recording
+                                 END
+                             )
+                             FROM jsonb_array_elements(document->'recordings') AS recording
+                         ),
+                         '[]'::jsonb
+                     ),
+                     true
+                 ),
+                 revision = revision + 1,
+                 updated_at = now()
+             WHERE EXISTS (
+                 SELECT 1
+                 FROM jsonb_array_elements(document->'recordings') AS recording,
+                      jsonb_array_elements_text(COALESCE(recording->'encodeJobIds', '[]'::jsonb)) AS job_id
+                 WHERE job_id = ANY($1)
+             )",
+        )
+        .bind(&encode_job_ids)
+        .execute(&mut *tx)
+        .await
+        .map_err(map_db_write_error)?;
+
         let result = sqlx::query("DELETE FROM music_encode_jobs WHERE job_id = ANY($1)")
             .bind(&encode_job_ids)
             .execute(&mut *tx)
@@ -411,7 +431,7 @@ async fn stale_encode_jobs(
     recordings: &HashMap<(String, String), RecordingSummary>,
 ) -> Result<Vec<StaleEncodeJob>, ApiError> {
     let rows = sqlx::query(
-        "SELECT job_id, song_id, recording_id, status, requested_at, finished_at
+        "SELECT job_id, song_id, recording_id, status, requested_at, finished_at, document
          FROM music_encode_jobs
          ORDER BY updated_at DESC, job_id ASC",
     )
@@ -425,6 +445,7 @@ async fn stale_encode_jobs(
         let song_id: String = row.get("song_id");
         let recording_id: String = row.get("recording_id");
         let status: String = row.get("status");
+        let document = row.get::<Json<Value>, _>("document").0;
         let recording = recordings.get(&(song_id.clone(), recording_id.clone()));
         let reason = if !known_song_ids.contains(&song_id) {
             Some("missing_draft_song")
@@ -434,6 +455,8 @@ async fn stale_encode_jobs(
             Some("not_linked_to_recording")
         } else if matches!(status.as_str(), "failed" | "canceled") {
             Some("terminal_unsuccessful_job")
+        } else if status == "succeeded" && !job_uses_recording_files(&document, &recording_id) {
+            Some("legacy_encode_output")
         } else {
             None
         };
@@ -481,43 +504,12 @@ async fn stale_published_songs(pool: &PgPool) -> Result<Vec<StalePublishedSong>,
         .collect())
 }
 
-fn collect_draft_recording_file_paths(document: &Value, paths: &mut HashSet<String>) {
-    for recording in document
-        .get("recordings")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        for file in recording
-            .get("files")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            insert_path(paths, file.get("path"));
-        }
-    }
-}
-
-fn collect_playback_paths(playback: &Value, paths: &mut HashSet<String>) {
-    insert_path(paths, playback.get("hls").and_then(|hls| hls.get("path")));
-    for format in playback
-        .get("formats")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        insert_path(paths, format.get("path"));
-    }
-}
-
-fn insert_path(paths: &mut HashSet<String>, value: Option<&Value>) {
-    if let Some(path) = value
+fn job_uses_recording_files(document: &Value, recording_id: &str) -> bool {
+    document
+        .get("output")
+        .and_then(|output| output.get("prefix"))
         .and_then(Value::as_str)
-        .filter(|path| !path.is_empty())
-    {
-        paths.insert(path.to_string());
-    }
+        .is_some_and(|prefix| prefix.starts_with(&recording_files_root_prefix(recording_id)))
 }
 
 fn string_value(value: &Value, field: &str) -> String {

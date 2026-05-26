@@ -2,6 +2,7 @@ import type { CatalogArtwork, ReleaseKind, ReleaseStatus, StableId } from '../ca
 import { AdminApiError } from './admin-api';
 import type {
     DraftRecording,
+    RecordingFile,
     DraftRelease,
     DraftReleaseTrack,
     DraftSong,
@@ -171,7 +172,7 @@ export function prepareDraftSongForSave(song: DraftSong): DraftSong {
                 artistName: optionalText(recording.artistName),
                 description: optionalText(recording.description),
                 encodeJobIds: recording.encodeJobIds ?? [],
-                files: recording.files ?? [],
+                files: currentRecordingFiles(recording),
             };
         }),
     };
@@ -216,21 +217,21 @@ export function recordingEncodeStatus(
     jobDetails: Record<string, EncodeJob>,
 ): EncodeJob['status'] | 'missing' {
     if (isRecordingEncoded(recording)) return 'succeeded';
-    return latestJob(recording, jobDetails)?.status ?? 'missing';
+    const job = latestJob(recording, jobDetails);
+    if (!job || job.status === 'succeeded') return 'missing';
+    return job.status;
 }
 
 export function recordingEncodedAt(recording: DraftRecording | undefined): string | undefined {
-    return recording?.files?.find((file) => file.createdAt)?.createdAt;
+    return currentRecordingFiles(recording).find((file) => file.createdAt)?.createdAt;
 }
 
 export function isRecordingEncoded(recording: DraftRecording | undefined): boolean {
     if (!recording) return false;
-    const files = recording.files ?? [];
-    const prefix = `recordings/${recording.recordingId}/files/`;
+    const files = currentRecordingFiles(recording);
     const hasFile = (kind: string, quality?: string) => files.some((file) => (
         file.kind === kind
         && file.quality === quality
-        && file.path.startsWith(prefix)
         && Boolean(file.fileId)
     ));
     return (
@@ -238,6 +239,12 @@ export function isRecordingEncoded(recording: DraftRecording | undefined): boole
         && hasFile('hls-rendition', 'aac-192')
         && hasFile('hls-rendition', 'aac-320')
     );
+}
+
+export function currentRecordingFiles(recording: DraftRecording | undefined): RecordingFile[] {
+    if (!recording) return [];
+    const prefix = `recordings/${recording.recordingId}/files/`;
+    return (recording.files ?? []).filter((file) => file.path.startsWith(prefix));
 }
 
 function trackSlugForRecording(
