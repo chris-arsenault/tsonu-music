@@ -305,4 +305,40 @@ describe('isRecordingEncoded', () => {
         expect(prepareDraftSongForSave(makeSong({ recordings: [recording] })).recordings[0].files)
             .toEqual([recording.files?.[1]]);
     });
+
+    test('accepts and normalizes legacy AAC quality spellings', () => {
+        const recordingId = stableId('recording', 'encoded');
+        const recording = makeRecording({
+            recordingId,
+            files: [
+                {
+                    fileId: 'file_encoded_20260526_hls' as const,
+                    kind: 'hls-master',
+                    path: `recordings/${recordingId}/files/20260526/hls/master.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_encoded_20260526_aac_192' as const,
+                    kind: 'hls-rendition',
+                    quality: 'aac192' as never,
+                    path: `recordings/${recordingId}/files/20260526/hls/192k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_encoded_20260526_aac_320' as const,
+                    kind: 'hls-rendition',
+                    quality: 'aac320' as never,
+                    path: `recordings/${recordingId}/files/20260526/hls/320k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+            ],
+        });
+
+        expect(isRecordingEncoded(recording)).toBe(true);
+        expect(currentRecordingFiles(recording).map((file) => file.quality)).toEqual([
+            undefined,
+            'aac-192',
+            'aac-320',
+        ]);
+    });
 });

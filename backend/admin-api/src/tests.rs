@@ -250,6 +250,18 @@ fn builds_published_track_from_recording_files() {
         .iter()
         .any(|format| format.quality == PlaybackQuality::FlacLossless
             && format.bit_depth == Some(24)));
+
+    let value = serde_json::to_value(&published.playback.formats).unwrap();
+    assert!(value
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|format| format["quality"] == "aac-192"));
+    assert!(value
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|format| format["quality"] == "aac-320"));
 }
 
 #[test]

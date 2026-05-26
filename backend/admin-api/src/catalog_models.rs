@@ -269,7 +269,9 @@ pub(crate) enum PlaybackFormatKind {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum PlaybackQuality {
+    #[serde(rename = "aac-192", alias = "aac192")]
     Aac192,
+    #[serde(rename = "aac-320", alias = "aac320")]
     Aac320,
     FlacLossless,
 }

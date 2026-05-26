@@ -231,7 +231,7 @@ export function isRecordingEncoded(recording: DraftRecording | undefined): boole
     const files = currentRecordingFiles(recording);
     const hasFile = (kind: string, quality?: string) => files.some((file) => (
         file.kind === kind
-        && file.quality === quality
+        && canonicalRecordingFileQuality(file.quality) === quality
         && Boolean(file.fileId)
     ));
     return (
@@ -244,7 +244,25 @@ export function isRecordingEncoded(recording: DraftRecording | undefined): boole
 export function currentRecordingFiles(recording: DraftRecording | undefined): RecordingFile[] {
     if (!recording) return [];
     const prefix = `recordings/${recording.recordingId}/files/`;
-    return (recording.files ?? []).filter((file) => file.path.startsWith(prefix));
+    return (recording.files ?? [])
+        .filter((file) => file.path.startsWith(prefix))
+        .map(canonicalRecordingFile);
+}
+
+function canonicalRecordingFile(file: RecordingFile): RecordingFile {
+    const quality = canonicalRecordingFileQuality(file.quality);
+    return quality === file.quality ? file : { ...file, quality };
+}
+
+function canonicalRecordingFileQuality(
+    quality: RecordingFile['quality'] | string | undefined,
+): RecordingFile['quality'] | undefined {
+    if (quality === 'aac192') return 'aac-192';
+    if (quality === 'aac320') return 'aac-320';
+    if (quality === 'aac-192' || quality === 'aac-320' || quality === 'flac-lossless') {
+        return quality;
+    }
+    return undefined;
 }
 
 function trackSlugForRecording(

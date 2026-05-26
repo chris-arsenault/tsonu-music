@@ -38,6 +38,22 @@ fn creates_recording_owned_output_assets() {
 }
 
 #[test]
+fn serializes_recording_file_quality_with_frontend_wire_values() {
+    assert_eq!(
+        serde_json::to_value(RecordingFileQuality::Aac192).unwrap(),
+        "aac-192"
+    );
+    assert_eq!(
+        serde_json::to_value(RecordingFileQuality::Aac320).unwrap(),
+        "aac-320"
+    );
+    assert_eq!(
+        serde_json::from_value::<RecordingFileQuality>(serde_json::json!("aac192")).unwrap(),
+        RecordingFileQuality::Aac192
+    );
+}
+
+#[test]
 fn recording_files_only_from_succeeded_jobs() {
     let output = planned_output("recording_x", "20260523t195530z", "media", false);
     let mut job = EncodeJob::queued(

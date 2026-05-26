@@ -191,7 +191,9 @@ pub enum RecordingFileKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum RecordingFileQuality {
+    #[serde(rename = "aac-192", alias = "aac192")]
     Aac192,
+    #[serde(rename = "aac-320", alias = "aac320")]
     Aac320,
     FlacLossless,
 }
