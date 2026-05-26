@@ -54,7 +54,7 @@ export function RecordingsTable({ song, isSavedSong, onChange }: Props) {
                 <EmptyState
                     icon={Disc3}
                     title="Start with a recording"
-                    body="A recording holds a source master (WAV / AIFF / FLAC) and the encode job that produced its streamable assets."
+                    body="A recording holds a source master (WAV / AIFF / FLAC) and the generated files used for playback."
                 />
             </section>
         );

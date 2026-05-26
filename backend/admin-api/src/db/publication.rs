@@ -4,8 +4,8 @@ use super::{
 };
 use crate::{
     ApiError, CatalogArtist, CatalogEntityType, PublishedCatalog, PublishedCatalogRelease,
-    PublishedCatalogSong, PublishedRelease, PublishedReleaseTrack, PublishedSong,
-    PublishedSongPlacement, PublishedStatus, WriteResult, ARTIST_NAME, ARTIST_SLUG,
+    PublishedCatalogSong, PublishedRelease, PublishedSong, PublishedSongPlacement, PublishedStatus,
+    WriteResult, ARTIST_NAME, ARTIST_SLUG,
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
@@ -140,15 +140,13 @@ pub async fn replace_publication(
                 "failed to serialize published release track playback",
             )
         })?;
-        let published_job_id = published_job_id(track)?;
-
         sqlx::query(
             "INSERT INTO music_published_release_tracks
                 (release_id, track_id, song_id, recording_id, disc_number, track_number, slug,
                  title, song_title, recording_title, duration_seconds, explicit, isrc, description,
-                 credits, playback, published_job_id, document)
+                 credits, playback, document)
              VALUES
-                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+                ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
         )
         .bind(&release.release_id)
         .bind(&track.track_id)
@@ -166,7 +164,6 @@ pub async fn replace_publication(
         .bind(&track.description)
         .bind(track.credits.clone().map(Json))
         .bind(Json(playback))
-        .bind(published_job_id)
         .bind(Json(document))
         .execute(&mut *tx)
         .await
@@ -359,17 +356,4 @@ pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<Publis
     }
 
     Ok(song)
-}
-
-fn published_job_id(track: &PublishedReleaseTrack) -> Result<&str, ApiError> {
-    let hls_path = track.playback.hls.path.as_str();
-    hls_path
-        .split('/')
-        .find(|part| part.starts_with("job_"))
-        .ok_or_else(|| {
-            ApiError::internal(
-                "invalid_published_playback_path",
-                "published playback path does not include a job id",
-            )
-        })
 }

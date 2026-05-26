@@ -117,7 +117,7 @@ export function SongDetail({
                     ...recording,
                     sourceMaster: fromServer.sourceMaster ?? recording.sourceMaster,
                     encodeJobIds: fromServer.encodeJobIds ?? recording.encodeJobIds,
-                    encodeOutput: fromServer.encodeOutput ?? recording.encodeOutput,
+                    files: fromServer.files ?? recording.files,
                     durationSeconds: fromServer.durationSeconds ?? recording.durationSeconds,
                 };
             });

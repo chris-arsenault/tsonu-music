@@ -128,8 +128,8 @@ export function CatalogProvider({ children }: { children: ReactNode }) {
                 return next;
             });
 
-            // Publish-readiness now reads `recording.encodeOutput` directly,
-            // so we no longer bulk-load encode jobs here. Individual jobs are
+            // Publish-readiness reads recording.files directly, so we no
+            // longer bulk-load encode jobs here. Individual jobs are
             // loaded on demand by useJobPolling (for live status) and the
             // Activity feed (for the operational view).
             setListsLoaded(true);

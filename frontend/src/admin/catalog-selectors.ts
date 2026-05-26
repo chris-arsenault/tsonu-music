@@ -1,5 +1,6 @@
 import type { StableId } from '../catalog/media-catalog';
 import type { DraftRelease, DraftSong, EncodeJob } from './admin-types';
+import { isRecordingEncoded } from './admin-helpers';
 
 export interface PublishCheck {
     label: string;
@@ -9,7 +10,7 @@ export interface PublishCheck {
 export interface PublishReadiness {
     checks: PublishCheck[];
     canPublish: boolean;
-    trackJobIds: Record<StableId, StableId>;
+    fileIds: StableId[];
 }
 
 export function releasesContainingSong(
@@ -92,25 +93,23 @@ export function publishReadinessFor(
         { label: 'Artwork', ok: Boolean(release?.artwork) },
         { label: 'Tracks', ok: (release?.tracks.length ?? 0) > 0 },
     ];
-    const trackJobIds: Record<StableId, StableId> = {};
+    const fileIds: StableId[] = [];
     let allEncoded = (release?.tracks.length ?? 0) > 0;
     for (const track of release?.tracks ?? []) {
         const song = songs[track.songId];
         const recording = song?.recordings.find((r) => r.recordingId === track.recordingId);
-        // The recording is the source of truth: a present encodeOutput means a
-        // successful encode has been stamped onto it by the encoder. No need
-        // to consult job-status records — they're an operational artifact.
-        const output = recording?.encodeOutput;
-        if (output?.jobId) {
-            trackJobIds[track.trackId] = output.jobId;
+        if (isRecordingEncoded(recording)) {
+            for (const file of recording?.files ?? []) {
+                if (!fileIds.includes(file.fileId)) fileIds.push(file.fileId);
+            }
         } else {
             allEncoded = false;
         }
     }
-    checks.push({ label: 'Successful encodes', ok: allEncoded });
+    checks.push({ label: 'Recording files', ok: allEncoded });
     return {
         checks,
         canPublish: checks.every((c) => c.ok),
-        trackJobIds,
+        fileIds,
     };
 }

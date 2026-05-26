@@ -1,4 +1,4 @@
-use encode_contract::RecordingEncodeOutput;
+use encode_contract::RecordingFile;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -46,12 +46,8 @@ pub(crate) struct DraftRecording {
     pub(crate) source_master: Option<DraftSourceMaster>,
     #[serde(default)]
     pub(crate) encode_job_ids: Vec<String>,
-    /// Snapshot of the most recent successful encode, stamped onto the
-    /// recording by the encoder Lambda. When present, this is the
-    /// authoritative answer to "is this recording publishable?" — the
-    /// `EncodeJob` record exists only for operational history.
     #[serde(default)]
-    pub(crate) encode_output: Option<RecordingEncodeOutput>,
+    pub(crate) files: Vec<RecordingFile>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -235,6 +231,7 @@ pub(crate) struct TrackPlayback {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlaybackHls {
+    pub(crate) file_id: String,
     pub(crate) asset_id: String,
     pub(crate) path: String,
     pub(crate) mime_type: String,
@@ -244,6 +241,7 @@ pub(crate) struct PlaybackHls {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlaybackFormat {
+    pub(crate) file_id: String,
     pub(crate) asset_id: String,
     pub(crate) kind: PlaybackFormatKind,
     pub(crate) quality: PlaybackQuality,

@@ -1,6 +1,6 @@
 use crate::{EncoderError, EncoderState};
 use encode_contract::{
-    EncodeJob, EncodeJobEvent, EncodeStatus, ACTION_ENCODE_TRACK, DRAFT_ENCODE_PREFIX,
+    recording_files_root_prefix, EncodeJob, EncodeJobEvent, EncodeStatus, ACTION_ENCODE_TRACK,
 };
 
 pub(crate) fn validate_encode_event(
@@ -56,9 +56,10 @@ pub(crate) fn validate_encode_event_targets(
         )));
     }
 
-    if !event.job.output.prefix.starts_with(DRAFT_ENCODE_PREFIX) {
+    let recording_files_prefix = recording_files_root_prefix(&event.job.recording_id);
+    if !event.job.output.prefix.starts_with(&recording_files_prefix) {
         return Err(EncoderError::InvalidEvent(format!(
-            "job output prefix must be under {DRAFT_ENCODE_PREFIX}: {}",
+            "job output prefix must be under {recording_files_prefix}: {}",
             event.job.output.prefix
         )));
     }

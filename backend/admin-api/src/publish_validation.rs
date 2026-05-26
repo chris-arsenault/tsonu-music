@@ -1,9 +1,6 @@
-use crate::{
-    ensure_trailing_slash, validate_stable_id, ApiError, DraftRecording, DraftRelease,
-    DraftReleaseTrack, DraftSong,
-};
-use encode_contract::{EncodeJob, EncodeStatus, DRAFT_ENCODE_PREFIX};
-use std::collections::{HashMap, HashSet};
+use crate::{validate_stable_id, ApiError, DraftRecording, DraftRelease, DraftSong};
+use encode_contract::{recording_files_root_prefix, RecordingFileKind, RecordingFileQuality};
+use std::collections::HashSet;
 
 pub(crate) fn validate_publishable_release(
     release: &DraftRelease,
@@ -89,147 +86,67 @@ pub(crate) fn validate_publishable_release(
     Ok(())
 }
 
-pub(crate) fn validate_publish_job(
-    job: &EncodeJob,
+pub(crate) fn validate_publishable_recording(
     song: &DraftSong,
     recording: &DraftRecording,
-    media_bucket: &str,
 ) -> Result<(), ApiError> {
-    let source_master = recording.source_master.as_ref().ok_or_else(|| {
-        ApiError::bad_request(
-            "missing_source_master",
+    if !song
+        .recordings
+        .iter()
+        .any(|candidate| candidate.recording_id == recording.recording_id)
+    {
+        return Err(ApiError::bad_request(
+            "recording_song_mismatch",
             format!(
-                "recording {} does not have a sourceMaster",
+                "song {} does not contain recording {}",
+                song.song_id, recording.recording_id
+            ),
+        ));
+    }
+
+    if recording.duration_seconds.is_none() {
+        return Err(ApiError::bad_request(
+            "missing_recording_duration",
+            format!(
+                "recording {} does not have measured durationSeconds",
                 recording.recording_id
             ),
-        )
-    })?;
-
-    if job.status != EncodeStatus::Succeeded {
-        return Err(ApiError::bad_request(
-            "encode_job_not_succeeded",
-            format!("encode job {} is not succeeded", job.job_id),
-        ));
-    }
-
-    if job.song_id != song.song_id || job.recording_id != recording.recording_id {
-        return Err(ApiError::bad_request(
-            "encode_job_mismatch",
-            format!(
-                "encode job {} does not match song {} recording {}",
-                job.job_id, song.song_id, recording.recording_id
-            ),
-        ));
-    }
-
-    if job.input.bucket != source_master.bucket || job.input.key != source_master.key {
-        return Err(ApiError::bad_request(
-            "encode_job_source_mismatch",
-            format!(
-                "encode job {} does not match the draft source master",
-                job.job_id
-            ),
-        ));
-    }
-
-    if job.output.bucket != media_bucket {
-        return Err(ApiError::bad_request(
-            "encode_job_output_bucket_mismatch",
-            format!(
-                "encode job {} output bucket does not match media bucket",
-                job.job_id
-            ),
-        ));
-    }
-
-    if !job.output.prefix.starts_with(DRAFT_ENCODE_PREFIX) {
-        return Err(ApiError::bad_request(
-            "invalid_encode_output_prefix",
-            format!(
-                "encode job {} output prefix must be under {}",
-                job.job_id, DRAFT_ENCODE_PREFIX
-            ),
-        ));
-    }
-
-    let expected_prefix = format!("{DRAFT_ENCODE_PREFIX}{}", job.job_id);
-    if job.output.prefix != expected_prefix {
-        return Err(ApiError::bad_request(
-            "invalid_encode_output_prefix",
-            format!(
-                "encode job {} output prefix must be {}",
-                job.job_id, expected_prefix
-            ),
-        ));
-    }
-
-    if job.metadata.is_none() {
-        return Err(ApiError::bad_request(
-            "missing_encode_metadata",
-            format!("encode job {} has no measured metadata", job.job_id),
         ));
     }
 
     let mut has_hls = false;
     let mut has_192 = false;
     let mut has_320 = false;
-    for asset in &job.output.assets {
-        if !asset
-            .path
-            .starts_with(&ensure_trailing_slash(&job.output.prefix))
-        {
+    let expected_prefix = recording_files_root_prefix(&recording.recording_id);
+    for file in &recording.files {
+        validate_stable_id("file", &file.file_id, "fileId")?;
+        if !file.path.starts_with(&expected_prefix) {
             return Err(ApiError::bad_request(
-                "invalid_encode_asset_path",
+                "invalid_recording_file_path",
                 format!(
-                    "encode job {} asset {} is outside output prefix",
-                    job.job_id, asset.path
+                    "recording {} file {} must be under {}",
+                    recording.recording_id, file.path, expected_prefix
                 ),
             ));
         }
 
-        match asset
-            .path
-            .strip_prefix(&ensure_trailing_slash(&job.output.prefix))
-        {
-            Some("hls/master.m3u8") => has_hls = true,
-            Some("hls/192k/index.m3u8") => has_192 = true,
-            Some("hls/320k/index.m3u8") => has_320 = true,
+        match (file.kind, file.quality) {
+            (RecordingFileKind::HlsMaster, None) => has_hls = true,
+            (RecordingFileKind::HlsRendition, Some(RecordingFileQuality::Aac192)) => has_192 = true,
+            (RecordingFileKind::HlsRendition, Some(RecordingFileQuality::Aac320)) => has_320 = true,
             _ => {}
         }
     }
 
     if !(has_hls && has_192 && has_320) {
         return Err(ApiError::bad_request(
-            "missing_required_encode_assets",
+            "missing_required_recording_files",
             format!(
-                "encode job {} must include HLS master, 192k, and 320k playlists",
-                job.job_id
+                "recording {} must include HLS master, 192k, and 320k files",
+                recording.recording_id
             ),
         ));
     }
 
     Ok(())
-}
-
-pub(crate) fn select_publish_job_id(
-    track: &DraftReleaseTrack,
-    recording: &DraftRecording,
-    overrides: &HashMap<String, String>,
-) -> Result<String, ApiError> {
-    if let Some(job_id) = overrides
-        .get(&track.track_id)
-        .or_else(|| overrides.get(&track.recording_id))
-    {
-        return Ok(job_id.clone());
-    }
-
-    recording.encode_job_ids.last().cloned().ok_or_else(|| {
-        ApiError::bad_request(
-            "missing_encode_job",
-            format!(
-                "track {} recording {} has no encode job history",
-                track.track_id, track.recording_id
-            ),
-        )
-    })
 }

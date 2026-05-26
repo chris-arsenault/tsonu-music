@@ -1,13 +1,12 @@
 use crate::{
-    ensure_trailing_slash, public_asset_path, published_release_api_path, ApiError, DraftRecording,
-    DraftRelease, DraftReleaseTrack, DraftSong, DraftSourceMaster, EncodeJobRequest,
-    PlaybackFormat, PlaybackFormatKind, PlaybackHls, PlaybackQuality, PublishedRelease,
-    PublishedReleaseTrack, PublishedSong, PublishedStatus, ReleaseEntityType, SongEntityType,
-    TrackPlayback, Visibility,
+    published_release_api_path, ApiError, DraftRecording, DraftRelease, DraftReleaseTrack,
+    DraftSong, DraftSourceMaster, EncodeJobRequest, PlaybackFormat, PlaybackFormatKind,
+    PlaybackHls, PlaybackQuality, PublishedRelease, PublishedReleaseTrack, PublishedSong,
+    PublishedStatus, ReleaseEntityType, SongEntityType, TrackPlayback, Visibility,
 };
 use encode_contract::{
-    encode_job_key as contract_encode_job_key, planned_ffmpeg_args, AssetRef, EncodeJob,
-    EncodeJobEvent, EncodeMetadata, ObjectRef, ACTION_ENCODE_TRACK,
+    encode_job_key as contract_encode_job_key, planned_ffmpeg_args, EncodeJob, EncodeJobEvent,
+    ObjectRef, RecordingFile, RecordingFileKind, RecordingFileQuality, ACTION_ENCODE_TRACK,
 };
 
 pub(crate) fn build_published_song(draft: &DraftSong) -> PublishedSong {
@@ -69,53 +68,56 @@ pub(crate) fn build_published_track(
     track: &DraftReleaseTrack,
     song: &DraftSong,
     recording: &DraftRecording,
-    job: &EncodeJob,
-    public_prefix: &str,
 ) -> Result<PublishedReleaseTrack, ApiError> {
-    let metadata = job.metadata.as_ref().ok_or_else(|| {
+    let duration_seconds = recording.duration_seconds.ok_or_else(|| {
         ApiError::bad_request(
-            "missing_encode_metadata",
-            format!("encode job {} has no measured metadata", job.job_id),
+            "missing_recording_duration",
+            format!(
+                "recording {} does not have measured durationSeconds",
+                recording.recording_id
+            ),
         )
     })?;
-    let output_prefix = ensure_trailing_slash(&job.output.prefix);
-    let hls_asset = required_asset(job, "hls/master.m3u8")?;
-    let aac_192_asset = required_asset(job, "hls/192k/index.m3u8")?;
-    let aac_320_asset = required_asset(job, "hls/320k/index.m3u8")?;
-    let flac_asset = optional_asset(job, "lossless.flac");
+    let hls_file = required_file(recording, RecordingFileKind::HlsMaster, None)?;
+    let aac_192_file = required_file(
+        recording,
+        RecordingFileKind::HlsRendition,
+        Some(RecordingFileQuality::Aac192),
+    )?;
+    let aac_320_file = required_file(
+        recording,
+        RecordingFileKind::HlsRendition,
+        Some(RecordingFileQuality::Aac320),
+    )?;
+    let flac_file = optional_file(
+        recording,
+        RecordingFileKind::Download,
+        Some(RecordingFileQuality::FlacLossless),
+    );
 
     let mut formats = vec![
         playback_format(PlaybackFormatBuild {
-            asset: aac_192_asset,
-            draft_prefix: &output_prefix,
-            public_prefix,
+            file: aac_192_file,
             kind: PlaybackFormatKind::HlsRendition,
             quality: PlaybackQuality::Aac192,
             bitrate_kbps: Some(192),
-            metadata,
             bit_depth: None,
         })?,
         playback_format(PlaybackFormatBuild {
-            asset: aac_320_asset,
-            draft_prefix: &output_prefix,
-            public_prefix,
+            file: aac_320_file,
             kind: PlaybackFormatKind::HlsRendition,
             quality: PlaybackQuality::Aac320,
             bitrate_kbps: Some(320),
-            metadata,
             bit_depth: None,
         })?,
     ];
 
-    if let Some(asset) = flac_asset {
+    if let Some(file) = flac_file {
         formats.push(playback_format(PlaybackFormatBuild {
-            asset,
-            draft_prefix: &output_prefix,
-            public_prefix,
+            file,
             kind: PlaybackFormatKind::Download,
             quality: PlaybackQuality::FlacLossless,
             bitrate_kbps: None,
-            metadata,
             bit_depth: recording
                 .source_master
                 .as_ref()
@@ -134,7 +136,7 @@ pub(crate) fn build_published_track(
         song_title: song.title.clone(),
         recording_title: recording.title.clone(),
         version_title: recording.version_title.clone(),
-        duration_seconds: metadata.duration_seconds,
+        duration_seconds,
         explicit: track.explicit.unwrap_or(recording.explicit),
         isrc: track.isrc.clone().or_else(|| recording.isrc.clone()),
         description: track.description.clone(),
@@ -142,9 +144,10 @@ pub(crate) fn build_published_track(
         artwork: song.artwork.clone(),
         playback: TrackPlayback {
             hls: PlaybackHls {
-                asset_id: hls_asset.asset_id.clone(),
-                path: public_asset_path(&hls_asset.path, &output_prefix, public_prefix)?,
-                mime_type: hls_asset.mime_type.clone(),
+                file_id: hls_file.file_id.clone(),
+                asset_id: hls_file.file_id.clone(),
+                path: hls_file.path.clone(),
+                mime_type: hls_file.mime_type.clone(),
                 codecs: vec!["mp4a.40.2".to_string()],
             },
             formats,
@@ -153,54 +156,54 @@ pub(crate) fn build_published_track(
 }
 
 struct PlaybackFormatBuild<'a> {
-    asset: &'a AssetRef,
-    draft_prefix: &'a str,
-    public_prefix: &'a str,
+    file: &'a RecordingFile,
     kind: PlaybackFormatKind,
     quality: PlaybackQuality,
     bitrate_kbps: Option<u32>,
-    metadata: &'a EncodeMetadata,
     bit_depth: Option<u32>,
 }
 
 fn playback_format(params: PlaybackFormatBuild<'_>) -> Result<PlaybackFormat, ApiError> {
     Ok(PlaybackFormat {
-        asset_id: params.asset.asset_id.clone(),
+        file_id: params.file.file_id.clone(),
+        asset_id: params.file.file_id.clone(),
         kind: params.kind,
         quality: params.quality,
-        path: public_asset_path(
-            &params.asset.path,
-            params.draft_prefix,
-            params.public_prefix,
-        )?,
-        mime_type: params.asset.mime_type.clone(),
+        path: params.file.path.clone(),
+        mime_type: params.file.mime_type.clone(),
         bitrate_kbps: params.bitrate_kbps,
-        sample_rate_hz: Some(params.metadata.sample_rate_hz),
+        sample_rate_hz: params.file.sample_rate_hz,
         bit_depth: params.bit_depth,
-        channels: Some(params.metadata.channels),
-        file_size_bytes: params.asset.file_size_bytes,
+        channels: params.file.channels,
+        file_size_bytes: params.file.file_size_bytes,
     })
 }
 
-fn required_asset<'a>(job: &'a EncodeJob, relative_path: &str) -> Result<&'a AssetRef, ApiError> {
-    optional_asset(job, relative_path).ok_or_else(|| {
+fn required_file(
+    recording: &DraftRecording,
+    kind: RecordingFileKind,
+    quality: Option<RecordingFileQuality>,
+) -> Result<&RecordingFile, ApiError> {
+    optional_file(recording, kind, quality).ok_or_else(|| {
         ApiError::bad_request(
-            "missing_required_encode_asset",
-            format!("encode job {} is missing {relative_path}", job.job_id),
+            "missing_required_recording_file",
+            format!(
+                "recording {} is missing required file {:?} {:?}",
+                recording.recording_id, kind, quality
+            ),
         )
     })
 }
 
-fn optional_asset<'a>(job: &'a EncodeJob, relative_path: &str) -> Option<&'a AssetRef> {
-    let expected = format!(
-        "{}/{}",
-        job.output.prefix.trim_end_matches('/'),
-        relative_path
-    );
-    job.output
-        .assets
+fn optional_file(
+    recording: &DraftRecording,
+    kind: RecordingFileKind,
+    quality: Option<RecordingFileQuality>,
+) -> Option<&RecordingFile> {
+    recording
+        .files
         .iter()
-        .find(|asset| asset.path == expected)
+        .find(|file| file.kind == kind && file.quality == quality)
 }
 
 pub(crate) struct PreparedEncodeJob {

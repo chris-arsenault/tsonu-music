@@ -142,7 +142,7 @@ function uniqueRecordingId(song: DraftSong, recording: DraftRecording, usedIds: 
 }
 
 function recordingHasStorage(recording: DraftRecording): boolean {
-    return Boolean(recording.sourceMaster || recording.encodeOutput || recording.encodeJobIds?.length);
+    return Boolean(recording.sourceMaster || recording.files?.length || recording.encodeJobIds?.length);
 }
 
 export function prepareDraftSongForSave(song: DraftSong): DraftSong {
@@ -160,8 +160,10 @@ export function prepareDraftSongForSave(song: DraftSong): DraftSong {
                 ? uniqueRecordingId(song, recording, usedRecordingIds)
                 : recording.recordingId;
             usedRecordingIds.add(recordingId);
+            const recordingWithoutLegacy = { ...recording } as DraftRecording & { encodeOutput?: unknown };
+            delete recordingWithoutLegacy.encodeOutput;
             return {
-                ...recording,
+                ...recordingWithoutLegacy,
                 recordingId,
                 slug: recording.slug.trim() || (title ? slugify(title) : ''),
                 title,
@@ -169,6 +171,7 @@ export function prepareDraftSongForSave(song: DraftSong): DraftSong {
                 artistName: optionalText(recording.artistName),
                 description: optionalText(recording.description),
                 encodeJobIds: recording.encodeJobIds ?? [],
+                files: recording.files ?? [],
             };
         }),
     };
@@ -212,16 +215,29 @@ export function recordingEncodeStatus(
     recording: DraftRecording | undefined,
     jobDetails: Record<string, EncodeJob>,
 ): EncodeJob['status'] | 'missing' {
-    if (recording?.encodeOutput?.jobId) return 'succeeded';
+    if (isRecordingEncoded(recording)) return 'succeeded';
     return latestJob(recording, jobDetails)?.status ?? 'missing';
 }
 
-export function recordingEncodeJobId(recording: DraftRecording | undefined): StableId | undefined {
-    return recording?.encodeOutput?.jobId ?? latestJobId(recording);
+export function recordingEncodedAt(recording: DraftRecording | undefined): string | undefined {
+    return recording?.files?.find((file) => file.createdAt)?.createdAt;
 }
 
 export function isRecordingEncoded(recording: DraftRecording | undefined): boolean {
-    return Boolean(recording?.encodeOutput?.jobId);
+    if (!recording) return false;
+    const files = recording.files ?? [];
+    const prefix = `recordings/${recording.recordingId}/files/`;
+    const hasFile = (kind: string, quality?: string) => files.some((file) => (
+        file.kind === kind
+        && file.quality === quality
+        && file.path.startsWith(prefix)
+        && Boolean(file.fileId)
+    ));
+    return (
+        hasFile('hls-master')
+        && hasFile('hls-rendition', 'aac-192')
+        && hasFile('hls-rendition', 'aac-320')
+    );
 }
 
 function trackSlugForRecording(

@@ -41,7 +41,12 @@ fn validates_encode_event_contract() {
             version_id: None,
             etag: None,
         },
-        planned_output("job_so-we-sleep_01_encode_20260523", "media", false),
+        planned_output(
+            "recording_so-we-sleep_01",
+            "20260523t195530z",
+            "media",
+            false,
+        ),
     );
     let event = EncodeJobEvent {
         action: ACTION_ENCODE_TRACK.to_string(),
@@ -66,7 +71,12 @@ fn rejects_non_queued_encode_event() {
             version_id: None,
             etag: None,
         },
-        planned_output("job_so-we-sleep_01_encode_20260523", "media", false),
+        planned_output(
+            "recording_so-we-sleep_01",
+            "20260523t195530z",
+            "media",
+            false,
+        ),
     );
     job.mark_running("2026-05-23T19:55:31Z".to_string());
     let event = EncodeJobEvent {
@@ -202,8 +212,11 @@ fn maps_generated_files_to_output_prefix() {
         "hls/192k/index.m3u8"
     );
     assert_eq!(
-        join_s3_key("draft/encodes/job_x", "hls/192k/index.m3u8"),
-        "draft/encodes/job_x/hls/192k/index.m3u8"
+        join_s3_key(
+            "recordings/recording_x/files/20260523t195530z",
+            "hls/192k/index.m3u8"
+        ),
+        "recordings/recording_x/files/20260523t195530z/hls/192k/index.m3u8"
     );
 }
 

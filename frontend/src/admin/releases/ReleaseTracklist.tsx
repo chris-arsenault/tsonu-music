@@ -17,7 +17,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { ChevronDown, ChevronUp, GripVertical, Music2, Plus, Repeat, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { navigateTo } from '../../music/routes';
-import { nextReleaseTrack, recordingEncodeJobId, recordingEncodeStatus, sortedReleaseTracks, stableId, slugify } from '../admin-helpers';
+import { nextReleaseTrack, recordingEncodeStatus, sortedReleaseTracks, stableId, slugify } from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRecording, DraftRelease, DraftReleaseTrack, DraftSong } from '../admin-types';
@@ -111,7 +111,6 @@ function SortableTrackRow({ release, track, index, total, onChange, onRequestSwa
     const { songs, jobs } = useCatalog();
     const song = songs[track.songId];
     const recording = song?.recordings.find((r) => r.recordingId === track.recordingId);
-    const jobIdValue = recordingEncodeJobId(recording);
     const {
         attributes,
         listeners,
@@ -166,7 +165,6 @@ function SortableTrackRow({ release, track, index, total, onChange, onRequestSwa
             </div>
             <div>
                 <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
-                {jobIdValue ? <small className="admin-muted">{jobIdValue}</small> : null}
             </div>
             <div className="admin-tracklist__actions">
                 <button

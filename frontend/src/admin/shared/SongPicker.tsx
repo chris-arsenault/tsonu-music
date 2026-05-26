@@ -2,7 +2,7 @@ import { Music2, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { StableId } from '../../catalog/media-catalog';
 import { useCatalog } from '../catalog-store';
-import { latestJobId, isRecordingEncoded, recordingEncodeStatus } from '../admin-helpers';
+import { isRecordingEncoded, recordingEncodeStatus } from '../admin-helpers';
 import type { DraftRecording, DraftSong } from '../admin-types';
 import { PickerDialog } from './PickerDialog';
 import { StatusPill } from './StatusPill';
@@ -16,15 +16,10 @@ interface Props {
     onRequestCreateSong?: (query: string) => void;
 }
 
-function pickDefaultRecording(song: DraftSong, jobs: Record<string, { status?: string }>): DraftRecording | undefined {
+function pickDefaultRecording(song: DraftSong): DraftRecording | undefined {
     if (song.recordings.length === 0) return undefined;
     const succeeded = song.recordings.filter((r) => isRecordingEncoded(r));
     if (succeeded.length > 0) return succeeded[succeeded.length - 1];
-    const succeededJob = song.recordings.filter((r) => {
-        const id = latestJobId(r);
-        return id ? jobs[id]?.status === 'succeeded' : false;
-    });
-    if (succeededJob.length > 0) return succeededJob[succeededJob.length - 1];
     return song.recordings[song.recordings.length - 1];
 }
 
@@ -97,7 +92,7 @@ export function SongPicker({
                                         className={`admin-picker__row ${activeSong?.songId === song.songId ? 'is-active' : ''}`}
                                         onClick={() => {
                                             setSelectedSongId(song.songId);
-                                            const def = pickDefaultRecording(song, jobs);
+                                            const def = pickDefaultRecording(song);
                                             setSelectedRecordingId(def?.recordingId);
                                         }}
                                     >
@@ -131,7 +126,7 @@ export function SongPicker({
                         ) : (
                             <ul className="admin-picker__list">
                                 {activeSong.recordings.map((recording) => {
-                                    const chosen = (selectedRecordingId ?? pickDefaultRecording(activeSong, jobs)?.recordingId) === recording.recordingId;
+                                    const chosen = (selectedRecordingId ?? pickDefaultRecording(activeSong)?.recordingId) === recording.recordingId;
                                     return (
                                         <li key={recording.recordingId}>
                                             <button
@@ -159,10 +154,10 @@ export function SongPicker({
                 <button
                     type="button"
                     className="admin-button admin-button--primary"
-                    disabled={!activeSong || !(selectedRecordingId ?? (activeSong ? pickDefaultRecording(activeSong, jobs)?.recordingId : undefined))}
+                    disabled={!activeSong || !(selectedRecordingId ?? (activeSong ? pickDefaultRecording(activeSong)?.recordingId : undefined))}
                     onClick={() => {
                         if (!activeSong) return;
-                        const recordingId = selectedRecordingId ?? pickDefaultRecording(activeSong, jobs)?.recordingId;
+                        const recordingId = selectedRecordingId ?? pickDefaultRecording(activeSong)?.recordingId;
                         if (!recordingId) return;
                         const recording = activeSong.recordings.find((r) => r.recordingId === recordingId);
                         if (!recording) return;

@@ -204,7 +204,6 @@ export async function createEncodeJob(request: {
 
 export async function publishRelease(releaseId: string, request: {
     visibility?: 'public' | 'unlisted';
-    trackJobIds?: Record<string, string>;
     publishedAt?: string;
 }): Promise<PublishResponse> {
     return requestJson<PublishResponse>(

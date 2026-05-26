@@ -1,16 +1,13 @@
 use super::AppState;
 use crate::{
     build_published_release, build_published_song, build_published_track, db,
-    ensure_trailing_slash, public_key_for_draft_object, public_recording_media_prefix,
-    select_publish_job_id, validate_publish_job, validate_publishable_release, validate_stable_id,
-    ApiError, CloudFrontInvalidationResult, DraftRelease, DraftSong, PublishRequest,
-    PublishResponse, PublishedSong, Visibility, WriteResult,
+    validate_publishable_recording, validate_publishable_release, ApiError,
+    CloudFrontInvalidationResult, DraftRelease, DraftSong, PublishRequest, PublishResponse,
+    PublishedSong, Visibility, WriteResult,
 };
 use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
 use chrono::{SecondsFormat, Utc};
-use encode_contract::EncodeJob;
 use serde_json::Value;
-use std::collections::HashSet;
 use tracing::error;
 
 impl AppState {
@@ -36,8 +33,7 @@ impl AppState {
 
         let mut published_tracks = Vec::with_capacity(draft.tracks.len());
         let mut published_songs = Vec::<PublishedSong>::new();
-        let mut copied_keys = Vec::new();
-        let mut job_ids = Vec::with_capacity(draft.tracks.len());
+        let mut file_ids = Vec::<String>::new();
 
         for track in &draft.tracks {
             let song_object = db::get_draft_song(&self.db, &track.song_id).await?;
@@ -52,19 +48,17 @@ impl AppState {
                 .ok_or_else(|| {
                     ApiError::not_found(format!("recording not found: {}", track.recording_id))
                 })?;
-            let job_id = select_publish_job_id(track, recording, &request.track_job_ids)?;
-            validate_stable_id("job", &job_id, "jobId")?;
-            let job = db::get_encode_job(&self.db, &job_id).await?;
-            validate_publish_job(&job, &song, recording, &self.media_bucket)?;
+            validate_publishable_recording(&song, recording)?;
 
-            let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
-            let job_copied_keys = self
-                .copy_encode_output_to_public_prefix(&job, &public_prefix)
-                .await?;
-            copied_keys.extend(job_copied_keys);
-
-            let published_track =
-                build_published_track(track, &song, recording, &job, &public_prefix)?;
+            let published_track = build_published_track(track, &song, recording)?;
+            if !file_ids.contains(&published_track.playback.hls.file_id) {
+                file_ids.push(published_track.playback.hls.file_id.clone());
+            }
+            for format in &published_track.playback.formats {
+                if !file_ids.contains(&format.file_id) {
+                    file_ids.push(format.file_id.clone());
+                }
+            }
             published_tracks.push(published_track);
             if !published_songs
                 .iter()
@@ -72,7 +66,6 @@ impl AppState {
             {
                 published_songs.push(build_published_song(&song));
             }
-            job_ids.push(job.job_id);
         }
 
         published_tracks.sort_by_key(|track| (track.disc_number, track.track_number));
@@ -110,9 +103,7 @@ impl AppState {
             release_id,
             manifest_path: published_release.manifest_path,
             visibility: published_release.visibility,
-            job_ids,
-            copied_object_count: copied_keys.len(),
-            copied_keys,
+            file_ids,
             release_write,
             draft_write,
             invalidation: CloudFrontInvalidationResult {
@@ -121,147 +112,6 @@ impl AppState {
                 paths: invalidation_paths,
             },
         })
-    }
-
-    async fn copy_encode_output_to_public_prefix(
-        &self,
-        job: &EncodeJob,
-        public_prefix: &str,
-    ) -> Result<Vec<String>, ApiError> {
-        let source_prefix = ensure_trailing_slash(&job.output.prefix);
-        let source_keys = self.list_media_keys(&source_prefix).await?;
-        if source_keys.is_empty() {
-            return Err(ApiError::bad_request(
-                "missing_encode_outputs",
-                format!(
-                    "encode job {} has no objects under {}",
-                    job.job_id, job.output.prefix
-                ),
-            ));
-        }
-
-        let expected_assets = job
-            .output
-            .assets
-            .iter()
-            .map(|asset| asset.path.as_str())
-            .collect::<HashSet<_>>();
-        let listed = source_keys
-            .iter()
-            .map(String::as_str)
-            .collect::<HashSet<_>>();
-        for asset_path in expected_assets {
-            if !listed.contains(asset_path) {
-                return Err(ApiError::bad_request(
-                    "missing_encode_asset",
-                    format!(
-                        "encode job {} is missing generated asset {asset_path}",
-                        job.job_id
-                    ),
-                ));
-            }
-        }
-
-        let mut copied_keys = Vec::with_capacity(source_keys.len());
-        for source_key in source_keys {
-            let destination_key =
-                public_key_for_draft_object(&job.output.prefix, public_prefix, &source_key)?;
-            self.copy_media_object(&source_key, &destination_key)
-                .await?;
-            copied_keys.push(destination_key);
-        }
-
-        Ok(copied_keys)
-    }
-
-    async fn copy_media_object(
-        &self,
-        source_key: &str,
-        destination_key: &str,
-    ) -> Result<(), ApiError> {
-        // S3's x-amz-copy-source header expects a URL-encoded key. The Rust
-        // SDK does not encode it for us. Encode every byte except the unreserved
-        // set and the path separator '/' so that nested keys stay structured.
-        let encoded_key = encode_copy_source(source_key);
-        let copy_source = format!("{}/{}", self.media_bucket, encoded_key);
-        self.s3
-            .copy_object()
-            .bucket(&self.media_bucket)
-            .key(destination_key)
-            .copy_source(&copy_source)
-            .send()
-            .await
-            .map_err(|err| {
-                let detail = error_chain(&err);
-                error!(
-                    source_key,
-                    destination_key,
-                    copy_source = %copy_source,
-                    detail = %detail,
-                    error = ?err,
-                    "Failed to copy generated media object for publishing"
-                );
-                ApiError::internal(
-                    "s3_copy_failed",
-                    format!("failed to copy {source_key} -> {destination_key}: {detail}"),
-                )
-            })?;
-
-        Ok(())
-    }
-
-    async fn list_media_keys(&self, prefix: &str) -> Result<Vec<String>, ApiError> {
-        let mut keys = Vec::new();
-        let mut continuation_token = None;
-
-        loop {
-            let mut request = self
-                .s3
-                .list_objects_v2()
-                .bucket(&self.media_bucket)
-                .prefix(prefix);
-            if let Some(token) = continuation_token {
-                request = request.continuation_token(token);
-            }
-
-            let output = request.send().await.map_err(|err| {
-                let detail = error_chain(&err);
-                error!(
-                    prefix,
-                    detail = %detail,
-                    error = ?err,
-                    "Failed to list S3 prefix for publishing"
-                );
-                ApiError::internal(
-                    "s3_list_failed",
-                    format!("failed to list {prefix}: {detail}"),
-                )
-            })?;
-
-            keys.extend(
-                output
-                    .contents()
-                    .iter()
-                    .filter_map(|object| object.key())
-                    .filter(|key| !key.ends_with('/'))
-                    .map(str::to_string),
-            );
-
-            if output.is_truncated().unwrap_or(false) {
-                continuation_token = output.next_continuation_token().map(str::to_string);
-                if continuation_token.is_none() {
-                    return Err(ApiError::internal(
-                        "s3_list_pagination_failed",
-                        "S3 list response was truncated without a continuation token",
-                    ));
-                }
-            } else {
-                break;
-            }
-        }
-
-        keys.sort();
-        Ok(keys)
     }
 
     async fn mark_draft_release_published(
@@ -345,94 +195,5 @@ impl AppState {
         Ok(output
             .invalidation()
             .map(|invalidation| invalidation.id().to_string()))
-    }
-}
-
-/// Walk the std::error::Error source chain and produce a single-line summary.
-/// AWS SDK errors only show the top-level "service error" string via Display;
-/// the underlying S3 error code and message hang off `.source()`.
-fn error_chain<E: std::error::Error + 'static>(err: &E) -> String {
-    let mut parts = vec![err.to_string()];
-    let mut current: Option<&dyn std::error::Error> = err.source();
-    while let Some(inner) = current {
-        let text = inner.to_string();
-        if !text.is_empty() && parts.last().map(String::as_str) != Some(text.as_str()) {
-            parts.push(text);
-        }
-        current = inner.source();
-    }
-    parts.join(": ")
-}
-
-/// Percent-encode every byte that S3's x-amz-copy-source header treats as
-/// unsafe. The unreserved set from RFC 3986 (A-Z, a-z, 0-9, '-', '.', '_', '~')
-/// plus '/' (path separator) are left intact; everything else is encoded.
-fn encode_copy_source(key: &str) -> String {
-    let mut out = String::with_capacity(key.len());
-    for byte in key.as_bytes() {
-        let safe = matches!(
-            *byte,
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/'
-        );
-        if safe {
-            out.push(*byte as char);
-        } else {
-            out.push_str(&format!("%{:02X}", byte));
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod helper_tests {
-    use super::{encode_copy_source, error_chain};
-    use std::fmt;
-
-    #[derive(Debug)]
-    struct ChainErr {
-        message: &'static str,
-        source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    }
-    impl fmt::Display for ChainErr {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str(self.message)
-        }
-    }
-    impl std::error::Error for ChainErr {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.source
-                .as_deref()
-                .map(|err| err as &dyn std::error::Error)
-        }
-    }
-
-    #[test]
-    fn error_chain_joins_messages() {
-        let inner = ChainErr {
-            message: "AccessDenied: User is not authorized",
-            source: None,
-        };
-        let outer = ChainErr {
-            message: "service error",
-            source: Some(Box::new(inner)),
-        };
-        assert_eq!(
-            error_chain(&outer),
-            "service error: AccessDenied: User is not authorized"
-        );
-    }
-
-    #[test]
-    fn encode_copy_source_passes_normal_keys() {
-        assert_eq!(
-            encode_copy_source("encoded/recording_x/job_y/playlist.m3u8"),
-            "encoded/recording_x/job_y/playlist.m3u8"
-        );
-    }
-
-    #[test]
-    fn encode_copy_source_encodes_spaces_and_specials() {
-        assert_eq!(encode_copy_source("a b+c"), "a%20b%2Bc");
-        assert_eq!(encode_copy_source("dir/foo bar.ts"), "dir/foo%20bar.ts");
     }
 }

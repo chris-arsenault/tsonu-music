@@ -3,7 +3,7 @@ use crate::{
     draft_release_key, draft_song_key, ApiError, DraftRelease, DraftSong, ObjectList,
     ObjectSummary, WriteResult,
 };
-use encode_contract::RecordingEncodeOutput;
+use encode_contract::RecordingFileSet;
 use serde_json::Value;
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
@@ -18,12 +18,11 @@ pub async fn get_draft_song(pool: &PgPool, song_id: &str) -> Result<DbJsonObject
     )
     .await?;
 
-    // Backfill: any recording with encodeJobIds but no encodeOutput predates the
-    // recording-as-source-of-truth model. Look up the most recent succeeded job
-    // for that recording, stamp it back onto the recording, and return the
-    // freshly-patched document. Idempotent — once stamped, the lookup is skipped.
-    let Some(patched) = backfill_recording_encode_outputs(pool, song_id, &object.text).await?
-    else {
+    // Backfill: any recording with encodeJobIds but no files predates the
+    // recording-file model. Look up the most recent succeeded job for that
+    // recording, stamp files back onto the recording, and return the freshly
+    // patched document.
+    let Some(patched) = backfill_recording_files(pool, song_id, &object.text).await? else {
         return Ok(object);
     };
     Ok(patched)
@@ -369,11 +368,10 @@ fn revision_etag(revision: i64) -> String {
     format!("\"rev-{revision}\"")
 }
 
-/// For each recording on the song that has `encodeJobIds` but no `encodeOutput`,
-/// resolve the latest succeeded job from `music_encode_jobs` and stamp the
-/// snapshot onto the recording. Persists the patch in a single statement and
-/// returns the updated document. If nothing needed patching, returns `None`.
-async fn backfill_recording_encode_outputs(
+/// For each recording on the song that has `encodeJobIds` but no `files`,
+/// resolve the latest succeeded job from `music_encode_jobs` and stamp
+/// recording-owned files onto the recording.
+async fn backfill_recording_files(
     pool: &PgPool,
     song_id: &str,
     document_text: &str,
@@ -386,9 +384,7 @@ async fn backfill_recording_encode_outputs(
     let candidates: Vec<(String, Vec<String>)> = parsed
         .recordings
         .iter()
-        .filter(|recording| {
-            recording.encode_output.is_none() && !recording.encode_job_ids.is_empty()
-        })
+        .filter(|recording| recording.files.is_empty() && !recording.encode_job_ids.is_empty())
         .map(|recording| {
             (
                 recording.recording_id.clone(),
@@ -401,7 +397,7 @@ async fn backfill_recording_encode_outputs(
         return Ok(None);
     }
 
-    let mut outputs: Vec<(String, RecordingEncodeOutput)> = Vec::new();
+    let mut file_sets: Vec<(String, RecordingFileSet)> = Vec::new();
     for (recording_id, job_ids) in candidates {
         // Walk from most-recently-appended back; the first succeeded job wins.
         for job_id in job_ids.into_iter().rev() {
@@ -410,8 +406,8 @@ async fn backfill_recording_encode_outputs(
                     if job.recording_id != recording_id {
                         continue;
                     }
-                    if let Some(output) = RecordingEncodeOutput::from_succeeded_job(&job) {
-                        outputs.push((recording_id, output));
+                    if let Some(file_set) = RecordingFileSet::from_succeeded_job(&job) {
+                        file_sets.push((recording_id, file_set));
                         break;
                     }
                 }
@@ -432,11 +428,11 @@ async fn backfill_recording_encode_outputs(
         }
     }
 
-    if outputs.is_empty() {
+    if file_sets.is_empty() {
         return Ok(None);
     }
 
-    let updated_revision = apply_recording_encode_outputs(pool, song_id, &outputs).await?;
+    let updated_revision = apply_recording_files(pool, song_id, &file_sets).await?;
 
     let Some(refreshed) = sqlx::query(
         "SELECT document::text AS document, revision FROM music_draft_songs WHERE song_id = $1",
@@ -451,9 +447,9 @@ async fn backfill_recording_encode_outputs(
 
     tracing::info!(
         song_id,
-        stamped = outputs.len(),
+        stamped = file_sets.len(),
         revision = updated_revision,
-        "Backfilled missing recording.encodeOutput from succeeded jobs"
+        "Backfilled missing recording.files from succeeded jobs"
     );
 
     Ok(Some(DbJsonObject {
@@ -462,21 +458,29 @@ async fn backfill_recording_encode_outputs(
     }))
 }
 
-async fn apply_recording_encode_outputs(
+async fn apply_recording_files(
     pool: &PgPool,
     song_id: &str,
-    outputs: &[(String, RecordingEncodeOutput)],
+    file_sets: &[(String, RecordingFileSet)],
 ) -> Result<i64, ApiError> {
     let mut tx = pool.begin().await.map_err(map_db_write_error)?;
-    for (recording_id, output) in outputs {
-        let output_json =
-            serde_json::to_value(output).map_err(|err| sqlx::Error::Encode(Box::new(err)));
-        let output_json = match output_json {
-            Ok(value) => value,
-            Err(err) => {
-                return Err(map_db_write_error(err));
-            }
-        };
+    for (recording_id, file_set) in file_sets {
+        let mut patch = serde_json::Map::new();
+        patch.insert(
+            "files".to_string(),
+            serde_json::to_value(&file_set.files)
+                .map_err(|err| sqlx::Error::Encode(Box::new(err)))
+                .map_err(map_db_write_error)?,
+        );
+        if let Some(duration_seconds) = file_set.duration_seconds {
+            patch.insert(
+                "durationSeconds".to_string(),
+                serde_json::to_value(duration_seconds)
+                    .map_err(|err| sqlx::Error::Encode(Box::new(err)))
+                    .map_err(map_db_write_error)?,
+            );
+        }
+        let patch_json = Value::Object(patch);
 
         sqlx::query(
             "UPDATE music_draft_songs
@@ -487,7 +491,7 @@ async fn apply_recording_encode_outputs(
                          (
                              SELECT jsonb_agg(
                                  CASE WHEN recording->>'recordingId' = $2
-                                     THEN recording || jsonb_build_object('encodeOutput', $3::jsonb)
+                                     THEN (recording - 'encodeOutput') || $3::jsonb
                                      ELSE recording
                                  END
                              )
@@ -506,7 +510,7 @@ async fn apply_recording_encode_outputs(
         )
         .bind(song_id)
         .bind(recording_id)
-        .bind(Json(output_json))
+        .bind(Json(patch_json))
         .execute(&mut *tx)
         .await
         .map_err(map_db_write_error)?;

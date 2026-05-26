@@ -2,9 +2,9 @@ use serde::{Deserialize, Serialize};
 
 pub const ACTION_ENCODE_TRACK: &str = "encodeTrack";
 pub const ACTION_PACKAGING_CHECK: &str = "packagingCheck";
-pub const DRAFT_ENCODE_PREFIX: &str = "draft/encodes/";
 pub const ENCODE_ENTITY_TYPE: &str = "encodeJob";
 pub const ENCODE_JOB_KEY_PREFIX: &str = "jobs/";
+pub const RECORDING_MEDIA_PREFIX: &str = "recordings/";
 pub const SCHEMA_VERSION: u8 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,36 +179,162 @@ pub struct AssetRef {
     pub checksum_sha256: Option<String>,
 }
 
-/// Snapshot of an encode result, stamped onto a `DraftRecording` once the
-/// corresponding `EncodeJob` reaches `Succeeded`. The recording itself
-/// becomes the source of truth for "is this publishable?" — code that
-/// asks the question should not need to read the job record.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingFileKind {
+    HlsMaster,
+    HlsRendition,
+    Download,
+    Metadata,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingFileQuality {
+    Aac192,
+    Aac320,
+    FlacLossless,
+}
+
+/// Recording-owned generated media. This is the catalog-facing media model:
+/// songs contain recordings, and recordings contain file ids/paths.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct RecordingEncodeOutput {
-    pub job_id: String,
-    pub bucket: String,
-    pub prefix: String,
-    pub finished_at: String,
-    pub assets: Vec<AssetRef>,
+pub struct RecordingFile {
+    pub file_id: String,
+    pub kind: RecordingFileKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quality: Option<RecordingFileQuality>,
+    pub path: String,
+    pub mime_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bitrate_kbps: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_rate_hz: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingFileSet {
+    pub files: Vec<RecordingFile>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_seconds: Option<f64>,
 }
 
-impl RecordingEncodeOutput {
+impl RecordingFileSet {
     pub fn from_succeeded_job(job: &EncodeJob) -> Option<Self> {
         if job.status != EncodeStatus::Succeeded {
             return None;
         }
+        if !job
+            .output
+            .prefix
+            .starts_with(&recording_files_root_prefix(&job.recording_id))
+        {
+            return None;
+        }
         let finished_at = job.finished_at.clone()?;
+        let metadata = job.metadata.as_ref();
+        let mut files = Vec::new();
+
+        if let Some(asset) = asset_by_relative_path(job, "hls/master.m3u8") {
+            files.push(recording_file(
+                asset,
+                RecordingFileKind::HlsMaster,
+                None,
+                None,
+                metadata,
+                &finished_at,
+            ));
+        }
+        if let Some(asset) = asset_by_relative_path(job, "hls/192k/index.m3u8") {
+            files.push(recording_file(
+                asset,
+                RecordingFileKind::HlsRendition,
+                Some(RecordingFileQuality::Aac192),
+                Some(192),
+                metadata,
+                &finished_at,
+            ));
+        }
+        if let Some(asset) = asset_by_relative_path(job, "hls/320k/index.m3u8") {
+            files.push(recording_file(
+                asset,
+                RecordingFileKind::HlsRendition,
+                Some(RecordingFileQuality::Aac320),
+                Some(320),
+                metadata,
+                &finished_at,
+            ));
+        }
+        if let Some(asset) = asset_by_relative_path(job, "lossless.flac") {
+            files.push(recording_file(
+                asset,
+                RecordingFileKind::Download,
+                Some(RecordingFileQuality::FlacLossless),
+                None,
+                metadata,
+                &finished_at,
+            ));
+        }
+        if let Some(asset) = asset_by_relative_path(job, "metadata.json") {
+            files.push(recording_file(
+                asset,
+                RecordingFileKind::Metadata,
+                None,
+                None,
+                None,
+                &finished_at,
+            ));
+        }
+
         Some(Self {
-            job_id: job.job_id.clone(),
-            bucket: job.output.bucket.clone(),
-            prefix: job.output.prefix.clone(),
-            finished_at,
-            assets: job.output.assets.clone(),
-            duration_seconds: job.metadata.as_ref().map(|m| m.duration_seconds),
+            files,
+            duration_seconds: metadata.map(|m| m.duration_seconds),
         })
+    }
+}
+
+fn asset_by_relative_path<'a>(job: &'a EncodeJob, relative_path: &str) -> Option<&'a AssetRef> {
+    let expected = format!(
+        "{}/{}",
+        job.output.prefix.trim_end_matches('/'),
+        relative_path
+    );
+    job.output
+        .assets
+        .iter()
+        .find(|asset| asset.path == expected)
+}
+
+fn recording_file(
+    asset: &AssetRef,
+    kind: RecordingFileKind,
+    quality: Option<RecordingFileQuality>,
+    bitrate_kbps: Option<u32>,
+    metadata: Option<&EncodeMetadata>,
+    created_at: &str,
+) -> RecordingFile {
+    RecordingFile {
+        file_id: asset.asset_id.clone(),
+        kind,
+        quality,
+        path: asset.path.clone(),
+        mime_type: asset.mime_type.clone(),
+        bitrate_kbps,
+        sample_rate_hz: metadata.map(|value| value.sample_rate_hz),
+        channels: metadata.map(|value| value.channels),
+        file_size_bytes: asset.file_size_bytes,
+        checksum_sha256: asset.checksum_sha256.clone(),
+        created_at: Some(created_at.to_string()),
     }
 }
 
@@ -246,32 +372,37 @@ pub fn build_job_id(recording_id: &str, timestamp: &str) -> String {
 }
 
 pub fn planned_output(
-    job_id: &str,
+    recording_id: &str,
+    output_set_id: &str,
     bucket: impl Into<String>,
     include_lossless: bool,
 ) -> EncodeOutput {
-    let prefix = format!("{DRAFT_ENCODE_PREFIX}{job_id}");
+    let prefix = recording_file_set_prefix(recording_id, output_set_id);
     let mut assets = vec![
         asset_ref(
-            job_id,
+            recording_id,
+            output_set_id,
             "hls",
             format!("{prefix}/hls/master.m3u8"),
             "application/vnd.apple.mpegurl",
         ),
         asset_ref(
-            job_id,
+            recording_id,
+            output_set_id,
             "aac_192",
             format!("{prefix}/hls/192k/index.m3u8"),
             "application/vnd.apple.mpegurl",
         ),
         asset_ref(
-            job_id,
+            recording_id,
+            output_set_id,
             "aac_320",
             format!("{prefix}/hls/320k/index.m3u8"),
             "application/vnd.apple.mpegurl",
         ),
         asset_ref(
-            job_id,
+            recording_id,
+            output_set_id,
             "metadata",
             format!("{prefix}/metadata.json"),
             "application/json",
@@ -280,7 +411,8 @@ pub fn planned_output(
 
     if include_lossless {
         assets.push(asset_ref(
-            job_id,
+            recording_id,
+            output_set_id,
             "flac",
             format!("{prefix}/lossless.flac"),
             "audio/flac",
@@ -294,9 +426,27 @@ pub fn planned_output(
     }
 }
 
-fn asset_ref(job_id: &str, suffix: &str, path: String, mime_type: &str) -> AssetRef {
+pub fn recording_files_root_prefix(recording_id: &str) -> String {
+    format!("{RECORDING_MEDIA_PREFIX}{recording_id}/files/")
+}
+
+pub fn recording_file_set_prefix(recording_id: &str, output_set_id: &str) -> String {
+    format!(
+        "{}{}",
+        recording_files_root_prefix(recording_id),
+        bounded_component(output_set_id, 48)
+    )
+}
+
+fn asset_ref(
+    recording_id: &str,
+    output_set_id: &str,
+    suffix: &str,
+    path: String,
+    mime_type: &str,
+) -> AssetRef {
     AssetRef {
-        asset_id: asset_id(job_id, suffix),
+        asset_id: file_id(recording_id, output_set_id, suffix),
         path,
         mime_type: mime_type.to_string(),
         file_size_bytes: None,
@@ -336,10 +486,13 @@ pub fn planned_ffmpeg_args(
     args
 }
 
-fn asset_id(job_id: &str, suffix: &str) -> String {
-    let base = job_id.strip_prefix("job_").unwrap_or(job_id);
+fn file_id(recording_id: &str, output_set_id: &str, suffix: &str) -> String {
+    let recording = recording_id
+        .strip_prefix("recording_")
+        .unwrap_or(recording_id);
+    let base = format!("{recording}_{output_set_id}");
     let available = 96usize.saturating_sub(suffix.len() + 1);
-    format!("asset_{}_{}", bounded_component(base, available), suffix)
+    format!("file_{}_{}", bounded_component(&base, available), suffix)
 }
 
 fn bounded_component(value: &str, max_len: usize) -> String {
@@ -375,18 +528,26 @@ mod tests {
     }
 
     #[test]
-    fn creates_draft_only_output_assets() {
-        let output = planned_output("job_so-we-sleep_01_encode_20260523", "media", true);
+    fn creates_recording_owned_output_assets() {
+        let output = planned_output(
+            "recording_so-we-sleep_01",
+            "20260523t195530z",
+            "media",
+            true,
+        );
 
         assert_eq!(
             output.prefix,
-            "draft/encodes/job_so-we-sleep_01_encode_20260523"
+            "recordings/recording_so-we-sleep_01/files/20260523t195530z"
         );
         assert_eq!(output.assets.len(), 5);
+        assert!(output.assets.iter().all(|asset| asset
+            .path
+            .starts_with("recordings/recording_so-we-sleep_01/files/")));
         assert!(output
             .assets
             .iter()
-            .all(|asset| asset.path.starts_with("draft/encodes/")));
+            .all(|asset| asset.asset_id.starts_with("file_")));
         assert!(output
             .assets
             .iter()
@@ -394,8 +555,8 @@ mod tests {
     }
 
     #[test]
-    fn recording_encode_output_only_from_succeeded_jobs() {
-        let output = planned_output("job_x_encode_20260523t195530z", "media", false);
+    fn recording_files_only_from_succeeded_jobs() {
+        let output = planned_output("recording_x", "20260523t195530z", "media", false);
         let mut job = EncodeJob::queued(
             "job_x_encode_20260523t195530z".to_string(),
             "song_x".to_string(),
@@ -411,10 +572,10 @@ mod tests {
         );
 
         // Not yet succeeded
-        assert!(RecordingEncodeOutput::from_succeeded_job(&job).is_none());
+        assert!(RecordingFileSet::from_succeeded_job(&job).is_none());
 
         job.mark_running("2026-05-23T19:55:31Z".to_string());
-        assert!(RecordingEncodeOutput::from_succeeded_job(&job).is_none());
+        assert!(RecordingFileSet::from_succeeded_job(&job).is_none());
 
         job.mark_succeeded(
             "2026-05-23T19:55:42Z".to_string(),
@@ -432,13 +593,19 @@ mod tests {
             },
         );
 
-        let snapshot = RecordingEncodeOutput::from_succeeded_job(&job).expect("succeeded job");
-        assert_eq!(snapshot.job_id, "job_x_encode_20260523t195530z");
-        assert_eq!(snapshot.bucket, "media");
-        assert_eq!(snapshot.prefix, output.prefix);
-        assert_eq!(snapshot.finished_at, "2026-05-23T19:55:42Z");
-        assert_eq!(snapshot.assets, output.assets);
-        assert_eq!(snapshot.duration_seconds, Some(215.4));
+        let files = RecordingFileSet::from_succeeded_job(&job).expect("succeeded job");
+        assert_eq!(files.duration_seconds, Some(215.4));
+        assert_eq!(files.files.len(), 4);
+        assert!(files.files.iter().any(|file| {
+            file.kind == RecordingFileKind::HlsMaster
+                && file.file_id.starts_with("file_x_20260523t195530z_hls")
+        }));
+        assert!(files.files.iter().any(|file| {
+            file.kind == RecordingFileKind::HlsRendition
+                && file.quality == Some(RecordingFileQuality::Aac320)
+                && file.bitrate_kbps == Some(320)
+                && file.sample_rate_hz == Some(48_000)
+        }));
     }
 
     #[test]
@@ -454,7 +621,7 @@ mod tests {
                 version_id: None,
                 etag: None,
             },
-            planned_output("job_x_encode_20260523t195530z", "media", false),
+            planned_output("recording_x", "20260523t195530z", "media", false),
         );
 
         job.mark_running("2026-05-23T19:55:31Z".to_string());

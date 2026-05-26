@@ -7,7 +7,7 @@ locals {
   ffmpeg_layer_zip_path       = "${path.module}/../../backend/target/lambda-layers/ffmpeg/ffmpeg-layer.zip"
   ffmpeg_layer_s3_key         = "lambda-layers/ffmpeg/ffmpeg-7.0.2-amd64-static.zip"
   ffmpeg_layer_source_hash    = fileexists(local.ffmpeg_layer_zip_path) ? filebase64sha256(local.ffmpeg_layer_zip_path) : null
-  encoder_output_prefixes     = ["albums/*", "draft/encodes/*"]
+  encoder_output_prefixes     = ["albums/*", "recordings/*"]
   encoder_master_key_prefixes = ["masters/*"]
 }
 
@@ -220,7 +220,7 @@ data "aws_iam_policy_document" "encoder" {
 
     resources = [
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
-      "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/recordings/*",
     ]
   }
 

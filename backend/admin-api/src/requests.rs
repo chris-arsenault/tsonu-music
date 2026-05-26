@@ -1,7 +1,6 @@
 use crate::{Visibility, WriteResult};
 use encode_contract::EncodeJob;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug)]
 pub(crate) struct UploadFormat<'a> {
@@ -143,8 +142,6 @@ pub(crate) struct PublishRequest {
     #[serde(default)]
     pub(crate) visibility: Option<Visibility>,
     #[serde(default)]
-    pub(crate) track_job_ids: HashMap<String, String>,
-    #[serde(default)]
     pub(crate) published_at: Option<String>,
 }
 
@@ -154,9 +151,7 @@ pub(crate) struct PublishResponse {
     pub(crate) release_id: String,
     pub(crate) manifest_path: String,
     pub(crate) visibility: Visibility,
-    pub(crate) job_ids: Vec<String>,
-    pub(crate) copied_object_count: usize,
-    pub(crate) copied_keys: Vec<String>,
+    pub(crate) file_ids: Vec<String>,
     pub(crate) release_write: WriteResult,
     pub(crate) draft_write: WriteResult,
     pub(crate) invalidation: CloudFrontInvalidationResult,

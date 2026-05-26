@@ -133,18 +133,34 @@ describe('songsGroupedByRelease + unreleasedSongs', () => {
 describe('publishReadinessFor', () => {
     const songId = stableId('song', 'halcyon');
     const recordingId = stableId('recording', 'halcyon-master');
-    const jobId = stableId('asset', 'job-success');
+    const fileId = 'file_halcyon_master_20260523_hls' as StableId;
 
-    function recordingWithOutput(id: StableId, encodeJobId: StableId): DraftRecording {
+    function recordingWithFiles(id: StableId): DraftRecording {
         return {
-            ...recording(id, [encodeJobId]),
-            encodeOutput: {
-                jobId: encodeJobId,
-                bucket: 'media',
-                prefix: `draft/encodes/${encodeJobId}`,
-                finishedAt: '2026-05-23T20:00:00Z',
-                assets: [],
-            },
+            ...recording(id),
+            durationSeconds: 181,
+            files: [
+                {
+                    fileId,
+                    kind: 'hls-master',
+                    path: `recordings/${id}/files/20260523/hls/master.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_halcyon_master_20260523_aac_192' as StableId,
+                    kind: 'hls-rendition',
+                    quality: 'aac-192',
+                    path: `recordings/${id}/files/20260523/hls/192k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_halcyon_master_20260523_aac_320' as StableId,
+                    kind: 'hls-rendition',
+                    quality: 'aac-320',
+                    path: `recordings/${id}/files/20260523/hls/320k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+            ],
         };
     }
 
@@ -152,18 +168,18 @@ describe('publishReadinessFor', () => {
         [songId]: song({
             songId,
             title: 'Halcyon',
-            recordings: [recordingWithOutput(recordingId, jobId)],
+            recordings: [recordingWithFiles(recordingId)],
         }),
     };
     const notEncodedSongs: Record<string, DraftSong> = {
         [songId]: song({
             songId,
             title: 'Halcyon',
-            recordings: [recording(recordingId, [jobId])],
+            recordings: [recording(recordingId)],
         }),
     };
 
-    test('all checks pass when every track recording has encodeOutput', () => {
+    test('all checks pass when every track recording has files', () => {
         const ready = release({
             releaseId: 'release_ready' as StableId,
             artwork,
@@ -175,9 +191,9 @@ describe('publishReadinessFor', () => {
             'Release date:true',
             'Artwork:true',
             'Tracks:true',
-            'Successful encodes:true',
+            'Recording files:true',
         ]);
-        expect(result.trackJobIds).toEqual({ ['t1']: jobId });
+        expect(result.fileIds).toContain(fileId);
     });
 
     test('blocks when artwork is missing', () => {
@@ -190,7 +206,7 @@ describe('publishReadinessFor', () => {
         expect(result.checks.find((c) => c.label === 'Artwork')?.ok).toBe(false);
     });
 
-    test('blocks when a track recording has no encodeOutput, regardless of job-status state', () => {
+    test('blocks when a track recording has no files, regardless of job-status state', () => {
         const rel = release({
             releaseId: 'release_running' as StableId,
             artwork,
@@ -198,8 +214,8 @@ describe('publishReadinessFor', () => {
         });
         const result = publishReadinessFor(rel, notEncodedSongs);
         expect(result.canPublish).toBe(false);
-        expect(result.checks.find((c) => c.label === 'Successful encodes')?.ok).toBe(false);
-        expect(result.trackJobIds).toEqual({});
+        expect(result.checks.find((c) => c.label === 'Recording files')?.ok).toBe(false);
+        expect(result.fileIds).toEqual([]);
     });
 
     test('blocks when there are zero tracks', () => {

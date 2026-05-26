@@ -7,7 +7,7 @@ import {
     optionalText,
     prepareDraftSongForSave,
     prepareDraftSongRecordingForSave,
-    recordingEncodeJobId,
+    recordingEncodedAt,
     recordingEncodeStatus,
     sanitizeFilename,
     formatRelativeTime,
@@ -38,8 +38,8 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
     const [requestedBy, setRequestedBy] = useState('admin-ui');
 
     const jobId = latestJobId(recording);
-    const encodedJobId = recordingEncodeJobId(recording);
     const latestJob: EncodeJob | undefined = jobId ? jobs[jobId] : undefined;
+    const encodedAt = recordingEncodedAt(recording);
     const hasRequiredMetadata = !draftSongRecordingsError(song);
 
     useJobPolling(jobId);
@@ -165,8 +165,8 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                     <span>Latest encode</span>
                     <strong>
                         <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
-                        {(recording.encodeOutput?.finishedAt ?? latestJob?.finishedAt) ? (
-                            <span className="admin-muted"> · {formatRelativeTime(recording.encodeOutput?.finishedAt ?? latestJob?.finishedAt)}</span>
+                        {(encodedAt ?? latestJob?.finishedAt) ? (
+                            <span className="admin-muted"> · {formatRelativeTime(encodedAt ?? latestJob?.finishedAt)}</span>
                         ) : null}
                     </strong>
                 </div>
@@ -228,7 +228,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                 <div className="admin-job-detail">
                     <div className="admin-job-detail__head">
                         <FileAudio aria-hidden="true" />
-                        <strong>{encodedJobId ?? latestJob.jobId}</strong>
+                        <strong>{latestJob.jobId}</strong>
                         <StatusPill kind="encode" value={latestJob.status} />
                     </div>
                     {latestJob.error ? (

@@ -180,8 +180,8 @@ data "aws_iam_policy_document" "media_storage_bucket" {
       resources = [
         # `albums/*` is the pre-rename public prefix; kept for any
         # album-era publication that hasn't been re-published yet.
-        # `recordings/*` is where the publish step copies encoded HLS
-        # and FLAC outputs out of `draft/encodes/*`.
+        # `recordings/*` is where the encoder writes recording-owned HLS
+        # and FLAC outputs.
         "${each.value.arn}/albums/*",
         "${each.value.arn}/artwork/*",
         "${each.value.arn}/recordings/*",

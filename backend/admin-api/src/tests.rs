@@ -1,7 +1,8 @@
 use super::*;
 use crate::http::{parse_path, ApiPath};
 use encode_contract::{
-    planned_output, EncodeJob, EncodeMetadata, EncodeStatus, ObjectRef, ACTION_ENCODE_TRACK,
+    planned_output, EncodeJob, EncodeMetadata, EncodeStatus, ObjectRef, RecordingFileSet,
+    ACTION_ENCODE_TRACK,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -207,63 +208,31 @@ fn validates_canonical_source_master_keys() {
 }
 
 #[test]
-fn selects_publish_override_or_latest_job() {
-    let track = sample_release_track();
-    let recording = sample_recording(vec![
-        "job_so-we-sleep_01_encode_20260523".to_string(),
-        "job_so-we-sleep_01_encode_20260524".to_string(),
-    ]);
-
-    assert_eq!(
-        select_publish_job_id(&track, &recording, &HashMap::new()).unwrap(),
-        "job_so-we-sleep_01_encode_20260524"
-    );
-
-    let overrides = HashMap::from([(
-        "track_so-we-sleep_01".to_string(),
-        "job_so-we-sleep_01_encode_manual".to_string(),
-    )]);
-    assert_eq!(
-        select_publish_job_id(&track, &recording, &overrides).unwrap(),
-        "job_so-we-sleep_01_encode_manual"
-    );
-}
-
-#[test]
-fn maps_draft_encode_paths_to_public_job_prefix() {
-    assert_eq!(
-        public_recording_media_prefix(
-            "recording_opening-dream_demo",
-            "job_so-we-sleep_01_encode_20260523"
-        ),
-        "recordings/recording_opening-dream_demo/job_so-we-sleep_01_encode_20260523"
-    );
-    assert_eq!(
-        public_key_for_draft_object(
-            "draft/encodes/job_x",
-            "recordings/recording_opening-dream_demo/job_x",
-            "draft/encodes/job_x/hls/192k/segment_00001.ts"
-        )
-        .unwrap(),
-        "recordings/recording_opening-dream_demo/job_x/hls/192k/segment_00001.ts"
-    );
-}
-
-#[test]
-fn builds_published_track_from_succeeded_encode_job() {
+fn validates_recording_files_as_publishable_media() {
     let song = sample_draft_song();
-    let recording = sample_recording(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
-    let track = sample_release_track();
-    let job = sample_succeeded_job();
-    let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
+    let recording = &song.recordings[0];
 
-    let published = build_published_track(&track, &song, &recording, &job, &public_prefix).unwrap();
+    assert!(validate_publishable_recording(&song, recording).is_ok());
+
+    let mut missing = recording.clone();
+    missing.files = Vec::new();
+    assert!(validate_publishable_recording(&song, &missing).is_err());
+}
+
+#[test]
+fn builds_published_track_from_recording_files() {
+    let song = sample_draft_song();
+    let recording = &song.recordings[0];
+    let track = sample_release_track();
+
+    let published = build_published_track(&track, &song, recording).unwrap();
 
     assert_eq!(published.duration_seconds, 181.25);
     assert_eq!(
-            published.playback.hls.path,
-            "recordings/recording_opening-dream_demo/job_so-we-sleep_01_encode_20260523/hls/master.m3u8"
-        );
+        published.playback.hls.path,
+        "recordings/recording_opening-dream_demo/files/20260523t000000z/hls/master.m3u8"
+    );
+    assert!(published.playback.hls.file_id.starts_with("file_"));
     assert_eq!(published.song_id, "song_opening-dream");
     assert_eq!(published.recording_id, "recording_opening-dream_demo");
     assert_eq!(
@@ -283,12 +252,9 @@ fn builds_published_track_from_succeeded_encode_job() {
 fn serializes_published_release_without_private_publish_fields() {
     let draft = sample_draft_release();
     let song = sample_draft_song();
-    let recording = sample_recording(vec!["job_so-we-sleep_01_encode_20260523".to_string()]);
+    let recording = &song.recordings[0];
     let track = sample_release_track();
-    let job = sample_succeeded_job();
-    let public_prefix = public_recording_media_prefix(&recording.recording_id, &job.job_id);
-    let published_track =
-        build_published_track(&track, &song, &recording, &job, &public_prefix).unwrap();
+    let published_track = build_published_track(&track, &song, recording).unwrap();
     let release = build_published_release(
         &draft,
         Visibility::Public,
@@ -343,7 +309,8 @@ fn builds_encode_job_event_with_lossless_outputs_and_source_identity() {
         requested_by: Some("admin@example.com".to_string()),
     };
     let output = planned_output(
-        "job_so-we-sleep_01_encode_manual",
+        "recording_opening-dream_demo",
+        "20260524t000000z",
         "tsonu-music-media",
         true,
     );
@@ -410,9 +377,7 @@ fn sample_draft_song() -> DraftSong {
                 }
             ]
         })),
-        recordings: vec![sample_recording(vec![
-            "job_so-we-sleep_01_encode_20260523".to_string()
-        ])],
+        recordings: vec![sample_encoded_recording()],
     }
 }
 
@@ -490,13 +455,27 @@ fn sample_recording(encode_job_ids: Vec<String>) -> DraftRecording {
             channels: None,
         }),
         encode_job_ids,
-        encode_output: None,
+        files: Vec::new(),
     }
+}
+
+fn sample_encoded_recording() -> DraftRecording {
+    let job = sample_succeeded_job();
+    let file_set = RecordingFileSet::from_succeeded_job(&job).unwrap();
+    let mut recording = sample_recording(vec![job.job_id]);
+    recording.duration_seconds = file_set.duration_seconds;
+    recording.files = file_set.files;
+    recording
 }
 
 fn sample_succeeded_job() -> EncodeJob {
     let job_id = "job_so-we-sleep_01_encode_20260523";
-    let mut output = planned_output(job_id, "tsonu-music-media", true);
+    let mut output = planned_output(
+        "recording_opening-dream_demo",
+        "20260523t000000z",
+        "tsonu-music-media",
+        true,
+    );
     for asset in &mut output.assets {
         asset.file_size_bytes = Some(1024);
         asset.checksum_sha256 = Some("a".repeat(64));

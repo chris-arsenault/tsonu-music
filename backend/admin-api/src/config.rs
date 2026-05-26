@@ -6,7 +6,6 @@ pub(crate) const ARTIST_NAME: &str = "Tsonu";
 pub(crate) const ARTIST_SLUG: &str = "tsonu";
 pub(crate) const DRAFT_SONG_PREFIX: &str = "draft/songs/";
 pub(crate) const DRAFT_RELEASE_PREFIX: &str = "draft/releases/";
-pub(crate) const PUBLIC_RECORDING_PREFIX: &str = "recordings/";
 pub(crate) const DEFAULT_UPLOAD_URL_EXPIRY_SECONDS: u64 = 900;
 pub(crate) const MAX_UPLOAD_URL_EXPIRY_SECONDS: u64 = 3600;
 

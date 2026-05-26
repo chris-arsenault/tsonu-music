@@ -4,6 +4,7 @@ export type StableId =
     | `release_${string}`
     | `track_${string}`
     | `asset_${string}`
+    | `file_${string}`
     | `job_${string}`;
 
 export type ReleaseKind = 'album' | 'ep' | 'single' | 'demo' | 'preview' | 'collection' | 'prerelease';
@@ -149,6 +150,7 @@ export interface PublishedSongPlacement {
 
 export interface TrackPlayback {
     hls: {
+        fileId?: StableId;
         assetId: StableId;
         path: string;
         url?: string;
@@ -159,6 +161,7 @@ export interface TrackPlayback {
 }
 
 export interface PlaybackFormat {
+    fileId?: StableId;
     assetId: StableId;
     kind: PlaybackFormatKind;
     quality: PlaybackQuality;

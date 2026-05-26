@@ -14,26 +14,21 @@ export interface DraftSourceMaster {
     channels?: number;
 }
 
-export interface RecordingEncodeAsset {
-    assetId: StableId;
+export type RecordingFileKind = 'hls-master' | 'hls-rendition' | 'download' | 'metadata';
+export type RecordingFileQuality = 'aac-192' | 'aac-320' | 'flac-lossless';
+
+export interface RecordingFile {
+    fileId: StableId;
+    kind: RecordingFileKind;
+    quality?: RecordingFileQuality;
     path: string;
     mimeType: string;
+    bitrateKbps?: number;
+    sampleRateHz?: number;
+    channels?: number;
     fileSizeBytes?: number;
     checksumSha256?: string;
-}
-
-/**
- * Snapshot of the most recent successful encode, stamped onto the recording
- * by the encoder. When present, the recording is publishable; the EncodeJob
- * record exists only for operational history.
- */
-export interface RecordingEncodeOutput {
-    jobId: StableId;
-    bucket: string;
-    prefix: string;
-    finishedAt: string;
-    assets: RecordingEncodeAsset[];
-    durationSeconds?: number;
+    createdAt?: string;
 }
 
 export interface DraftRecording {
@@ -49,7 +44,7 @@ export interface DraftRecording {
     description?: string;
     sourceMaster?: DraftSourceMaster;
     encodeJobIds?: StableId[];
-    encodeOutput?: RecordingEncodeOutput;
+    files?: RecordingFile[];
 }
 
 export interface DraftSong {
@@ -222,9 +217,7 @@ export interface PublishResponse {
     releaseId: StableId;
     manifestPath: string;
     visibility: Visibility;
-    jobIds: StableId[];
-    copiedObjectCount: number;
-    copiedKeys: string[];
+    fileIds: StableId[];
     releaseWrite: WriteResult;
     draftWrite: WriteResult;
     invalidation: {

@@ -21,19 +21,12 @@ interface Props {
     onNavigateRelease: (releaseId: string) => void;
 }
 
-function defaultRecording(song: DraftSong, jobs: Record<string, { status?: string }>): DraftRecording | undefined {
+function defaultRecording(song: DraftSong): DraftRecording | undefined {
     if (song.recordings.length === 0) return undefined;
     const savedRecordings = song.recordings.filter((recording) => !isTemporaryRecordingId(recording.recordingId));
     if (savedRecordings.length === 0) return undefined;
     const encoded = savedRecordings.filter(isRecordingEncoded);
     if (encoded.length > 0) return encoded[encoded.length - 1];
-    const ranked = savedRecordings.map((r) => {
-        const jobId = r.encodeJobIds?.[r.encodeJobIds.length - 1];
-        const job = jobId ? jobs[jobId] : undefined;
-        return { r, ok: job?.status === 'succeeded' };
-    });
-    const succeeded = ranked.filter((entry) => entry.ok);
-    if (succeeded.length > 0) return succeeded[succeeded.length - 1].r;
     return song.recordings[song.recordings.length - 1];
 }
 
@@ -50,7 +43,7 @@ export function AppearsOnList({ song, isSavedSong, onNavigateRelease }: Props) {
         [song.recordings],
     );
     const selectedRecording = selectableRecordings.find((recording) => recording.recordingId === selectedRecordingId)
-        ?? defaultRecording({ ...song, recordings: selectableRecordings }, jobs);
+        ?? defaultRecording({ ...song, recordings: selectableRecordings });
 
     useEffect(() => {
         if (selectedRecording && selectedRecording.recordingId === selectedRecordingId) return;

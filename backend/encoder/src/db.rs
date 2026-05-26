@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use encode_contract::{EncodeJob, EncodeStatus, RecordingEncodeOutput};
+use encode_contract::{EncodeJob, EncodeStatus, RecordingFileSet};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::types::Json;
@@ -22,17 +22,14 @@ pub async fn connect_pool_from_env() -> Result<PgPool, sqlx::Error> {
         .await
 }
 
-/// Persist the job's current state. When the job has succeeded, also stamp
-/// the matching `DraftRecording.encodeOutput` so the recording itself
-/// becomes the source of truth for "is this publishable?". Both writes
-/// happen in a single transaction so publish-readiness can never be
-/// silently out of sync with the job status.
+/// Persist the job's current state. When the job has succeeded, also stamp the
+/// recording-owned generated files onto the matching `DraftRecording`.
 pub async fn upsert_encode_job(pool: &PgPool, job: &EncodeJob) -> Result<(), sqlx::Error> {
     let document = serde_json::to_value(job).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
     let mut tx = pool.begin().await?;
     upsert_encode_job_document(&mut tx, job, document).await?;
-    if let Some(output) = RecordingEncodeOutput::from_succeeded_job(job) {
-        stamp_recording_encode_output(&mut tx, &job.song_id, &job.recording_id, &output).await?;
+    if let Some(file_set) = RecordingFileSet::from_succeeded_job(job) {
+        stamp_recording_files(&mut tx, &job.song_id, &job.recording_id, &file_set).await?;
     }
     tx.commit().await
 }
@@ -70,19 +67,27 @@ async fn upsert_encode_job_document(
     Ok(())
 }
 
-/// Patch the encodeOutput field of the matching recording inside a
-/// draft song's JSONB document. Atomic: no read-modify-write race with
-/// admin-api saves. Returns true if a row was updated, false if the
-/// song or recording was not found (e.g. user deleted the draft after
-/// the encode was queued — logged by the caller, not an error).
-pub async fn stamp_recording_encode_output(
+/// Patch the generated files of the matching recording inside a draft song's
+/// JSONB document. Atomic: no read-modify-write race with admin-api saves.
+pub async fn stamp_recording_files(
     tx: &mut Transaction<'_, Postgres>,
     song_id: &str,
     recording_id: &str,
-    output: &RecordingEncodeOutput,
+    file_set: &RecordingFileSet,
 ) -> Result<bool, sqlx::Error> {
-    let output_json =
-        serde_json::to_value(output).map_err(|err| sqlx::Error::Encode(Box::new(err)))?;
+    let mut patch = serde_json::Map::new();
+    patch.insert(
+        "files".to_string(),
+        serde_json::to_value(&file_set.files).map_err(|err| sqlx::Error::Encode(Box::new(err)))?,
+    );
+    if let Some(duration_seconds) = file_set.duration_seconds {
+        patch.insert(
+            "durationSeconds".to_string(),
+            serde_json::to_value(duration_seconds)
+                .map_err(|err| sqlx::Error::Encode(Box::new(err)))?,
+        );
+    }
+    let patch_json = Value::Object(patch);
     let result = sqlx::query(
         "UPDATE music_draft_songs
          SET document = jsonb_set(
@@ -92,7 +97,7 @@ pub async fn stamp_recording_encode_output(
                      (
                          SELECT jsonb_agg(
                              CASE WHEN recording->>'recordingId' = $2
-                                 THEN recording || jsonb_build_object('encodeOutput', $3::jsonb)
+                                 THEN (recording - 'encodeOutput') || $3::jsonb
                                  ELSE recording
                              END
                          )
@@ -111,7 +116,7 @@ pub async fn stamp_recording_encode_output(
     )
     .bind(song_id)
     .bind(recording_id)
-    .bind(Json(output_json))
+    .bind(Json(patch_json))
     .execute(&mut **tx)
     .await?;
     Ok(result.rows_affected() > 0)

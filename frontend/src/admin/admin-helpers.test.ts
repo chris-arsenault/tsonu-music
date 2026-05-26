@@ -249,16 +249,33 @@ describe('nextReleaseTrack + sortedReleaseTracks', () => {
 });
 
 describe('isRecordingEncoded', () => {
-    test('reads encodeOutput instead of job cache state', () => {
+    test('reads recording files instead of job cache state', () => {
+        const recordingId = stableId('recording', 'encoded');
         expect(isRecordingEncoded(makeRecording())).toBe(false);
         expect(isRecordingEncoded(makeRecording({
-            encodeOutput: {
-                jobId: stableId('asset', 'encoded'),
-                bucket: 'media',
-                prefix: 'draft/encodes/job_encoded',
-                finishedAt: '2026-05-26T00:00:00Z',
-                assets: [],
-            },
+            recordingId,
+            files: [
+                {
+                    fileId: 'file_encoded_20260526_hls' as const,
+                    kind: 'hls-master',
+                    path: `recordings/${recordingId}/files/20260526/hls/master.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_encoded_20260526_aac_192' as const,
+                    kind: 'hls-rendition',
+                    quality: 'aac-192',
+                    path: `recordings/${recordingId}/files/20260526/hls/192k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+                {
+                    fileId: 'file_encoded_20260526_aac_320' as const,
+                    kind: 'hls-rendition',
+                    quality: 'aac-320',
+                    path: `recordings/${recordingId}/files/20260526/hls/320k/index.m3u8`,
+                    mimeType: 'application/vnd.apple.mpegurl',
+                },
+            ],
         }))).toBe(true);
     });
 });

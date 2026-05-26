@@ -1,6 +1,6 @@
 import { Rocket, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import type { StableId, Visibility } from '../../catalog/media-catalog';
+import type { Visibility } from '../../catalog/media-catalog';
 import { publishRelease } from '../admin-api';
 import { optionalText, recordingEncodeStatus, sortedReleaseTracks } from '../admin-helpers';
 import { useCatalog, usePublishReadiness } from '../catalog-store';
@@ -18,7 +18,7 @@ export function PublishDrawer({ release, onClose }: Props) {
     const { songs, jobs, upsertRelease } = useCatalog();
     const { notify } = useNotifications();
     const { busy, run } = useBusy();
-    const { checks, canPublish, trackJobIds } = usePublishReadiness(release.releaseId);
+    const { checks, canPublish } = usePublishReadiness(release.releaseId);
     const [visibility, setVisibility] = useState<Visibility>('public');
     const [publishedAt, setPublishedAt] = useState('');
     const [result, setResult] = useState<PublishResponse>();
@@ -37,7 +37,6 @@ export function PublishDrawer({ release, onClose }: Props) {
         await run('Publishing release', async () => {
             const response = await publishRelease(release.releaseId, {
                 visibility,
-                trackJobIds: trackJobIds as Record<string, StableId>,
                 publishedAt: optionalText(publishedAt),
             });
             setResult(response);
@@ -104,7 +103,7 @@ export function PublishDrawer({ release, onClose }: Props) {
                 {result ? (
                     <div className="admin-publish-result">
                         <strong>{result.manifestPath}</strong>
-                        <span>{result.copiedObjectCount} object{result.copiedObjectCount === 1 ? '' : 's'} copied</span>
+                        <span>{result.fileIds.length} file{result.fileIds.length === 1 ? '' : 's'} referenced</span>
                         <span>{result.invalidation.invalidationId ?? 'invalidation requested'}</span>
                     </div>
                 ) : null}

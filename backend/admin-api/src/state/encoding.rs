@@ -65,7 +65,12 @@ impl AppState {
         validate_stable_id("job", &job_id, "jobId")?;
 
         let include_lossless = request.include_lossless.unwrap_or(false);
-        let output = planned_output(&job_id, self.media_bucket.clone(), include_lossless);
+        let output = planned_output(
+            &request.recording_id,
+            &timestamp,
+            self.media_bucket.clone(),
+            include_lossless,
+        );
         let prepared = build_encode_job_event(
             request,
             recording,
