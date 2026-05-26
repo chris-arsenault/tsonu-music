@@ -8,6 +8,7 @@ use encode_contract::{
     encode_job_key as contract_encode_job_key, planned_ffmpeg_args, EncodeJob, EncodeJobEvent,
     ObjectRef, RecordingFile, RecordingFileKind, RecordingFileQuality, ACTION_ENCODE_TRACK,
 };
+use std::collections::HashSet;
 
 pub(crate) fn build_published_song(draft: &DraftSong) -> PublishedSong {
     PublishedSong {
@@ -32,6 +33,9 @@ pub(crate) fn build_published_release(
     published_at: String,
     tracks: Vec<PublishedReleaseTrack>,
 ) -> Result<PublishedRelease, ApiError> {
+    let mut tracks = tracks;
+    make_track_slugs_unique(&mut tracks);
+
     Ok(PublishedRelease {
         schema_version: 1,
         entity_type: ReleaseEntityType::Release,
@@ -62,6 +66,75 @@ pub(crate) fn build_published_release(
         tags: draft.tags.clone(),
         tracks,
     })
+}
+
+fn make_track_slugs_unique(tracks: &mut [PublishedReleaseTrack]) {
+    let mut used = HashSet::<String>::new();
+    for track in tracks {
+        let base = track.slug.clone();
+        let mut candidate = base.clone();
+        if used.contains(&candidate) {
+            let disambiguated = disambiguated_track_slug(&base, track);
+            candidate = disambiguated.clone();
+            let mut index = 2;
+            while used.contains(&candidate) {
+                candidate = format!("{disambiguated}-{index}");
+                index += 1;
+            }
+            track.slug = candidate.clone();
+        }
+        used.insert(candidate);
+    }
+}
+
+fn disambiguated_track_slug(base: &str, track: &PublishedReleaseTrack) -> String {
+    if let Some(version_slug) = track
+        .version_title
+        .as_deref()
+        .map(slugify_component)
+        .filter(|slug| !slug.is_empty())
+    {
+        return append_slug(base, &version_slug);
+    }
+
+    let recording_slug = recording_id_slug(&track.recording_id);
+    if !recording_slug.is_empty() && recording_slug != base {
+        return recording_slug;
+    }
+
+    format!("{}-{}", base, track.track_number)
+}
+
+fn recording_id_slug(recording_id: &str) -> String {
+    let source = recording_id
+        .strip_prefix("recording_")
+        .unwrap_or(recording_id);
+    slugify_component(source)
+}
+
+fn append_slug(base: &str, suffix: &str) -> String {
+    if suffix == base || suffix.starts_with(&format!("{base}-")) {
+        suffix.to_string()
+    } else {
+        format!("{base}-{suffix}")
+    }
+}
+
+fn slugify_component(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .fold(String::new(), |mut slug, c| {
+            if c.is_ascii_alphanumeric() {
+                slug.push(c);
+            } else if !slug.ends_with('-') {
+                slug.push('-');
+            }
+            slug
+        })
+        .trim_matches('-')
+        .to_string()
 }
 
 pub(crate) fn build_published_track(

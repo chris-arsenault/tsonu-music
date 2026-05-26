@@ -12,6 +12,7 @@ import {
     parseLinks,
     parseOptionalJson,
     parseTags,
+    normalizeReleaseTrackSlugs,
     readArtworkDimensions,
     releaseIdFromKey,
     sanitizeFilename,
@@ -141,7 +142,7 @@ export function ReleaseDetail({
             return;
         }
         await run('Saving release', async () => {
-            const payload: DraftRelease = {
+            const payload = normalizeReleaseTrackSlugs({
                 ...draft,
                 subtitle: optionalText(draft.subtitle),
                 releaseDate: optionalText(draft.releaseDate),
@@ -151,7 +152,7 @@ export function ReleaseDetail({
                 links: parseLinks(linksText),
                 tags: parseTags(tagsText),
                 updatedAt: new Date().toISOString(),
-            };
+            });
             await saveRelease(payload, { isNew });
             setDraft(payload);
             if (isNew) onSavedNewRelease(payload);

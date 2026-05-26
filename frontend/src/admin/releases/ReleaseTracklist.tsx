@@ -17,7 +17,14 @@ import { CSS } from '@dnd-kit/utilities';
 import { ChevronDown, ChevronUp, GripVertical, Music2, Plus, Repeat, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import { navigateTo } from '../../music/routes';
-import { nextReleaseTrack, recordingEncodeStatus, sortedReleaseTracks, stableId, slugify } from '../admin-helpers';
+import {
+    nextReleaseTrack,
+    normalizeReleaseTrackSlugs,
+    recordingEncodeStatus,
+    sortedReleaseTracks,
+    stableId,
+    slugify,
+} from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRecording, DraftRelease, DraftReleaseTrack, DraftSong } from '../admin-types';
@@ -72,14 +79,19 @@ function swapTrackRecording(
     song: DraftSong,
     recording: DraftRecording,
 ): DraftRelease {
+    const releaseWithoutTrack = {
+        ...release,
+        tracks: release.tracks.filter((track) => track.trackId !== trackId),
+    };
+    const replacement = nextReleaseTrack(releaseWithoutTrack, song, recording);
     return {
         ...release,
         tracks: release.tracks.map((track) => track.trackId === trackId ? {
             ...track,
             songId: song.songId,
             recordingId: recording.recordingId,
-            slug: song.slug,
-            title: track.title?.trim() ? track.title : song.title,
+            slug: replacement.slug,
+            title: track.title?.trim() ? track.title : replacement.title,
             explicit: recording.explicit,
             isrc: recording.isrc,
         } : track),
@@ -87,12 +99,18 @@ function swapTrackRecording(
 }
 
 function regenerateTrackIds(release: DraftRelease): DraftRelease {
-    return {
+    const withTitleSlugs = normalizeReleaseTrackSlugs({
         ...release,
         tracks: release.tracks.map((track) => ({
             ...track,
             slug: slugify(track.title),
-            trackId: stableId('track', `${release.slug}_${String(track.trackNumber).padStart(2, '0')}_${slugify(track.title)}`),
+        })),
+    });
+    return {
+        ...withTitleSlugs,
+        tracks: withTitleSlugs.tracks.map((track) => ({
+            ...track,
+            trackId: stableId('track', `${release.slug}_${String(track.trackNumber).padStart(2, '0')}_${track.slug}`),
         })),
     };
 }

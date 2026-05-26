@@ -320,6 +320,42 @@ export function nextReleaseTrack(release: DraftRelease, song: DraftSong, recordi
     };
 }
 
+export function normalizeReleaseTrackSlugs(release: DraftRelease): DraftRelease {
+    const used = new Set<string>();
+    let changed = false;
+    const tracks = release.tracks.map((track) => {
+        const base = slugify(track.slug || track.title || track.trackId);
+        const slug = uniqueReleaseTrackSlug(base, track, used);
+        used.add(slug);
+        if (slug === track.slug) return track;
+        changed = true;
+        return { ...track, slug };
+    });
+    return changed ? { ...release, tracks } : release;
+}
+
+function uniqueReleaseTrackSlug(
+    base: string,
+    track: DraftReleaseTrack,
+    used: Set<string>,
+): string {
+    if (!used.has(base)) return base;
+    const disambiguated = disambiguatedReleaseTrackSlug(base, track);
+    let candidate = disambiguated;
+    let index = 2;
+    while (used.has(candidate)) {
+        candidate = `${disambiguated}-${index}`;
+        index += 1;
+    }
+    return candidate;
+}
+
+function disambiguatedReleaseTrackSlug(base: string, track: DraftReleaseTrack): string {
+    const recordingSlug = slugify(track.recordingId.replace(/^recording_/, '').replace(/_/g, '-'));
+    if (recordingSlug && recordingSlug !== base) return recordingSlug;
+    return `${base}-${track.trackNumber || 2}`;
+}
+
 export function sortedReleaseTracks(release: DraftRelease | undefined): DraftReleaseTrack[] {
     return [...(release?.tracks ?? [])].sort((left, right) => (
         left.discNumber - right.discNumber || left.trackNumber - right.trackNumber || left.title.localeCompare(right.title)
@@ -447,7 +483,7 @@ export function formatRelativeTime(iso: string | undefined): string {
 export function errorMessage(error: unknown): string {
     if (error instanceof AdminApiError) {
         if (error.status === 409) {
-            return 'A draft with that title already exists. Open it from the draft list, or change the title before saving a new draft.';
+            return 'A catalog record with that slug already exists. Check for duplicate release, song, or track slugs before saving or publishing.';
         }
 
         return error.code

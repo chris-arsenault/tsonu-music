@@ -288,6 +288,36 @@ fn serializes_published_release_without_private_publish_fields() {
 }
 
 #[test]
+fn published_release_disambiguates_duplicate_track_slugs() {
+    let draft = sample_draft_release();
+    let song = sample_draft_song();
+    let normal = &song.recordings[0];
+    let mut alternate = normal.clone();
+    alternate.recording_id = "recording_opening-dream_orchestral-edit".to_string();
+    alternate.version_title = Some("Orchestral Edit".to_string());
+
+    let first_track = sample_release_track();
+    let mut second_track = sample_release_track();
+    second_track.track_id = "track_so-we-sleep_02".to_string();
+    second_track.recording_id = alternate.recording_id.clone();
+    second_track.track_number = 2;
+    second_track.slug = first_track.slug.clone();
+
+    let first = build_published_track(&first_track, &song, normal).unwrap();
+    let second = build_published_track(&second_track, &song, &alternate).unwrap();
+    let release = build_published_release(
+        &draft,
+        Visibility::Public,
+        "2026-05-23T12:00:00Z".to_string(),
+        vec![first, second],
+    )
+    .unwrap();
+
+    assert_eq!(release.tracks[0].slug, "opening-dream");
+    assert_eq!(release.tracks[1].slug, "opening-dream-orchestral-edit");
+}
+
+#[test]
 fn validates_draft_documents() {
     let song = json!({
         "schemaVersion": 1,

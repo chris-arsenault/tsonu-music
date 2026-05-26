@@ -6,6 +6,7 @@ import {
     isTemporaryRecordingId,
     newRecording,
     nextReleaseTrack,
+    normalizeReleaseTrackSlugs,
     parseLinks,
     parseTags,
     prepareDraftSongForSave,
@@ -234,6 +235,36 @@ describe('nextReleaseTrack + sortedReleaseTracks', () => {
 
         expect(track.slug).toBe('reign-of-the-simmered-orchestral-edit');
         expect(track.title).toBe('Reign of the Simmered (Orchestral Edit)');
+    });
+
+    test('normalizes duplicate track slugs before saving a release', () => {
+        const release = makeRelease({
+            tracks: [
+                {
+                    trackId: stableId('track', 'sample_01_reign'),
+                    songId: stableId('song', 'reign'),
+                    recordingId: stableId('recording', 'reign'),
+                    discNumber: 1,
+                    trackNumber: 1,
+                    slug: 'reign-of-the-simmered',
+                    title: 'Reign of the Simmered',
+                },
+                {
+                    trackId: stableId('track', 'sample_09_reign'),
+                    songId: stableId('song', 'reign'),
+                    recordingId: stableId('recording', 'reign-of-the-simmered-version-2'),
+                    discNumber: 1,
+                    trackNumber: 9,
+                    slug: 'reign-of-the-simmered',
+                    title: 'Reign of the Simmered',
+                },
+            ],
+        });
+
+        expect(normalizeReleaseTrackSlugs(release).tracks.map((track) => track.slug)).toEqual([
+            'reign-of-the-simmered',
+            'reign-of-the-simmered-version-2',
+        ]);
     });
 
     test('sortedReleaseTracks orders by disc then track', () => {
