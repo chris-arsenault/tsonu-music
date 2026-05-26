@@ -1,11 +1,18 @@
 import { ExternalLink, Plus } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { nextReleaseTrack, sortedReleaseTracks } from '../admin-helpers';
+import { useEffect, useMemo, useState } from 'react';
+import {
+    isRecordingEncoded,
+    isTemporaryRecordingId,
+    nextReleaseTrack,
+    recordingEncodeStatus,
+    sortedReleaseTracks,
+} from '../admin-helpers';
 import { useCatalog, useReleasesContainingSong } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRecording, DraftSong } from '../admin-types';
 import { EmptyState } from '../shared/EmptyState';
 import { ReleasePicker } from '../shared/ReleasePicker';
+import { StatusPill } from '../shared/StatusPill';
 import { useBusy } from '../shared/useBusy';
 
 interface Props {
@@ -16,7 +23,11 @@ interface Props {
 
 function defaultRecording(song: DraftSong, jobs: Record<string, { status?: string }>): DraftRecording | undefined {
     if (song.recordings.length === 0) return undefined;
-    const ranked = song.recordings.map((r) => {
+    const savedRecordings = song.recordings.filter((recording) => !isTemporaryRecordingId(recording.recordingId));
+    if (savedRecordings.length === 0) return undefined;
+    const encoded = savedRecordings.filter(isRecordingEncoded);
+    if (encoded.length > 0) return encoded[encoded.length - 1];
+    const ranked = savedRecordings.map((r) => {
         const jobId = r.encodeJobIds?.[r.encodeJobIds.length - 1];
         const job = jobId ? jobs[jobId] : undefined;
         return { r, ok: job?.status === 'succeeded' };
@@ -27,28 +38,32 @@ function defaultRecording(song: DraftSong, jobs: Record<string, { status?: strin
 }
 
 export function AppearsOnList({ song, isSavedSong, onNavigateRelease }: Props) {
-    const { jobs, saveRelease } = useCatalog();
+    const { jobs, releases, saveRelease } = useCatalog();
     const { notify } = useNotifications();
     const { run } = useBusy();
     const containingReleases = useReleasesContainingSong(song.songId);
     const [pickerOpen, setPickerOpen] = useState(false);
+    const [selectedRecordingId, setSelectedRecordingId] = useState<string>();
 
-    const excludeIds = useMemo(() => new Set(containingReleases.map((release) => release.releaseId)), [containingReleases]);
+    const selectableRecordings = useMemo(
+        () => song.recordings.filter((recording) => !isTemporaryRecordingId(recording.recordingId)),
+        [song.recordings],
+    );
+    const selectedRecording = selectableRecordings.find((recording) => recording.recordingId === selectedRecordingId)
+        ?? defaultRecording({ ...song, recordings: selectableRecordings }, jobs);
 
-    const catalogState = useCatalog();
+    useEffect(() => {
+        if (selectedRecording && selectedRecording.recordingId === selectedRecordingId) return;
+        setSelectedRecordingId(selectedRecording?.recordingId);
+    }, [selectedRecording, selectedRecordingId]);
 
     async function pickRelease(releaseObj: { releaseId: string }) {
         await run('Adding song to release', async () => {
-            const release = catalogState.releases[releaseObj.releaseId];
+            const release = releases[releaseObj.releaseId];
             if (!release) return;
-            if (release.tracks.some((track) => track.songId === song.songId)) {
-                notify('That release already contains this song.');
-                setPickerOpen(false);
-                return;
-            }
-            const recording = defaultRecording(song, jobs);
+            const recording = selectedRecording;
             if (!recording) {
-                notify('Add at least one recording before placing this song on a release.', 'error');
+                notify('Save a recording before placing this song on a release.', 'error');
                 setPickerOpen(false);
                 return;
             }
@@ -67,15 +82,33 @@ export function AppearsOnList({ song, isSavedSong, onNavigateRelease }: Props) {
                     <p className="admin-kicker">Appears on</p>
                     <h3>{containingReleases.length} release{containingReleases.length === 1 ? '' : 's'}</h3>
                 </div>
-                <button
-                    type="button"
-                    className="admin-button"
-                    onClick={() => setPickerOpen(true)}
-                    disabled={!isSavedSong || song.recordings.length === 0}
-                    title={!isSavedSong ? 'Save the song first' : song.recordings.length === 0 ? 'Add a recording first' : undefined}
-                >
-                    <Plus aria-hidden="true" /> Add to release
-                </button>
+                <div className="admin-button-row">
+                    <div className="admin-field">
+                        <label>Version</label>
+                        <select
+                            value={selectedRecording?.recordingId ?? ''}
+                            disabled={!isSavedSong || selectableRecordings.length === 0}
+                            onChange={(event) => setSelectedRecordingId(event.currentTarget.value)}
+                        >
+                            {selectableRecordings.length === 0 ? <option value="">No saved recordings</option> : null}
+                            {selectableRecordings.map((recording) => (
+                                <option key={recording.recordingId} value={recording.recordingId}>
+                                    {recording.versionTitle || recording.title || recording.recordingId}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                    {selectedRecording ? <StatusPill kind="encode" value={recordingEncodeStatus(selectedRecording, jobs)} /> : null}
+                    <button
+                        type="button"
+                        className="admin-button"
+                        onClick={() => setPickerOpen(true)}
+                        disabled={!isSavedSong || !selectedRecording}
+                        title={!isSavedSong ? 'Save the song first' : !selectedRecording ? 'Save a recording first' : undefined}
+                    >
+                        <Plus aria-hidden="true" /> Add to release
+                    </button>
+                </div>
             </header>
 
             {containingReleases.length === 0 ? (
@@ -108,7 +141,6 @@ export function AppearsOnList({ song, isSavedSong, onNavigateRelease }: Props) {
 
             {pickerOpen ? (
                 <ReleasePicker
-                    excludeReleaseIds={excludeIds}
                     onClose={() => setPickerOpen(false)}
                     onPick={(release) => void pickRelease(release)}
                 />

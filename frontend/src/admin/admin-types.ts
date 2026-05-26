@@ -41,7 +41,7 @@ export interface DraftRecording {
     slug: string;
     title: string;
     versionTitle?: string;
-    versionType: 'studio_master' | 'album_master' | 'single_master' | 'demo' | 'preview' | 'live' | 'alternate' | 'remaster';
+    versionType: '' | 'studio_master' | 'album_master' | 'single_master' | 'demo' | 'preview' | 'live' | 'alternate' | 'remaster';
     artistName?: string;
     durationSeconds?: number;
     explicit: boolean;

@@ -11,7 +11,7 @@ import type {
 
 export const RELEASE_KINDS: ReleaseKind[] = ['album', 'ep', 'single', 'demo', 'preview', 'collection', 'prerelease'];
 export const RELEASE_STATUSES: ReleaseStatus[] = ['official', 'demo', 'promo', 'prerelease', 'bootleg'];
-export const VERSION_TYPES: DraftRecording['versionType'][] = ['studio_master', 'album_master', 'single_master', 'demo', 'preview', 'live', 'alternate', 'remaster'];
+export const VERSION_TYPES = ['studio_master', 'album_master', 'single_master', 'demo', 'preview', 'live', 'alternate', 'remaster'] as const satisfies ReadonlyArray<Exclude<DraftRecording['versionType'], ''>>;
 
 export function optionalText(value: string | undefined): string | undefined {
     const trimmed = value?.trim() ?? '';
@@ -85,18 +85,109 @@ export function newDraftSong(songId: StableId): DraftSong {
     };
 }
 
+export function isTemporaryRecordingId(recordingId: string): boolean {
+    return recordingId.startsWith('recording_pending_');
+}
+
 export function newRecording(song: DraftSong): DraftRecording {
     const number = song.recordings.length + 1;
-    const base = `${song.slug || 'recording'}_${number === 1 ? 'demo' : `version_${number}`}`;
+    const seed = `${song.slug || song.songId.replace(/^song_/, '') || 'recording'}_${Date.now().toString(36)}_${number}`;
     return {
-        recordingId: stableId('recording', base),
-        slug: slugify(base),
-        title: `${song.title || 'Recording'} ${number === 1 ? 'Demo' : `Version ${number}`}`,
-        versionTitle: number === 1 ? 'Demo' : `Version ${number}`,
-        versionType: number === 1 ? 'demo' : 'alternate',
+        recordingId: stableId('recording', `pending_${seed}`),
+        slug: '',
+        title: '',
+        versionType: '',
         explicit: false,
         encodeJobIds: [],
     };
+}
+
+export function recordingMetadataError(recording: DraftRecording): string | undefined {
+    const title = recording.title.trim();
+    if (!title) {
+        return 'Add a recording title before saving.';
+    }
+    if (!recording.versionType) {
+        return `Choose a version type for "${title}".`;
+    }
+    return undefined;
+}
+
+export function draftSongRecordingsError(song: DraftSong): string | undefined {
+    for (const recording of song.recordings) {
+        const error = recordingMetadataError(recording);
+        if (error) return error;
+    }
+    return undefined;
+}
+
+function recordingIdBase(song: DraftSong, recording: DraftRecording): string {
+    const songSlug = slugify(song.slug || song.title || song.songId.replace(/^song_/, ''));
+    const recordingSlug = slugify(recording.title);
+    if (recordingSlug === songSlug || recordingSlug.startsWith(`${songSlug}-`)) {
+        return recordingSlug;
+    }
+    return `${songSlug}_${recordingSlug}`;
+}
+
+function uniqueRecordingId(song: DraftSong, recording: DraftRecording, usedIds: Set<string>): StableId {
+    const base = stableId('recording', recordingIdBase(song, recording));
+    let candidate = base;
+    let index = 2;
+    while (usedIds.has(candidate)) {
+        candidate = `${base}_${index}` as StableId;
+        index += 1;
+    }
+    return candidate;
+}
+
+function recordingHasStorage(recording: DraftRecording): boolean {
+    return Boolean(recording.sourceMaster || recording.encodeOutput || recording.encodeJobIds?.length);
+}
+
+export function prepareDraftSongForSave(song: DraftSong): DraftSong {
+    const usedRecordingIds = new Set(
+        song.recordings
+            .map((recording) => recording.recordingId)
+            .filter((recordingId) => !isTemporaryRecordingId(recordingId)),
+    );
+
+    return {
+        ...song,
+        recordings: song.recordings.map((recording) => {
+            const title = recording.title.trim();
+            const recordingId = isTemporaryRecordingId(recording.recordingId) && title && !recordingHasStorage(recording)
+                ? uniqueRecordingId(song, recording, usedRecordingIds)
+                : recording.recordingId;
+            usedRecordingIds.add(recordingId);
+            return {
+                ...recording,
+                recordingId,
+                slug: recording.slug.trim() || (title ? slugify(title) : ''),
+                title,
+                versionTitle: optionalText(recording.versionTitle),
+                artistName: optionalText(recording.artistName),
+                description: optionalText(recording.description),
+                encodeJobIds: recording.encodeJobIds ?? [],
+            };
+        }),
+    };
+}
+
+export function prepareDraftSongRecordingForSave(
+    song: DraftSong,
+    recordingId: StableId,
+): { song: DraftSong; recording: DraftRecording } {
+    const targetIndex = song.recordings.findIndex((recording) => recording.recordingId === recordingId);
+    if (targetIndex < 0) {
+        throw new Error(`Recording not found: ${recordingId}`);
+    }
+    const preparedSong = prepareDraftSongForSave(song);
+    const preparedRecording = preparedSong.recordings[targetIndex];
+    if (!preparedRecording) {
+        throw new Error(`Recording not found: ${recordingId}`);
+    }
+    return { song: preparedSong, recording: preparedRecording };
 }
 
 export function newDraftRelease(releaseId: StableId): DraftRelease {
@@ -117,17 +208,72 @@ export function newDraftRelease(releaseId: StableId): DraftRelease {
     };
 }
 
+export function recordingEncodeStatus(
+    recording: DraftRecording | undefined,
+    jobDetails: Record<string, EncodeJob>,
+): EncodeJob['status'] | 'missing' {
+    if (recording?.encodeOutput?.jobId) return 'succeeded';
+    return latestJob(recording, jobDetails)?.status ?? 'missing';
+}
+
+export function recordingEncodeJobId(recording: DraftRecording | undefined): StableId | undefined {
+    return recording?.encodeOutput?.jobId ?? latestJobId(recording);
+}
+
+export function isRecordingEncoded(recording: DraftRecording | undefined): boolean {
+    return Boolean(recording?.encodeOutput?.jobId);
+}
+
+function trackSlugForRecording(
+    release: DraftRelease,
+    song: DraftSong,
+    recording: DraftRecording,
+): string {
+    const existingSlugs = new Set(release.tracks.map((track) => track.slug));
+    let base = song.slug;
+
+    if (existingSlugs.has(base)) {
+        const recordingSlug = recording.slug.trim();
+        const versionSlug = slugify(recording.versionTitle || recording.title || recording.recordingId);
+        base = recordingSlug && recordingSlug !== song.slug ? recordingSlug : `${song.slug}-${versionSlug}`;
+    }
+
+    let candidate = base;
+    let index = 2;
+    while (existingSlugs.has(candidate)) {
+        candidate = `${base}-${index}`;
+        index += 1;
+    }
+    return candidate;
+}
+
+function trackTitleForRecording(
+    release: DraftRelease,
+    song: DraftSong,
+    recording: DraftRecording,
+): string {
+    const duplicateSong = release.tracks.some((track) => track.songId === song.songId);
+    if (duplicateSong && recording.versionTitle) {
+        return `${song.title} (${recording.versionTitle})`;
+    }
+    if (duplicateSong && recording.title && recording.title !== song.title) {
+        return recording.title;
+    }
+    return song.title;
+}
+
 export function nextReleaseTrack(release: DraftRelease, song: DraftSong, recording: DraftRecording): DraftReleaseTrack {
     const nextNumber = Math.max(0, ...release.tracks.map((track) => track.trackNumber || 0)) + 1;
-    const base = `${release.slug}_${String(nextNumber).padStart(2, '0')}_${song.slug}`;
+    const slug = trackSlugForRecording(release, song, recording);
+    const base = `${release.slug}_${String(nextNumber).padStart(2, '0')}_${slug}`;
     return {
         trackId: stableId('track', base),
         songId: song.songId,
         recordingId: recording.recordingId,
         discNumber: 1,
         trackNumber: nextNumber,
-        slug: song.slug,
-        title: song.title,
+        slug,
+        title: trackTitleForRecording(release, song, recording),
         explicit: recording.explicit,
         isrc: recording.isrc,
     };

@@ -2,9 +2,14 @@ import { describe, expect, test } from 'vitest';
 import {
     formatBytes,
     formatLinks,
+    draftSongRecordingsError,
+    isTemporaryRecordingId,
+    newRecording,
     nextReleaseTrack,
     parseLinks,
     parseTags,
+    prepareDraftSongForSave,
+    isRecordingEncoded,
     sanitizeFilename,
     slugify,
     sortedReleaseTracks,
@@ -80,6 +85,42 @@ describe('uniqueStableId', () => {
     test('appends suffix when colliding', () => {
         const ids = new Set(['song_foo_bar', 'song_foo_bar_2']);
         expect(uniqueStableId('song', 'Foo Bar', ids)).toBe('song_foo_bar_3');
+    });
+});
+
+describe('newRecording', () => {
+    test('starts as an unfilled draft instead of a demo', () => {
+        const recording = newRecording(makeSong());
+
+        expect(isTemporaryRecordingId(recording.recordingId)).toBe(true);
+        expect(recording.recordingId).not.toContain('demo');
+        expect(recording.slug).toBe('');
+        expect(recording.title).toBe('');
+        expect(recording.versionTitle).toBeUndefined();
+        expect(recording.versionType).toBe('');
+    });
+
+    test('reports missing required recording metadata', () => {
+        const song = makeSong({ recordings: [newRecording(makeSong())] });
+
+        expect(draftSongRecordingsError(song)).toBe('Add a recording title before saving.');
+    });
+
+    test('derives final recording identity only when prepared for save', () => {
+        const song = makeSong({
+            slug: 'reign-of-the-simmered',
+            title: 'Reign of the Simmered',
+        });
+        const recording = {
+            ...newRecording(song),
+            title: 'Reign of the Simmered (Orchestral Edit)',
+            versionType: 'alternate' as const,
+        };
+
+        const prepared = prepareDraftSongForSave({ ...song, recordings: [recording] });
+
+        expect(prepared.recordings[0].recordingId).toBe('recording_reign_of_the_simmered_orchestral_edit');
+        expect(prepared.recordings[0].slug).toBe('reign-of-the-simmered-orchestral-edit');
     });
 });
 
@@ -168,6 +209,32 @@ describe('nextReleaseTrack + sortedReleaseTracks', () => {
         expect(sorted[1].recordingId).toBe(recordingB.recordingId);
     });
 
+    test('uses recording slug and title when the same song appears twice on a release', () => {
+        const song = makeSong({
+            slug: 'reign-of-the-simmered',
+            title: 'Reign of the Simmered',
+        });
+        const normal = makeRecording({
+            recordingId: stableId('recording', 'reign-of-the-simmered'),
+            slug: 'reign-of-the-simmered',
+            title: 'Reign of the Simmered',
+            versionType: 'album_master',
+        });
+        const orchestral = makeRecording({
+            recordingId: stableId('recording', 'reign-of-the-simmered-orchestral-edit'),
+            slug: 'reign-of-the-simmered-orchestral-edit',
+            title: 'Reign of the Simmered (Orchestral Edit)',
+            versionTitle: 'Orchestral Edit',
+            versionType: 'alternate',
+        });
+        const release = makeRelease({ tracks: [nextReleaseTrack(makeRelease(), song, normal)] });
+
+        const track = nextReleaseTrack(release, song, orchestral);
+
+        expect(track.slug).toBe('reign-of-the-simmered-orchestral-edit');
+        expect(track.title).toBe('Reign of the Simmered (Orchestral Edit)');
+    });
+
     test('sortedReleaseTracks orders by disc then track', () => {
         const release = makeRelease({
             tracks: [
@@ -178,5 +245,20 @@ describe('nextReleaseTrack + sortedReleaseTracks', () => {
         });
         const sorted = sortedReleaseTracks(release).map((track) => track.title);
         expect(sorted).toEqual(['b', 'a', 'c']);
+    });
+});
+
+describe('isRecordingEncoded', () => {
+    test('reads encodeOutput instead of job cache state', () => {
+        expect(isRecordingEncoded(makeRecording())).toBe(false);
+        expect(isRecordingEncoded(makeRecording({
+            encodeOutput: {
+                jobId: stableId('asset', 'encoded'),
+                bucket: 'media',
+                prefix: 'draft/encodes/job_encoded',
+                finishedAt: '2026-05-26T00:00:00Z',
+                assets: [],
+            },
+        }))).toBe(true);
     });
 });

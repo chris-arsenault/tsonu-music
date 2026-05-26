@@ -100,8 +100,9 @@ export function ReleaseDetail({
         }
     }, [newDraft, selectedReleaseId]);
 
-    // Mirror non-text fields from store after external mutations (e.g. picker-driven
-    // track adds from the song side) without disturbing typed form state.
+    // Mirror only backend-owned release state from store. Replacing tracks/artwork
+    // here would wipe in-progress edits whenever an unrelated catalog save
+    // updates the shared store.
     useEffect(() => {
         if (newDraft) return;
         if (!selectedReleaseId) return;
@@ -112,8 +113,6 @@ export function ReleaseDetail({
             if (current.releaseId !== fromStore.releaseId) return fromStore;
             return {
                 ...current,
-                tracks: fromStore.tracks,
-                artwork: fromStore.artwork ?? current.artwork,
                 publishState: fromStore.publishState,
                 updatedAt: fromStore.updatedAt ?? current.updatedAt,
             };

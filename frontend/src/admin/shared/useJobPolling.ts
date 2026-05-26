@@ -10,7 +10,7 @@ const POLLABLE_STATUSES: Array<EncodeJob['status']> = ['queued', 'running'];
  * Pass `undefined` to disable polling.
  */
 export function useJobPolling(jobId: string | undefined): void {
-    const { jobs, loadJob } = useCatalog();
+    const { jobs, loadJob, loadSong } = useCatalog();
 
     useEffect(() => {
         if (!jobId) return undefined;
@@ -24,6 +24,8 @@ export function useJobPolling(jobId: string | undefined): void {
                 if (cancelled) return;
                 if (POLLABLE_STATUSES.includes(job.status)) {
                     timer = setTimeout(() => void tick(), POLL_INTERVAL_MS);
+                } else if (job.status === 'succeeded') {
+                    void loadSong(job.songId).catch(() => undefined);
                 }
             } catch {
                 // swallow — next interaction will re-fetch
@@ -43,14 +45,14 @@ export function useJobPolling(jobId: string | undefined): void {
             if (timer) clearTimeout(timer);
         };
         // jobs intentionally excluded — we only want to react to id changes
-    }, [jobId, loadJob]);
+    }, [jobId, loadJob, loadSong]);
 }
 
 /**
  * Polls every in-flight job from a list. Useful for the Activity feed.
  */
 export function useActiveJobsPolling(jobIds: string[]): void {
-    const { jobs, loadJob } = useCatalog();
+    const { jobs, loadJob, loadSong } = useCatalog();
 
     useEffect(() => {
         const active = jobIds.filter((id) => {
@@ -63,7 +65,13 @@ export function useActiveJobsPolling(jobIds: string[]): void {
         const interval = setInterval(() => {
             if (cancelled) return;
             for (const id of active) {
-                void loadJob(id).catch(() => undefined);
+                void loadJob(id)
+                    .then((job) => {
+                        if (job.status === 'succeeded') {
+                            void loadSong(job.songId).catch(() => undefined);
+                        }
+                    })
+                    .catch(() => undefined);
             }
         }, POLL_INTERVAL_MS);
 
@@ -71,5 +79,5 @@ export function useActiveJobsPolling(jobIds: string[]): void {
             cancelled = true;
             clearInterval(interval);
         };
-    }, [jobIds, jobs, loadJob]);
+    }, [jobIds, jobs, loadJob, loadSong]);
 }

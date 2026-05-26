@@ -5,9 +5,11 @@ import { getRuntimeConfig } from '../../runtime-config';
 import { requestArtworkUploadUrl, uploadArtworkFile } from '../admin-api';
 import {
     collectArtworkChoices,
+    draftSongRecordingsError,
     optionalText,
     parseOptionalJson,
     parseTags,
+    prepareDraftSongForSave,
     readArtworkDimensions,
     sanitizeFilename,
     slugify,
@@ -95,9 +97,9 @@ export function SongDetail({
         // child-triggered store mutations don't reset typed form state.
     }, [newDraft, selectedSongId]);
 
-    // Mirror non-text fields from store after external mutations (e.g. recording
-    // upload via RecordingEditor) so the draft sees the updated recordings/artwork
-    // without disturbing the tagsText / creditsText form state.
+    // Mirror only backend-authored recording artifacts from store. Replacing the
+    // whole recording list here would wipe in-progress local edits whenever a
+    // child action saves the song or an encode poll refreshes catalog state.
     useEffect(() => {
         if (newDraft) return;
         if (!selectedSongId) return;
@@ -106,10 +108,27 @@ export function SongDetail({
         setDraft((current) => {
             if (!current) return fromStore;
             if (current.songId !== fromStore.songId) return fromStore;
+            const serverRecordings = new Map(fromStore.recordings.map((recording) => [recording.recordingId, recording]));
+            const currentIds = new Set(current.recordings.map((recording) => recording.recordingId));
+            const mergedRecordings = current.recordings.map((recording) => {
+                const fromServer = serverRecordings.get(recording.recordingId);
+                if (!fromServer) return recording;
+                return {
+                    ...recording,
+                    sourceMaster: fromServer.sourceMaster ?? recording.sourceMaster,
+                    encodeJobIds: fromServer.encodeJobIds ?? recording.encodeJobIds,
+                    encodeOutput: fromServer.encodeOutput ?? recording.encodeOutput,
+                    durationSeconds: fromServer.durationSeconds ?? recording.durationSeconds,
+                };
+            });
+            for (const recording of fromStore.recordings) {
+                if (!currentIds.has(recording.recordingId)) {
+                    mergedRecordings.push(recording);
+                }
+            }
             return {
                 ...current,
-                recordings: fromStore.recordings,
-                artwork: fromStore.artwork ?? current.artwork,
+                recordings: mergedRecordings,
                 updatedAt: fromStore.updatedAt ?? current.updatedAt,
             };
         });
@@ -136,11 +155,17 @@ export function SongDetail({
             notify('Add a song title before saving.', 'error');
             return;
         }
+        const recordingError = draftSongRecordingsError(draft);
+        if (recordingError) {
+            notify(recordingError, 'error');
+            return;
+        }
         await run('Saving song', async () => {
+            const preparedDraft = prepareDraftSongForSave(draft);
             const payload: DraftSong = {
-                ...draft,
-                description: optionalText(draft.description),
-                lyrics: optionalText(draft.lyrics),
+                ...preparedDraft,
+                description: optionalText(preparedDraft.description),
+                lyrics: optionalText(preparedDraft.lyrics),
                 credits: parseOptionalJson(creditsText),
                 tags: parseTags(tagsText),
                 updatedAt: new Date().toISOString(),

@@ -1,7 +1,17 @@
 import { CloudUpload, FileAudio, RefreshCw, Trash2, Upload } from 'lucide-react';
 import { useState } from 'react';
 import { createEncodeJob, requestUploadUrl, uploadMasterFile } from '../admin-api';
-import { latestJobId, optionalText, sanitizeFilename, slugify, formatRelativeTime } from '../admin-helpers';
+import {
+    draftSongRecordingsError,
+    latestJobId,
+    optionalText,
+    prepareDraftSongForSave,
+    prepareDraftSongRecordingForSave,
+    recordingEncodeJobId,
+    recordingEncodeStatus,
+    sanitizeFilename,
+    formatRelativeTime,
+} from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRecording, DraftSong, EncodeJob } from '../admin-types';
@@ -15,7 +25,7 @@ interface Props {
     song: DraftSong;
     recording: DraftRecording;
     isSavedSong: boolean;
-    onChange: (recording: DraftRecording) => void;
+    onChange: (recording: DraftRecording, previousRecordingId?: string) => void;
     onRemove: () => void;
 }
 
@@ -28,27 +38,35 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
     const [requestedBy, setRequestedBy] = useState('admin-ui');
 
     const jobId = latestJobId(recording);
+    const encodedJobId = recordingEncodeJobId(recording);
     const latestJob: EncodeJob | undefined = jobId ? jobs[jobId] : undefined;
+    const hasRequiredMetadata = !draftSongRecordingsError(song);
 
     useJobPolling(jobId);
 
     async function uploadMaster() {
         if (!masterFile || !isSavedSong) return;
+        const metadataError = draftSongRecordingsError(song);
+        if (metadataError) {
+            notify(metadataError, 'error');
+            return;
+        }
         await run('Uploading master', async () => {
+            const prepared = prepareDraftSongRecordingForSave(song, recording.recordingId);
             const upload = await requestUploadUrl({
-                recordingId: recording.recordingId,
+                recordingId: prepared.recording.recordingId,
                 filename: sanitizeFilename(masterFile.name),
                 contentType: masterFile.type || undefined,
             });
             await uploadMasterFile(upload, masterFile);
-            const next: DraftRecording = { ...recording, sourceMaster: upload.sourceMaster };
+            const next: DraftRecording = { ...prepared.recording, sourceMaster: upload.sourceMaster };
             const nextSong: DraftSong = {
-                ...song,
-                recordings: song.recordings.map((r) => r.recordingId === next.recordingId ? next : r),
+                ...prepared.song,
+                recordings: prepared.song.recordings.map((r) => r.recordingId === next.recordingId ? next : r),
                 updatedAt: new Date().toISOString(),
             };
             await saveSong(nextSong, { isNew: false });
-            onChange(next);
+            onChange(next, recording.recordingId);
             setMasterFile(undefined);
             notify(`Uploaded ${masterFile.name}`);
         });
@@ -56,25 +74,36 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
 
     async function startEncode() {
         if (!isSavedSong || !recording.sourceMaster?.bucket || !recording.sourceMaster.key) return;
+        const metadataError = draftSongRecordingsError(song);
+        if (metadataError) {
+            notify(metadataError, 'error');
+            return;
+        }
         await run('Starting encode', async () => {
+            const preparedSong = prepareDraftSongForSave(song);
+            const preparedRecording = preparedSong.recordings.find((candidate) => candidate.recordingId === recording.recordingId);
+            if (!preparedRecording) {
+                notify('Recording is missing from this song.', 'error');
+                return;
+            }
             const response = await createEncodeJob({
-                songId: song.songId,
-                recordingId: recording.recordingId,
+                songId: preparedSong.songId,
+                recordingId: preparedRecording.recordingId,
                 includeLossless,
                 requestedBy: optionalText(requestedBy),
             });
             const next: DraftRecording = {
-                ...recording,
-                encodeJobIds: [...(recording.encodeJobIds ?? []), response.job.jobId],
+                ...preparedRecording,
+                encodeJobIds: [...(preparedRecording.encodeJobIds ?? []), response.job.jobId],
             };
             const nextSong: DraftSong = {
-                ...song,
-                recordings: song.recordings.map((r) => r.recordingId === next.recordingId ? next : r),
+                ...preparedSong,
+                recordings: preparedSong.recordings.map((r) => r.recordingId === next.recordingId ? next : r),
                 updatedAt: new Date().toISOString(),
             };
             await saveSong(nextSong, { isNew: false });
             upsertSong(nextSong);
-            onChange(next);
+            onChange(next, recording.recordingId);
             notify(`Queued ${response.job.jobId}`);
         });
     }
@@ -86,10 +115,10 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                     <label>Title</label>
                     <input
                         value={recording.title}
+                        placeholder="Recording title"
                         onChange={(event) => onChange({
                             ...recording,
                             title: event.currentTarget.value,
-                            slug: slugify(event.currentTarget.value),
                         })}
                     />
                 </div>
@@ -106,6 +135,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                         value={recording.versionType}
                         onChange={(event) => onChange({ ...recording, versionType: event.currentTarget.value as DraftRecording['versionType'] })}
                     >
+                        <option value="" disabled>Choose type</option>
                         {VERSION_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
                     </select>
                 </div>
@@ -134,8 +164,10 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                 <div>
                     <span>Latest encode</span>
                     <strong>
-                        <StatusPill kind="encode" value={(latestJob?.status ?? 'missing')} />
-                        {latestJob?.finishedAt ? <span className="admin-muted"> · {formatRelativeTime(latestJob.finishedAt)}</span> : null}
+                        <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
+                        {(recording.encodeOutput?.finishedAt ?? latestJob?.finishedAt) ? (
+                            <span className="admin-muted"> · {formatRelativeTime(recording.encodeOutput?.finishedAt ?? latestJob?.finishedAt)}</span>
+                        ) : null}
                     </strong>
                 </div>
             </div>
@@ -154,7 +186,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                     <button
                         type="button"
                         className="admin-button"
-                        disabled={!isSavedSong || !masterFile || Boolean(busy)}
+                        disabled={!isSavedSong || !masterFile || !hasRequiredMetadata || Boolean(busy)}
                         onClick={() => void uploadMaster()}
                     >
                         <Upload aria-hidden="true" /> Upload master
@@ -162,7 +194,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                     <button
                         type="button"
                         className="admin-button admin-button--primary"
-                        disabled={!isSavedSong || !recording.sourceMaster?.key || Boolean(busy)}
+                        disabled={!isSavedSong || !recording.sourceMaster?.key || !hasRequiredMetadata || Boolean(busy)}
                         onClick={() => void startEncode()}
                     >
                         <CloudUpload aria-hidden="true" /> Start encode
@@ -196,7 +228,7 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                 <div className="admin-job-detail">
                     <div className="admin-job-detail__head">
                         <FileAudio aria-hidden="true" />
-                        <strong>{latestJob.jobId}</strong>
+                        <strong>{encodedJobId ?? latestJob.jobId}</strong>
                         <StatusPill kind="encode" value={latestJob.status} />
                     </div>
                     {latestJob.error ? (

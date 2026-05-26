@@ -1,7 +1,7 @@
 import { Music2, Plus, RefreshCw } from 'lucide-react';
 import { useMemo } from 'react';
 import { useCatalog, useSongsGroupedByRelease, useUnreleasedSongs } from '../catalog-store';
-import { latestJob, songIdFromKey } from '../admin-helpers';
+import { isRecordingEncoded, songIdFromKey } from '../admin-helpers';
 import type { DraftSong } from '../admin-types';
 import { EmptyState } from '../shared/EmptyState';
 import { ListLoadingSkeleton } from '../shared/LoadingState';
@@ -24,7 +24,7 @@ interface ListGroup {
 }
 
 export function SongList({ selectedSongId, onSelect, onCreate, onRefresh }: Props) {
-    const { songs, songList, jobs, listsLoaded, listsLoading } = useCatalog();
+    const { songs, songList, listsLoaded, listsLoading } = useCatalog();
     const [group, setGroupRaw] = useSearchParam('groupBy', 'release');
     const [search, setSearchRaw] = useSearchParam('q', '');
     const setGroup = (next: Group) => setGroupRaw(next);
@@ -137,10 +137,7 @@ export function SongList({ selectedSongId, onSelect, onCreate, onRefresh }: Prop
                                 {entry.songs.map((song) => {
                                     const active = song.songId === selectedSongId;
                                     const recordingCount = song.recordings.length;
-                                    const encodedCount = song.recordings.filter((recording) => {
-                                        const job = latestJob(recording, jobs);
-                                        return job?.status === 'succeeded';
-                                    }).length;
+                                    const encodedCount = song.recordings.filter(isRecordingEncoded).length;
                                     return (
                                         <li key={song.songId}>
                                             <button

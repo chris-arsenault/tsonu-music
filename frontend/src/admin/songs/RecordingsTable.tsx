@@ -1,6 +1,6 @@
 import { ChevronDown, ChevronRight, Disc3, Plus } from 'lucide-react';
 import { useState } from 'react';
-import { latestJob, newRecording } from '../admin-helpers';
+import { newRecording, recordingEncodeStatus } from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import type { DraftRecording, DraftSong } from '../admin-types';
 import { EmptyState } from '../shared/EmptyState';
@@ -23,11 +23,12 @@ export function RecordingsTable({ song, isSavedSong, onChange }: Props) {
         setExpandedId(rec.recordingId);
     }
 
-    function updateRecording(updated: DraftRecording) {
+    function updateRecording(updated: DraftRecording, previousRecordingId = updated.recordingId) {
         onChange({
             ...song,
-            recordings: song.recordings.map((r) => r.recordingId === updated.recordingId ? updated : r),
+            recordings: song.recordings.map((r) => r.recordingId === previousRecordingId ? updated : r),
         });
+        if (expandedId === previousRecordingId) setExpandedId(updated.recordingId);
     }
 
     function removeRecording(recordingId: string) {
@@ -73,7 +74,6 @@ export function RecordingsTable({ song, isSavedSong, onChange }: Props) {
 
             <div className="admin-recordings">
                 {song.recordings.map((recording) => {
-                    const job = latestJob(recording, jobs);
                     const expanded = expandedId === recording.recordingId;
                     return (
                         <div key={recording.recordingId} className={`admin-recording ${expanded ? 'is-expanded' : ''}`}>
@@ -87,14 +87,14 @@ export function RecordingsTable({ song, isSavedSong, onChange }: Props) {
                                     {expanded ? <ChevronDown aria-hidden="true" /> : <ChevronRight aria-hidden="true" />}
                                 </span>
                                 <div className="admin-recording__title">
-                                    <strong>{recording.title}</strong>
+                                    <strong>{recording.title || 'Untitled recording'}</strong>
                                     {recording.versionTitle ? <small className="admin-muted">{recording.versionTitle}</small> : null}
                                 </div>
-                                <StatusPill kind="version" value={recording.versionType} />
+                                {recording.versionType ? <StatusPill kind="version" value={recording.versionType} /> : <span className="admin-muted">No version type</span>}
                                 <span className="admin-recording__master">
                                     {recording.sourceMaster?.key ? '✓ master' : '— no master'}
                                 </span>
-                                <StatusPill kind="encode" value={(job?.status ?? 'missing')} />
+                                <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
                             </button>
                             {expanded ? (
                                 <div className="admin-recording__body">

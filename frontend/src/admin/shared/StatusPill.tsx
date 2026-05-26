@@ -43,5 +43,5 @@ export function StatusPill(props: Props) {
     if (props.kind === 'encode') {
         return <span className={`admin-status admin-status--${props.value}`}>{ENCODE_LABELS[props.value]}</span>;
     }
-    return <span className="admin-pill admin-pill--version">{props.value.replace(/_/g, ' ')}</span>;
+    return <span className="admin-pill admin-pill--version">{props.value ? props.value.replace(/_/g, ' ') : 'Unspecified'}</span>;
 }

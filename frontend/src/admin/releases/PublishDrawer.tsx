@@ -2,7 +2,7 @@ import { Rocket, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { StableId, Visibility } from '../../catalog/media-catalog';
 import { publishRelease } from '../admin-api';
-import { latestJob, optionalText, sortedReleaseTracks } from '../admin-helpers';
+import { optionalText, recordingEncodeStatus, sortedReleaseTracks } from '../admin-helpers';
 import { useCatalog, usePublishReadiness } from '../catalog-store';
 import { useNotifications } from '../notifications';
 import type { DraftRelease, PublishResponse } from '../admin-types';
@@ -72,12 +72,11 @@ export function PublishDrawer({ release, onClose }: Props) {
                     ) : tracks.map((track) => {
                         const song = songs[track.songId];
                         const recording = song?.recordings.find((r) => r.recordingId === track.recordingId);
-                        const job = latestJob(recording, jobs);
                         return (
                             <div key={track.trackId} className="admin-publish-tracks__row">
                                 <span>{track.trackNumber}</span>
                                 <strong>{track.title}</strong>
-                                <StatusPill kind="encode" value={(job?.status ?? 'missing')} />
+                                <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
                             </div>
                         );
                     })}

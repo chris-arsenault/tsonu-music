@@ -2,7 +2,7 @@ import { Music2, Search } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { StableId } from '../../catalog/media-catalog';
 import { useCatalog } from '../catalog-store';
-import { latestJobId } from '../admin-helpers';
+import { latestJobId, isRecordingEncoded, recordingEncodeStatus } from '../admin-helpers';
 import type { DraftRecording, DraftSong } from '../admin-types';
 import { PickerDialog } from './PickerDialog';
 import { StatusPill } from './StatusPill';
@@ -18,11 +18,13 @@ interface Props {
 
 function pickDefaultRecording(song: DraftSong, jobs: Record<string, { status?: string }>): DraftRecording | undefined {
     if (song.recordings.length === 0) return undefined;
-    const succeeded = song.recordings.filter((r) => {
+    const succeeded = song.recordings.filter((r) => isRecordingEncoded(r));
+    if (succeeded.length > 0) return succeeded[succeeded.length - 1];
+    const succeededJob = song.recordings.filter((r) => {
         const id = latestJobId(r);
         return id ? jobs[id]?.status === 'succeeded' : false;
     });
-    if (succeeded.length > 0) return succeeded[succeeded.length - 1];
+    if (succeededJob.length > 0) return succeededJob[succeededJob.length - 1];
     return song.recordings[song.recordings.length - 1];
 }
 
@@ -129,8 +131,6 @@ export function SongPicker({
                         ) : (
                             <ul className="admin-picker__list">
                                 {activeSong.recordings.map((recording) => {
-                                    const id = latestJobId(recording);
-                                    const job = id ? jobs[id] : undefined;
                                     const chosen = (selectedRecordingId ?? pickDefaultRecording(activeSong, jobs)?.recordingId) === recording.recordingId;
                                     return (
                                         <li key={recording.recordingId}>
@@ -141,7 +141,7 @@ export function SongPicker({
                                             >
                                                 <strong>{recording.title}</strong>
                                                 <StatusPill kind="version" value={recording.versionType} />
-                                                <StatusPill kind="encode" value={(job?.status ?? 'missing')} />
+                                                <StatusPill kind="encode" value={recordingEncodeStatus(recording, jobs)} />
                                             </button>
                                         </li>
                                     );
