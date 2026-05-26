@@ -36,16 +36,44 @@ pub async fn handle_request(
 
 async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>, ApiError> {
     let method = request.method();
-    let path = request.uri().path();
-    info!(method = method.as_str(), path, "Admin API request");
+    let raw_path = request.uri().path();
+    let path = parse_path(raw_path);
+    info!(
+        method = method.as_str(),
+        path = raw_path,
+        "Admin API request"
+    );
 
-    match (method, parse_path(path)) {
-        (&Method::GET, ApiPath::Health) => json_response(
+    match path {
+        ApiPath::Health => health_response(method, state),
+        ApiPath::PublicCatalog
+        | ApiPath::PublicRelease { .. }
+        | ApiPath::PublicSong { .. }
+        | ApiPath::PublicAnalyticsPlay => public_response(method, path, request, state).await,
+        ApiPath::NotFound => Err(ApiError::not_found("route not found")),
+        _ => admin_response(method, path, request, state).await,
+    }
+}
+
+fn health_response(method: &Method, state: &AppState) -> Result<Response<Body>, ApiError> {
+    match *method {
+        Method::GET => json_response(
             StatusCode::OK,
             json!({ "ok": true, "mediaBaseUrl": state.media_base_url() }),
         ),
-        (&Method::HEAD, ApiPath::Health) => empty_response(StatusCode::NO_CONTENT),
-        (&Method::GET, ApiPath::PublicCatalog | ApiPath::AdminCatalog) => {
+        Method::HEAD => empty_response(StatusCode::NO_CONTENT),
+        _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn public_response(
+    method: &Method,
+    path: ApiPath,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    match (method, path) {
+        (&Method::GET, ApiPath::PublicCatalog) => {
             json_response(StatusCode::OK, db::get_public_catalog(state.db()).await?)
         }
         (&Method::GET, ApiPath::PublicRelease { slug }) => {
@@ -70,6 +98,20 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
                     .await?,
             )
         }
+        _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn admin_response(
+    method: &Method,
+    path: ApiPath,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    match (method, path) {
+        (&Method::GET, ApiPath::AdminCatalog) => {
+            json_response(StatusCode::OK, db::get_public_catalog(state.db()).await?)
+        }
         (&Method::GET, ApiPath::AdminSongs) => {
             json_response(StatusCode::OK, db::list_draft_songs(state.db()).await?)
         }
@@ -89,27 +131,12 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
         (&Method::GET, ApiPath::AdminJobs) => {
             json_response(StatusCode::OK, db::list_encode_jobs(state.db()).await?)
         }
-        (&Method::GET, ApiPath::AdminJob { job_id }) => {
-            validate_stable_id("job", &job_id, "jobId")?;
-            json_response(
-                StatusCode::OK,
-                db::get_encode_job(state.db(), &job_id).await?,
-            )
-        }
+        (&Method::GET, ApiPath::AdminJob { job_id }) => admin_job_response(&job_id, state).await,
         (&Method::GET, ApiPath::AdminRumSummary) => {
             let query = parse_rum_summary_query(request.uri().query())?;
             json_response(StatusCode::OK, state.get_rum_summary(query).await?)
         }
-        (&Method::GET, ApiPath::AdminMaintenanceStale) => {
-            json_response(StatusCode::OK, db::maintenance_report(state.db()).await?)
-        }
-        (&Method::POST, ApiPath::AdminMaintenanceStale) => {
-            let request = parse_optional_json_body::<MaintenanceCleanupRequest>(request.body())?;
-            json_response(
-                StatusCode::OK,
-                db::cleanup_maintenance(state.db(), request).await?,
-            )
-        }
+        (_, ApiPath::AdminMaintenanceStale) => maintenance_response(method, request, state).await,
         (&Method::POST, path @ (ApiPath::AdminUploadUrl | ApiPath::AdminArtworkUploadUrl)) => {
             upload_url_response(path, request, state).await
         }
@@ -128,7 +155,32 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
                 state.publish_release(release_id, request).await?,
             )
         }
-        (_, ApiPath::NotFound) => Err(ApiError::not_found("route not found")),
+        _ => Err(ApiError::method_not_allowed()),
+    }
+}
+
+async fn admin_job_response(job_id: &str, state: &AppState) -> Result<Response<Body>, ApiError> {
+    validate_stable_id("job", job_id, "jobId")?;
+    json_response(
+        StatusCode::OK,
+        db::get_encode_job(state.db(), job_id).await?,
+    )
+}
+
+async fn maintenance_response(
+    method: &Method,
+    request: &Request,
+    state: &AppState,
+) -> Result<Response<Body>, ApiError> {
+    match *method {
+        Method::GET => json_response(StatusCode::OK, db::maintenance_report(state.db()).await?),
+        Method::POST => {
+            let request = parse_optional_json_body::<MaintenanceCleanupRequest>(request.body())?;
+            json_response(
+                StatusCode::OK,
+                db::cleanup_maintenance(state.db(), request).await?,
+            )
+        }
         _ => Err(ApiError::method_not_allowed()),
     }
 }
