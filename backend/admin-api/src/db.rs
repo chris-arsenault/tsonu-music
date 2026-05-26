@@ -1,9 +1,11 @@
 mod analytics;
 mod drafts;
+mod maintenance;
 mod publication;
 
 pub use analytics::*;
 pub use drafts::*;
+pub use maintenance::*;
 pub use publication::*;
 
 use super::{encode_job_key, ApiError, ObjectList, ObjectSummary, Visibility};

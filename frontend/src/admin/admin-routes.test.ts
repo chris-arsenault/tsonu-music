@@ -51,6 +51,14 @@ describe('parseAdminRoute', () => {
         });
     });
 
+    test('routes maintenance activity subview', () => {
+        expect(parseAdminRoute('/admin/activity/maintenance')).toEqual({
+            section: 'activity',
+            selectedId: undefined,
+            subview: 'maintenance',
+        });
+    });
+
     test('preserves a trailing query string', () => {
         expect(parseAdminRoute('/admin/songs?groupBy=unreleased')).toEqual({
             section: 'songs',

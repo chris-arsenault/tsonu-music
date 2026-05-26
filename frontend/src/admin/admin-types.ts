@@ -227,6 +227,72 @@ export interface PublishResponse {
     };
 }
 
+export interface MaintenanceReport {
+    generatedAt: string;
+    staleDraftRecordings: StaleDraftRecording[];
+    orphanReleaseTracks: OrphanReleaseTrack[];
+    staleEncodeJobs: StaleEncodeJob[];
+    stalePublishedSongs: StalePublishedSong[];
+    totals: {
+        staleDraftRecordings: number;
+        orphanReleaseTracks: number;
+        staleEncodeJobs: number;
+        stalePublishedSongs: number;
+    };
+}
+
+export interface StaleDraftRecording {
+    songId: StableId;
+    songTitle: string;
+    recordingId: StableId;
+    recordingTitle: string;
+    reason: string;
+}
+
+export interface OrphanReleaseTrack {
+    releaseId: StableId;
+    releaseTitle: string;
+    trackId: StableId;
+    trackTitle: string;
+    songId: StableId;
+    recordingId: StableId;
+    reason: string;
+}
+
+export interface StaleEncodeJob {
+    jobId: StableId;
+    songId: StableId;
+    recordingId: StableId;
+    status: EncodeStatus;
+    requestedAt?: string;
+    finishedAt?: string;
+    reason: string;
+}
+
+export interface StalePublishedSong {
+    songId: StableId;
+    slug: string;
+    title: string;
+    reason: string;
+}
+
+export interface MaintenanceCleanupRequest {
+    draftRecordings?: Array<Pick<StaleDraftRecording, 'songId' | 'recordingId'>>;
+    releaseTracks?: Array<Pick<OrphanReleaseTrack, 'releaseId' | 'trackId'>>;
+    encodeJobIds?: StableId[];
+    publishedSongIds?: StableId[];
+}
+
+export interface MaintenanceCleanupResponse {
+    deleted: {
+        draftRecordings: number;
+        releaseTracks: number;
+        encodeJobs: number;
+        publishedSongs: number;
+    };
+    report: MaintenanceReport;
+}
+
 export interface RumSummary {
     logGroupName: string;
     queryId: string;

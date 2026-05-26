@@ -159,6 +159,114 @@ pub(crate) struct PublishResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceReport {
+    pub(crate) generated_at: String,
+    pub(crate) stale_draft_recordings: Vec<StaleDraftRecording>,
+    pub(crate) orphan_release_tracks: Vec<OrphanReleaseTrack>,
+    pub(crate) stale_encode_jobs: Vec<StaleEncodeJob>,
+    pub(crate) stale_published_songs: Vec<StalePublishedSong>,
+    pub(crate) totals: MaintenanceTotals,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StaleDraftRecording {
+    pub(crate) song_id: String,
+    pub(crate) song_title: String,
+    pub(crate) recording_id: String,
+    pub(crate) recording_title: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct OrphanReleaseTrack {
+    pub(crate) release_id: String,
+    pub(crate) release_title: String,
+    pub(crate) track_id: String,
+    pub(crate) track_title: String,
+    pub(crate) song_id: String,
+    pub(crate) recording_id: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StaleEncodeJob {
+    pub(crate) job_id: String,
+    pub(crate) song_id: String,
+    pub(crate) recording_id: String,
+    pub(crate) status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) requested_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) finished_at: Option<String>,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StalePublishedSong {
+    pub(crate) song_id: String,
+    pub(crate) slug: String,
+    pub(crate) title: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceTotals {
+    pub(crate) stale_draft_recordings: usize,
+    pub(crate) orphan_release_tracks: usize,
+    pub(crate) stale_encode_jobs: usize,
+    pub(crate) stale_published_songs: usize,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceCleanupRequest {
+    #[serde(default)]
+    pub(crate) draft_recordings: Vec<MaintenanceDraftRecordingTarget>,
+    #[serde(default)]
+    pub(crate) release_tracks: Vec<MaintenanceReleaseTrackTarget>,
+    #[serde(default)]
+    pub(crate) encode_job_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) published_song_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceDraftRecordingTarget {
+    pub(crate) song_id: String,
+    pub(crate) recording_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceReleaseTrackTarget {
+    pub(crate) release_id: String,
+    pub(crate) track_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceCleanupResponse {
+    pub(crate) deleted: MaintenanceCleanupCounts,
+    pub(crate) report: MaintenanceReport,
+}
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaintenanceCleanupCounts {
+    pub(crate) draft_recordings: usize,
+    pub(crate) release_tracks: usize,
+    pub(crate) encode_jobs: usize,
+    pub(crate) published_songs: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CloudFrontInvalidationResult {
     pub(crate) distribution_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]

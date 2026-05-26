@@ -7,6 +7,9 @@ import type {
     DraftSong,
     EncodeJob,
     EncodeJobCreateResponse,
+    MaintenanceCleanupRequest,
+    MaintenanceCleanupResponse,
+    MaintenanceReport,
     ObjectList,
     PublishResponse,
     RumSummary,
@@ -208,6 +211,17 @@ export async function publishRelease(releaseId: string, request: {
 }): Promise<PublishResponse> {
     return requestJson<PublishResponse>(
         `/admin/publish/${encodeURIComponent(releaseId)}`,
+        jsonInit('POST', request),
+    );
+}
+
+export async function getMaintenanceReport(): Promise<MaintenanceReport> {
+    return requestJson<MaintenanceReport>('/admin/maintenance/stale');
+}
+
+export async function cleanupMaintenance(request: MaintenanceCleanupRequest): Promise<MaintenanceCleanupResponse> {
+    return requestJson<MaintenanceCleanupResponse>(
+        '/admin/maintenance/stale',
         jsonInit('POST', request),
     );
 }

@@ -1619,6 +1619,59 @@
     margin-left: 0.5rem;
 }
 
+.admin-maintenance {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.admin-maintenance__section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+.admin-maintenance__section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.admin-maintenance__row {
+    display: grid;
+    grid-template-columns: 1.25rem minmax(0, 1fr) auto auto minmax(8rem, auto);
+    align-items: center;
+    gap: 0.75rem;
+    border: 1px solid var(--admin-border);
+    border-radius: 2px;
+    background: var(--admin-bg-soft);
+    padding: 0.6rem 0.75rem;
+}
+
+.admin-maintenance__reason {
+    justify-self: end;
+    color: var(--admin-muted);
+    font-family: var(--admin-font-mono);
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+@media (max-width: 760px) {
+    .admin-maintenance__row {
+        grid-template-columns: 1.25rem minmax(0, 1fr);
+    }
+
+    .admin-maintenance__row > .admin-pill,
+    .admin-maintenance__row > .admin-status,
+    .admin-maintenance__row > .admin-muted,
+    .admin-maintenance__reason {
+        grid-column: 2;
+        justify-self: start;
+    }
+}
+
 /* ---- pickers ---- */
 .admin-picker-overlay {
     position: fixed;

@@ -41,6 +41,10 @@ fn parses_admin_paths() {
     );
     assert_eq!(parse_path("/admin/rum/summary"), ApiPath::AdminRumSummary);
     assert_eq!(
+        parse_path("/admin/maintenance/stale"),
+        ApiPath::AdminMaintenanceStale
+    );
+    assert_eq!(
         parse_path("/admin/artwork-upload-url"),
         ApiPath::AdminArtworkUploadUrl
     );

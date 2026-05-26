@@ -1,8 +1,9 @@
 import { navigateTo } from '../../music/routes';
 import { EncodingJobsFeed } from '../activity/EncodingJobsFeed';
+import { MaintenancePanel } from '../activity/MaintenancePanel';
 import { RumDashboard } from '../activity/RumDashboard';
 
-type View = 'encoding' | 'stats';
+type View = 'encoding' | 'stats' | 'maintenance';
 
 interface Props {
     view: View;
@@ -11,7 +12,7 @@ interface Props {
 
 export function ActivityPage({ view, onNavigateSong }: Props) {
     function setView(next: View) {
-        navigateTo(next === 'stats' ? '/admin/activity/stats' : '/admin/activity');
+        navigateTo(next === 'encoding' ? '/admin/activity' : `/admin/activity/${next}`);
     }
 
     return (
@@ -23,9 +24,14 @@ export function ActivityPage({ view, onNavigateSong }: Props) {
                 <button type="button" className={view === 'stats' ? 'is-active' : ''} onClick={() => setView('stats')}>
                     Playback stats
                 </button>
+                <button type="button" className={view === 'maintenance' ? 'is-active' : ''} onClick={() => setView('maintenance')}>
+                    Cleanup
+                </button>
             </nav>
 
-            {view === 'encoding' ? <EncodingJobsFeed onNavigateSong={onNavigateSong} /> : <RumDashboard />}
+            {view === 'encoding' ? <EncodingJobsFeed onNavigateSong={onNavigateSong} /> : null}
+            {view === 'stats' ? <RumDashboard /> : null}
+            {view === 'maintenance' ? <MaintenancePanel /> : null}
         </div>
     );
 }

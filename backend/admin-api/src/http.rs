@@ -1,7 +1,8 @@
 use crate::{
     db, normalize_updated_at, parse_rum_summary_query, validate_draft_release_document,
     validate_draft_song_document, validate_slug, validate_stable_id, ApiError, AppState,
-    ArtworkUploadUrlRequest, EncodeJobRequest, PlayEventRequest, PublishRequest, UploadUrlRequest,
+    ArtworkUploadUrlRequest, EncodeJobRequest, MaintenanceCleanupRequest, PlayEventRequest,
+    PublishRequest, UploadUrlRequest,
 };
 use lambda_http::http::{Method, StatusCode};
 use lambda_http::{Body, Error, Request, Response};
@@ -98,6 +99,16 @@ async fn dispatch(request: &Request, state: &AppState) -> Result<Response<Body>,
         (&Method::GET, ApiPath::AdminRumSummary) => {
             let query = parse_rum_summary_query(request.uri().query())?;
             json_response(StatusCode::OK, state.get_rum_summary(query).await?)
+        }
+        (&Method::GET, ApiPath::AdminMaintenanceStale) => {
+            json_response(StatusCode::OK, db::maintenance_report(state.db()).await?)
+        }
+        (&Method::POST, ApiPath::AdminMaintenanceStale) => {
+            let request = parse_optional_json_body::<MaintenanceCleanupRequest>(request.body())?;
+            json_response(
+                StatusCode::OK,
+                db::cleanup_maintenance(state.db(), request).await?,
+            )
         }
         (&Method::POST, path @ (ApiPath::AdminUploadUrl | ApiPath::AdminArtworkUploadUrl)) => {
             upload_url_response(path, request, state).await
@@ -275,6 +286,7 @@ pub(crate) fn parse_path(path: &str) -> ApiPath {
             job_id: (*job_id).to_string(),
         },
         ["admin", "rum", "summary"] => ApiPath::AdminRumSummary,
+        ["admin", "maintenance", "stale"] => ApiPath::AdminMaintenanceStale,
         ["admin", "upload-url"] => ApiPath::AdminUploadUrl,
         ["admin", "artwork-upload-url"] => ApiPath::AdminArtworkUploadUrl,
         ["admin", "encode-jobs"] => ApiPath::AdminEncodeJobs,
@@ -380,6 +392,7 @@ pub(crate) enum ApiPath {
     AdminJobs,
     AdminJob { job_id: String },
     AdminRumSummary,
+    AdminMaintenanceStale,
     AdminUploadUrl,
     AdminArtworkUploadUrl,
     AdminEncodeJobs,

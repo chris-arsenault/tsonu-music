@@ -95,7 +95,7 @@ function AdminShellInner() {
                 ) : null}
                 {parsed.section === 'activity' ? (
                     <ActivityPage
-                        view={parsed.subview === 'stats' ? 'stats' : 'encoding'}
+                        view={parsed.subview === 'stats' || parsed.subview === 'maintenance' ? parsed.subview : 'encoding'}
                         onNavigateSong={setSelectedSongId}
                     />
                 ) : null}
