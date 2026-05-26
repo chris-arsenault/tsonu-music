@@ -1,5 +1,6 @@
 mod analytics;
 mod encoding;
+mod maintenance;
 mod publishing;
 mod rum;
 mod uploads;

@@ -20,6 +20,9 @@ data "aws_iam_policy_document" "admin_api" {
       test     = "StringLike"
       variable = "s3:prefix"
       values = [
+        # Legacy encoder scratch output is no longer part of the catalog media
+        # model; the maintenance UI lists it for explicit cleanup.
+        "draft/encodes/*",
         # Legacy album-era objects, kept readable for any straggling
         # publications. Current code reads/writes under recordings/*.
         "albums/*",
@@ -59,6 +62,20 @@ data "aws_iam_policy_document" "admin_api" {
       # can re-publish any album-era release that hasn't been migrated.
       "${aws_s3_bucket.media_storage["media"].arn}/albums/*",
       "${aws_s3_bucket.media_storage["media"].arn}/artwork/*",
+      "${aws_s3_bucket.media_storage["media"].arn}/recordings/*",
+    ]
+  }
+
+  statement {
+    sid    = "DeleteStaleMediaObjects"
+    effect = "Allow"
+
+    actions = [
+      "s3:DeleteObject",
+    ]
+
+    resources = [
+      "${aws_s3_bucket.media_storage["media"].arn}/draft/encodes/*",
       "${aws_s3_bucket.media_storage["media"].arn}/recordings/*",
     ]
   }

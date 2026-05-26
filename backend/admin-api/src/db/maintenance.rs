@@ -38,6 +38,7 @@ pub async fn maintenance_report(pool: &PgPool) -> Result<MaintenanceReport, ApiE
         stale_draft_recordings: snapshot.stale_draft_recordings.len(),
         orphan_release_tracks: snapshot.orphan_release_tracks.len(),
         stale_encode_jobs: stale_encode_jobs.len(),
+        stale_media_prefixes: 0,
         stale_published_songs: stale_published_songs.len(),
     };
 
@@ -46,9 +47,34 @@ pub async fn maintenance_report(pool: &PgPool) -> Result<MaintenanceReport, ApiE
         stale_draft_recordings: snapshot.stale_draft_recordings,
         orphan_release_tracks: snapshot.orphan_release_tracks,
         stale_encode_jobs,
+        stale_media_prefixes: Vec::new(),
         stale_published_songs,
         totals,
     })
+}
+
+pub async fn active_media_paths(pool: &PgPool) -> Result<HashSet<String>, ApiError> {
+    let mut paths = HashSet::new();
+
+    let song_rows = sqlx::query("SELECT document FROM music_draft_songs")
+        .fetch_all(pool)
+        .await
+        .map_err(map_db_read_error)?;
+    for row in song_rows {
+        let document = row.get::<Json<Value>, _>("document").0;
+        collect_draft_recording_file_paths(&document, &mut paths);
+    }
+
+    let playback_rows = sqlx::query("SELECT playback FROM music_published_release_tracks")
+        .fetch_all(pool)
+        .await
+        .map_err(map_db_read_error)?;
+    for row in playback_rows {
+        let playback = row.get::<Json<Value>, _>("playback").0;
+        collect_playback_paths(&playback, &mut paths);
+    }
+
+    Ok(paths)
 }
 
 pub async fn cleanup_maintenance(
@@ -453,6 +479,45 @@ async fn stale_published_songs(pool: &PgPool) -> Result<Vec<StalePublishedSong>,
             reason: "published_song_without_tracks".to_string(),
         })
         .collect())
+}
+
+fn collect_draft_recording_file_paths(document: &Value, paths: &mut HashSet<String>) {
+    for recording in document
+        .get("recordings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for file in recording
+            .get("files")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            insert_path(paths, file.get("path"));
+        }
+    }
+}
+
+fn collect_playback_paths(playback: &Value, paths: &mut HashSet<String>) {
+    insert_path(paths, playback.get("hls").and_then(|hls| hls.get("path")));
+    for format in playback
+        .get("formats")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        insert_path(paths, format.get("path"));
+    }
+}
+
+fn insert_path(paths: &mut HashSet<String>, value: Option<&Value>) {
+    if let Some(path) = value
+        .and_then(Value::as_str)
+        .filter(|path| !path.is_empty())
+    {
+        paths.insert(path.to_string());
+    }
 }
 
 fn string_value(value: &Value, field: &str) -> String {

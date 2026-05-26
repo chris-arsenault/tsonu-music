@@ -164,6 +164,7 @@ pub(crate) struct MaintenanceReport {
     pub(crate) stale_draft_recordings: Vec<StaleDraftRecording>,
     pub(crate) orphan_release_tracks: Vec<OrphanReleaseTrack>,
     pub(crate) stale_encode_jobs: Vec<StaleEncodeJob>,
+    pub(crate) stale_media_prefixes: Vec<StaleMediaPrefix>,
     pub(crate) stale_published_songs: Vec<StalePublishedSong>,
     pub(crate) totals: MaintenanceTotals,
 }
@@ -213,16 +214,26 @@ pub(crate) struct StalePublishedSong {
     pub(crate) reason: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StaleMediaPrefix {
+    pub(crate) prefix: String,
+    pub(crate) object_count: usize,
+    pub(crate) size_bytes: u64,
+    pub(crate) reason: String,
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MaintenanceTotals {
     pub(crate) stale_draft_recordings: usize,
     pub(crate) orphan_release_tracks: usize,
     pub(crate) stale_encode_jobs: usize,
+    pub(crate) stale_media_prefixes: usize,
     pub(crate) stale_published_songs: usize,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MaintenanceCleanupRequest {
     #[serde(default)]
@@ -231,6 +242,8 @@ pub(crate) struct MaintenanceCleanupRequest {
     pub(crate) release_tracks: Vec<MaintenanceReleaseTrackTarget>,
     #[serde(default)]
     pub(crate) encode_job_ids: Vec<String>,
+    #[serde(default)]
+    pub(crate) media_prefixes: Vec<String>,
     #[serde(default)]
     pub(crate) published_song_ids: Vec<String>,
 }
@@ -262,6 +275,7 @@ pub(crate) struct MaintenanceCleanupCounts {
     pub(crate) draft_recordings: usize,
     pub(crate) release_tracks: usize,
     pub(crate) encode_jobs: usize,
+    pub(crate) media_prefixes: usize,
     pub(crate) published_songs: usize,
 }
 

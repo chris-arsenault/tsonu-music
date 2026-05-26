@@ -1,13 +1,14 @@
 import { RefreshCw, Trash2, Wrench } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { cleanupMaintenance, getMaintenanceReport } from '../admin-api';
-import { formatRelativeTime } from '../admin-helpers';
+import { formatBytes, formatRelativeTime } from '../admin-helpers';
 import type {
     MaintenanceCleanupRequest,
     MaintenanceReport,
     OrphanReleaseTrack,
     StaleDraftRecording,
     StaleEncodeJob,
+    StaleMediaPrefix,
     StalePublishedSong,
 } from '../admin-types';
 import { useNotifications } from '../notifications';
@@ -16,7 +17,7 @@ import { EmptyState } from '../shared/EmptyState';
 import { StatusPill } from '../shared/StatusPill';
 import { useBusy } from '../shared/useBusy';
 
-type SectionKey = 'recording' | 'track' | 'job' | 'publishedSong';
+type SectionKey = 'recording' | 'track' | 'job' | 'media' | 'publishedSong';
 
 interface RowBase {
     key: string;
@@ -38,6 +39,10 @@ function trackKey(item: Pick<OrphanReleaseTrack, 'releaseId' | 'trackId'>): stri
 
 function jobKey(item: Pick<StaleEncodeJob, 'jobId'>): string {
     return `job:${item.jobId}`;
+}
+
+function mediaKey(item: Pick<StaleMediaPrefix, 'prefix'>): string {
+    return `media:${item.prefix}`;
 }
 
 function publishedSongKey(item: Pick<StalePublishedSong, 'songId'>): string {
@@ -78,6 +83,13 @@ function rowsFor(report: MaintenanceReport | undefined): RowBase[] {
             status: item.status,
             age: item.finishedAt ?? item.requestedAt,
         })),
+        ...report.staleMediaPrefixes.map((item): RowBase => ({
+            key: mediaKey(item),
+            section: 'media',
+            title: item.prefix,
+            detail: `${item.objectCount} object${item.objectCount === 1 ? '' : 's'} · ${formatBytes(item.sizeBytes)}`,
+            reason: item.reason,
+        })),
         ...report.stalePublishedSongs.map((item): RowBase => ({
             key: publishedSongKey(item),
             section: 'publishedSong',
@@ -93,6 +105,7 @@ function sectionLabel(section: SectionKey): string {
         case 'recording': return 'Draft recordings';
         case 'track': return 'Release tracks';
         case 'job': return 'Encode jobs';
+        case 'media': return 'Legacy media';
         case 'publishedSong': return 'Published songs';
     }
 }
@@ -163,6 +176,9 @@ export function MaintenancePanel() {
             encodeJobIds: report.staleEncodeJobs
                 .filter((item) => selected.has(jobKey(item)))
                 .map((item) => item.jobId),
+            mediaPrefixes: report.staleMediaPrefixes
+                .filter((item) => selected.has(mediaKey(item)))
+                .map((item) => item.prefix),
             publishedSongIds: report.stalePublishedSongs
                 .filter((item) => selected.has(publishedSongKey(item)))
                 .map((item) => item.songId),
@@ -184,6 +200,7 @@ export function MaintenancePanel() {
         ? report.totals.staleDraftRecordings
             + report.totals.orphanReleaseTracks
             + report.totals.staleEncodeJobs
+            + report.totals.staleMediaPrefixes
             + report.totals.stalePublishedSongs
         : rows.length;
 
@@ -225,11 +242,11 @@ export function MaintenancePanel() {
                 <EmptyState
                     icon={Wrench}
                     title="No stale entries"
-                    body="Draft recordings, release tracks, encode jobs, and published song rows are aligned."
+                    body="Draft recordings, release tracks, encode jobs, media objects, and published song rows are aligned."
                 />
             ) : (
                 <div className="admin-maintenance">
-                    {(['recording', 'track', 'job', 'publishedSong'] as SectionKey[]).map((section) => {
+                    {(['recording', 'track', 'job', 'media', 'publishedSong'] as SectionKey[]).map((section) => {
                         const sectionRows = grouped.get(section) ?? [];
                         if (sectionRows.length === 0) return null;
                         const selectedInSection = sectionRows.filter((row) => selected.has(row.key)).length;

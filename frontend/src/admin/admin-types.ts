@@ -232,11 +232,13 @@ export interface MaintenanceReport {
     staleDraftRecordings: StaleDraftRecording[];
     orphanReleaseTracks: OrphanReleaseTrack[];
     staleEncodeJobs: StaleEncodeJob[];
+    staleMediaPrefixes: StaleMediaPrefix[];
     stalePublishedSongs: StalePublishedSong[];
     totals: {
         staleDraftRecordings: number;
         orphanReleaseTracks: number;
         staleEncodeJobs: number;
+        staleMediaPrefixes: number;
         stalePublishedSongs: number;
     };
 }
@@ -276,10 +278,18 @@ export interface StalePublishedSong {
     reason: string;
 }
 
+export interface StaleMediaPrefix {
+    prefix: string;
+    objectCount: number;
+    sizeBytes: number;
+    reason: string;
+}
+
 export interface MaintenanceCleanupRequest {
     draftRecordings?: Array<Pick<StaleDraftRecording, 'songId' | 'recordingId'>>;
     releaseTracks?: Array<Pick<OrphanReleaseTrack, 'releaseId' | 'trackId'>>;
     encodeJobIds?: StableId[];
+    mediaPrefixes?: string[];
     publishedSongIds?: StableId[];
 }
 
@@ -288,6 +298,7 @@ export interface MaintenanceCleanupResponse {
         draftRecordings: number;
         releaseTracks: number;
         encodeJobs: number;
+        mediaPrefixes: number;
         publishedSongs: number;
     };
     report: MaintenanceReport;

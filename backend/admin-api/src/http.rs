@@ -173,13 +173,10 @@ async fn maintenance_response(
     state: &AppState,
 ) -> Result<Response<Body>, ApiError> {
     match *method {
-        Method::GET => json_response(StatusCode::OK, db::maintenance_report(state.db()).await?),
+        Method::GET => json_response(StatusCode::OK, state.maintenance_report().await?),
         Method::POST => {
             let request = parse_optional_json_body::<MaintenanceCleanupRequest>(request.body())?;
-            json_response(
-                StatusCode::OK,
-                db::cleanup_maintenance(state.db(), request).await?,
-            )
+            json_response(StatusCode::OK, state.cleanup_maintenance(request).await?)
         }
         _ => Err(ApiError::method_not_allowed()),
     }
