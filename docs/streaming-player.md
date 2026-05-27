@@ -36,8 +36,8 @@ Absolute `url` values in manifests are respected.
 
 OpenGraph pages use the Ahara `website` module's `og_config` mode with shared
 RDS credentials from `/ahara/db/tsonu-music/*`. `/releases/{releaseSlug}` and
-`/songs/{songSlug}` query the published metadata tables for per-entity title,
-description, and artwork.
+`/tracks/{releaseSlug}/{trackSlug}` query the published metadata tables for
+per-entity title, description, and artwork.
 
 ## Analytics
 
