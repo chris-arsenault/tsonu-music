@@ -9,15 +9,12 @@ infrastructure that read and write those records.
 Shared Ahara RDS stores catalog metadata in:
 
 ```text
-music_draft_albums
 music_draft_releases
 music_draft_songs
 music_encode_jobs
-music_published_albums
 music_published_releases
 music_published_release_tracks
 music_published_songs
-music_published_tracks
 ```
 
 Draft song and release edits are written through normal admin REST endpoints:
@@ -32,16 +29,17 @@ routes.
 Generated media objects in `tsonu-music-media`:
 
 ```text
-albums/{albumSlug}/tracks/{trackSlug}/{jobId}/hls/master.m3u8
-albums/{albumSlug}/tracks/{trackSlug}/{jobId}/hls/{quality}/index.m3u8
-albums/{albumSlug}/tracks/{trackSlug}/{jobId}/hls/{quality}/segment_00000.ts
-albums/{albumSlug}/tracks/{trackSlug}/{jobId}/lossless.flac
+recordings/{recordingId}/files/{timestamp}/hls/master.m3u8
+recordings/{recordingId}/files/{timestamp}/hls/{quality}/index.m3u8
+recordings/{recordingId}/files/{timestamp}/hls/{quality}/segment_00000.ts
+recordings/{recordingId}/files/{timestamp}/metadata.json
+recordings/{recordingId}/files/{timestamp}/lossless.flac
 ```
 
 Source masters live separately in `tsonu-music-masters`:
 
 ```text
-masters/{albumId}/{trackId}/source.{wav|aiff|flac}
+masters/{recordingId}/source.{wav|aiff|flac}
 ```
 
 Public catalog API responses must not include source bucket names, source keys,
@@ -55,10 +53,8 @@ S3 version IDs, or upload ETags. Those fields are draft/admin-only.
 - Publish by writing fresh immutable media paths and public RDS snapshots.
 - Keep generated media paths versioned or content-addressed so public playback
   paths do not need replacement.
-- The publish API copies generated draft encode objects into the public
-  `albums/{albumSlug}/tracks/{trackSlug}/{jobId}/` prefix, updates RDS
-  publication rows, then invalidates `/music`, `/albums/{albumSlug}`, and the
-  album's track deep links.
+- The publish API updates RDS publication rows, then invalidates `/music`,
+  `/releases/{releaseSlug}`, the release API response, and affected song pages.
 - Treat `schemas/media-catalog/*.schema.json` as the public contract and
   `frontend/src/catalog/media-catalog.ts` as the frontend TypeScript mirror.
 

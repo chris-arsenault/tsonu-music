@@ -23,7 +23,6 @@ pub(crate) const MAX_ANALYTICS_EVENT_AGE_HOURS: i64 = 24;
 pub(crate) const MAX_ANALYTICS_EVENT_FUTURE_SECONDS: i64 = 300;
 pub(crate) const PLAYER_RUM_EVENT_NAMES: &[&str] = &[
     "release_view",
-    "album_view",
     "track_impression",
     "play_start",
     "play_pause",
@@ -175,7 +174,7 @@ pub(crate) fn build_player_rum_query() -> String {
         .join(", ");
 
     format!(
-        "fields @timestamp, event_type, event_details.releaseId as releaseId, event_details.albumId as albumId, event_details.songId as songId, event_details.recordingId as recordingId, event_details.trackId as trackId, event_details.siteSessionId as siteSessionId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage, event_details.pagePath as pagePath, event_details.previousPagePath as previousPagePath, event_details.landingPagePath as landingPagePath, event_details.referrerOrigin as referrerOrigin, event_details.referrerHost as referrerHost, event_details.pageTitle as pageTitle, event_details.utmSource as utmSource, event_details.utmMedium as utmMedium, event_details.utmCampaign as utmCampaign, metadata.pageId as rumPageId, metadata.pageTitle as rumPageTitle, metadata.browserName as browserName, metadata.deviceType as deviceType, metadata.osName as osName, metadata.countryCode as countryCode | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
+        "fields @timestamp, event_type, event_details.releaseId as releaseId, event_details.songId as songId, event_details.recordingId as recordingId, event_details.trackId as trackId, event_details.siteSessionId as siteSessionId, event_details.playbackSessionId as playbackSessionId, event_details.selectedQuality as selectedQuality, event_details.errorName as errorName, event_details.errorMessage as errorMessage, event_details.pagePath as pagePath, event_details.previousPagePath as previousPagePath, event_details.landingPagePath as landingPagePath, event_details.referrerOrigin as referrerOrigin, event_details.referrerHost as referrerHost, event_details.pageTitle as pageTitle, event_details.utmSource as utmSource, event_details.utmMedium as utmMedium, event_details.utmCampaign as utmCampaign, metadata.pageId as rumPageId, metadata.pageTitle as rumPageTitle, metadata.browserName as browserName, metadata.deviceType as deviceType, metadata.osName as osName, metadata.countryCode as countryCode | filter event_type in [{event_names}] | sort @timestamp desc | limit {MAX_RUM_QUERY_RESULTS}"
     )
 }
 
@@ -256,9 +255,7 @@ pub(crate) fn build_rum_summary(
                 }
             }
 
-            if let Some(release_id) =
-                query_row_value(row, "releaseId").or_else(|| query_row_value(row, "albumId"))
-            {
+            if let Some(release_id) = query_row_value(row, "releaseId") {
                 release_counts
                     .entry(release_id.to_string())
                     .or_default()
@@ -283,9 +280,7 @@ pub(crate) fn build_rum_summary(
             if event_type == "play_error" && recent_errors.len() < 10 {
                 recent_errors.push(RumRecentError {
                     timestamp: query_row_value(row, "@timestamp").map(str::to_string),
-                    release_id: query_row_value(row, "releaseId")
-                        .or_else(|| query_row_value(row, "albumId"))
-                        .map(str::to_string),
+                    release_id: query_row_value(row, "releaseId").map(str::to_string),
                     song_id: query_row_value(row, "songId").map(str::to_string),
                     recording_id: query_row_value(row, "recordingId").map(str::to_string),
                     track_id: query_row_value(row, "trackId").map(str::to_string),

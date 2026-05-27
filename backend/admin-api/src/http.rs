@@ -314,9 +314,6 @@ pub(crate) fn parse_path(path: &str) -> ApiPath {
         ["catalog", "releases", slug] => ApiPath::PublicRelease {
             slug: (*slug).to_string(),
         },
-        ["catalog", "albums", slug] => ApiPath::PublicRelease {
-            slug: (*slug).to_string(),
-        },
         ["catalog", "songs", slug] => ApiPath::PublicSong {
             slug: (*slug).to_string(),
         },

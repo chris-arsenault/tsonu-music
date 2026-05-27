@@ -47,7 +47,7 @@ function renderPublicRoute(route: string) {
         return <CatalogPage />;
     }
 
-    if ((parts[0] === 'releases' || parts[0] === 'albums') && parts[1]) {
+    if (parts[0] === 'releases' && parts[1]) {
         const slug = decodePathPart(parts[1]) ?? '';
         if (slug === LAUNCH_ALBUM_SLUG) {
             return <SoWeSleepLaunchPage />;

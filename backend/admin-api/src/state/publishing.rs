@@ -88,13 +88,18 @@ impl AppState {
             .mark_draft_release_published(&release_id, &release_object)
             .await?;
 
-        let invalidation_paths = vec![
+        let mut invalidation_paths = vec![
             "/catalog".to_string(),
             "/music".to_string(),
             format!("/releases/{}", published_release.slug),
             format!("/catalog/releases/{}", published_release.slug),
             format!("/catalog/songs/*"),
         ];
+        invalidation_paths.extend(
+            published_songs
+                .iter()
+                .map(|song| format!("/songs/{}", song.slug)),
+        );
         let invalidation_id = self
             .invalidate_manifest_paths(&release_id, invalidation_paths.clone())
             .await?;

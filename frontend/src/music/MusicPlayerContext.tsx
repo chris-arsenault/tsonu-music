@@ -180,7 +180,7 @@ function initialRouteTarget(catalog: PublishedCatalog): {
         .split('/')
         .filter(Boolean);
 
-    if ((parts[0] === 'releases' || parts[0] === 'albums') && parts[1]) {
+    if (parts[0] === 'releases' && parts[1]) {
         const releaseSlug = decodeURIComponent(parts[1]);
         return {
             releaseSlug,

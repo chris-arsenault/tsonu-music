@@ -4,7 +4,8 @@ The first-party listener loads published metadata from
 `window.__APP_CONFIG__.app.adminApiBaseUrl`:
 
 - `GET /catalog`
-- `GET /catalog/albums/{albumSlug}`
+- `GET /catalog/releases/{releaseSlug}`
+- `GET /catalog/songs/{songSlug}`
 
 Playback URLs in those responses still resolve against
 `window.__APP_CONFIG__.app.mediaBaseUrl`.
@@ -12,12 +13,13 @@ Playback URLs in those responses still resolve against
 The public frontend has separate catalog routes:
 
 - `/music` lists published catalog entries.
-- `/albums/{albumSlug}` renders one album.
-- `/tracks/{albumSlug}/{trackSlug}` renders one track deep link.
+- `/releases/{releaseSlug}` renders one release.
+- `/songs/{songSlug}` renders one song.
+- `/tracks/{releaseSlug}/{trackSlug}` renders one track deep link.
 
-Only `visibility = public` rows appear in `/music`. Direct album and track
-links can resolve `public` and `unlisted` rows so previews can be shared without
-being listed in the catalog.
+Only `visibility = public` rows appear in `/music`. Direct release, song, and
+track links can resolve `public` and `unlisted` rows so previews can be shared
+without being listed in the catalog.
 
 The audio element lives in `MusicPlayerProvider`, which is mounted once at the
 public app root. Page navigation swaps catalog/detail views without remounting
@@ -33,15 +35,15 @@ The player resolves all manifest `path` values against the media CDN base URL.
 Absolute `url` values in manifests are respected.
 
 OpenGraph pages use the Ahara `website` module's `og_config` mode with shared
-RDS credentials from `/ahara/db/tsonu-music/*`. `/albums/{albumSlug}` and
-`/tracks/{albumSlug}/{trackSlug}` query the published metadata tables for
-per-entity title, description, and artwork.
+RDS credentials from `/ahara/db/tsonu-music/*`. `/releases/{releaseSlug}` and
+`/songs/{songSlug}` query the published metadata tables for per-entity title,
+description, and artwork.
 
 ## Analytics
 
 The player records:
 
-- `album_view` once per album per page session.
+- `release_view` once per release per page session.
 - `track_impression` once per track per page session.
 - `play_start` on real audio play events.
 - `play_pause` on user-visible pauses, suppressing transient source switches.

@@ -10,17 +10,17 @@ Request:
 
 ```json
 {
-  "albumId": "album_so-we-sleep",
-  "trackId": "track_so-we-sleep_01",
+  "songId": "song_so-we-sleep-01",
+  "recordingId": "recording_so-we-sleep_01",
   "includeLossless": false
 }
 ```
 
-The admin API reads the draft album record from RDS, validates that the track
+The admin API reads the draft song record from RDS, validates that the recording
 has a canonical source master under:
 
 ```text
-masters/{albumId}/{trackId}/source.{wav|aif|aiff|flac}
+masters/{recordingId}/source.{wav|aif|aiff|flac}
 ```
 
 It then creates a queued job row in `music_encode_jobs` and invokes
@@ -51,20 +51,12 @@ failure is observed so async Lambda retries do not leave jobs stuck in
 Publishing uses:
 
 ```text
-POST /admin/publish/{albumId}
+POST /admin/publish/{releaseId}
 ```
 
-The draft album must be `ready` or already `published`, and every track must
+The draft release must be `ready` or already `published`, and every track must
 resolve to a succeeded encode job. By default publishing uses the latest
-`encodeJobIds` entry on each draft track; the request body can override specific
-tracks with `trackJobIds`. The API copies every object under each
-`draft/encodes/{jobId}/` prefix into an immutable public prefix:
-
-```text
-albums/{albumSlug}/tracks/{trackSlug}/{jobId}/...
-```
-
-It then replaces the public album and track snapshot rows in
-`music_published_albums` and `music_published_tracks`, marks the draft album
-`published`, and creates a CloudFront invalidation for the frontend catalog and
-deep-link routes backed by those rows.
+recording file metadata on each draft track. Publishing replaces the public
+release, song, and release-track snapshot rows, marks the draft release
+`published`, and creates a CloudFront invalidation for the frontend catalog,
+release, song, and catalog API routes backed by those rows.
