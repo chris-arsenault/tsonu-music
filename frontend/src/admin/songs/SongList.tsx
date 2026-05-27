@@ -1,5 +1,5 @@
-import { Music2, Plus, RefreshCw } from 'lucide-react';
-import { useMemo } from 'react';
+import { ChevronDown, ChevronRight, Music2, Plus, RefreshCw } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCatalog, useSongsGroupedByRelease, useUnreleasedSongs } from '../catalog-store';
 import { isRecordingEncoded, songIdFromKey } from '../admin-helpers';
 import type { DraftSong } from '../admin-types';
@@ -78,8 +78,24 @@ export function SongList({ selectedSongId, onSelect, onCreate, onRefresh }: Prop
         return [{ key: 'all', label: undefined, songs: sorted }];
     }, [group, search, allSongs, groupedByRelease, unreleased]);
 
+    const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+    useEffect(() => {
+        setExpandedGroups(new Set());
+    }, [group]);
+
+    const toggleGroup = (key: string) => {
+        setExpandedGroups((prev) => {
+            const next = new Set(prev);
+            if (next.has(key)) next.delete(key);
+            else next.add(key);
+            return next;
+        });
+    };
+
     const empty = groups.every((g) => g.songs.length === 0);
-    const flatIds = groups.flatMap((g) => g.songs.map((song) => song.songId));
+    const flatIds = groups.flatMap((g) =>
+        !g.label || expandedGroups.has(g.key) ? g.songs.map((song) => song.songId) : [],
+    );
     const onListKeyDown = useArrowKeyList({ ids: flatIds, activeId: selectedSongId, onSelect });
 
     return (
@@ -130,36 +146,57 @@ export function SongList({ selectedSongId, onSelect, onCreate, onRefresh }: Prop
                 />
             ) : (
                 <div className="admin-list__groups">
-                    {groups.map((entry) => (
-                        <div key={entry.key} className="admin-list__group">
-                            {entry.label ? <h3>{entry.label}</h3> : null}
-                            <ul className="admin-list__items">
-                                {entry.songs.map((song) => {
-                                    const active = song.songId === selectedSongId;
-                                    const recordingCount = song.recordings.length;
-                                    const encodedCount = song.recordings.filter(isRecordingEncoded).length;
-                                    return (
-                                        <li key={song.songId}>
-                                            <button
-                                                type="button"
-                                                className={`admin-list__item ${active ? 'is-active' : ''}`}
-                                                onClick={() => onSelect(song.songId)}
-                                            >
-                                                <div className="admin-list__item-body">
-                                                    <strong>{song.title || song.songId}</strong>
-                                                    <span>
-                                                        {recordingCount === 0
-                                                            ? 'No recordings'
-                                                            : `${recordingCount} recording${recordingCount === 1 ? '' : 's'} · ${encodedCount} encoded`}
-                                                    </span>
-                                                </div>
-                                            </button>
-                                        </li>
-                                    );
-                                })}
-                            </ul>
-                        </div>
-                    ))}
+                    {groups.map((entry) => {
+                        const collapsible = Boolean(entry.label);
+                        const expanded = !collapsible || expandedGroups.has(entry.key);
+                        return (
+                            <div key={entry.key} className="admin-list__group">
+                                {entry.label ? (
+                                    <button
+                                        type="button"
+                                        className="admin-list__group-toggle"
+                                        onClick={() => toggleGroup(entry.key)}
+                                        aria-expanded={expanded}
+                                    >
+                                        {expanded ? (
+                                            <ChevronDown aria-hidden="true" />
+                                        ) : (
+                                            <ChevronRight aria-hidden="true" />
+                                        )}
+                                        <h3>{entry.label}</h3>
+                                        <span className="admin-list__group-count">{entry.songs.length}</span>
+                                    </button>
+                                ) : null}
+                                {expanded ? (
+                                    <ul className="admin-list__items">
+                                        {entry.songs.map((song) => {
+                                            const active = song.songId === selectedSongId;
+                                            const recordingCount = song.recordings.length;
+                                            const encodedCount = song.recordings.filter(isRecordingEncoded).length;
+                                            return (
+                                                <li key={song.songId}>
+                                                    <button
+                                                        type="button"
+                                                        className={`admin-list__item ${active ? 'is-active' : ''}`}
+                                                        onClick={() => onSelect(song.songId)}
+                                                    >
+                                                        <div className="admin-list__item-body">
+                                                            <strong>{song.title || song.songId}</strong>
+                                                            <span>
+                                                                {recordingCount === 0
+                                                                    ? 'No recordings'
+                                                                    : `${recordingCount} recording${recordingCount === 1 ? '' : 's'} · ${encodedCount} encoded`}
+                                                            </span>
+                                                        </div>
+                                                    </button>
+                                                </li>
+                                            );
+                                        })}
+                                    </ul>
+                                ) : null}
+                            </div>
+                        );
+                    })}
                 </div>
             )}
         </div>
