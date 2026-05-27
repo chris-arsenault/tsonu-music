@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { Activity, ListMusic, LogOut, Music2 } from 'lucide-react';
+import { Activity, House, ListMusic, LogOut, Music2 } from 'lucide-react';
 import { getRuntimeConfig } from '../runtime-config';
 import { useAuth } from '../use-auth';
 import { handleInternalLink, navigateTo, useCurrentRoute } from '../music/routes';
@@ -49,6 +49,9 @@ function AdminShellInner() {
                         <span>{runtimeConfig.adminApiBaseUrl}</span>
                         {listsLoading ? <span className="admin-busy">Loading…</span> : null}
                     </div>
+                    <a className="admin-button" href="/" onClick={(event) => handleInternalLink(event, '/')}>
+                        <House aria-hidden="true" /> Site
+                    </a>
                     <button className="admin-icon-button" type="button" title="Sign out" onClick={signOut}>
                         <LogOut aria-hidden="true" />
                     </button>
