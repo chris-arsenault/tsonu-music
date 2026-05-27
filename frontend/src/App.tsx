@@ -18,6 +18,7 @@ import { AdminRoute } from './admin/AdminRoute';
 import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
+import { getTrackTitleLabel, TrackTitle } from './music/TrackTitle';
 import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
 import { recordSitePageView } from './player-analytics';
@@ -412,14 +413,15 @@ function LaunchTracklist() {
         <ol className="catalog-track-list">
             {release.tracks.map((track) => {
                 const isActive = player.selectedTrack?.trackId === track.trackId;
+                const title = getTrackTitleLabel(track);
                 return (
                     <li key={track.trackId}>
                         <button
                             type="button"
                             className="catalog-track-list__play"
                             onClick={() => player.playTrack(release.releaseId, track.trackId)}
-                            aria-label={`Play ${track.title}`}
-                            title={`Play ${track.title}`}
+                            aria-label={`Play ${title}`}
+                            title={`Play ${title}`}
                         >
                             <Play aria-hidden="true" />
                         </button>
@@ -429,7 +431,7 @@ function LaunchTracklist() {
                             className={isActive ? 'is-active' : undefined}
                         >
                             <span>{String(track.trackNumber).padStart(2, '0')}</span>
-                            <strong>{track.title}</strong>
+                            <strong><TrackTitle track={track} /></strong>
                             <span>{formatTime(track.durationSeconds)}</span>
                         </a>
                     </li>

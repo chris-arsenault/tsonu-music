@@ -1083,13 +1083,40 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 .catalog-track-list strong {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     font-family: var(--font-display);
     font-weight: 400;
     font-size: 1.1rem;
 }
-.catalog-track-list span:last-child {
+.track-title {
+    min-width: 0;
+    display: grid;
+    gap: 0.12rem;
+    line-height: 1.08;
+    white-space: normal;
+}
+.track-title__primary,
+.track-title__alternate {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.track-title__alternate {
+    display: block;
+    color: var(--muted);
+    font-family: var(--font-mono);
+    font-size: 0.62em;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    line-height: 1;
+    text-transform: uppercase;
+    vertical-align: baseline;
+}
+.catalog-track-list a:hover .track-title__alternate,
+.catalog-track-list a.is-active .track-title__alternate {
+    color: var(--gold);
+}
+.catalog-track-list a > span:last-child {
     text-align: right;
     color: var(--muted);
     font-family: var(--font-mono);
@@ -1188,8 +1215,6 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 .bottom-player__track {
     min-width: 0;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
     font-family: var(--font-display);
     font-weight: 400;
     font-size: 1.02rem;
@@ -1198,6 +1223,12 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     line-height: 1.2;
 }
 .bottom-player__track:hover { color: var(--gold); }
+.bottom-player__track .track-title__alternate {
+    font-size: 0.62rem;
+}
+.bottom-player__track:hover .track-title__alternate {
+    color: var(--gold);
+}
 .bottom-player__album {
     min-width: 0;
     overflow: hidden;

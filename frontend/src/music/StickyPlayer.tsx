@@ -5,6 +5,7 @@ import {
     formatTime,
     useMusicPlayer,
 } from './MusicPlayerContext';
+import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { handleInternalLink, releasePath, trackPath } from './routes';
 
 export default function StickyPlayer() {
@@ -13,6 +14,7 @@ export default function StickyPlayer() {
     const seekMax = Math.max(resolvedDuration, 0);
     const progress = seekMax > 0 ? Math.min(100, (player.currentTime / seekMax) * 100) : 0;
     const progressStyle = { '--progress': `${progress}%` } as CSSProperties;
+    const selectedTrackTitle = player.selectedTrack ? getTrackTitleLabel(player.selectedTrack) : '';
 
     if (player.loadState === 'error') {
         return (
@@ -49,8 +51,10 @@ export default function StickyPlayer() {
                         href={trackPath(player.releaseManifest.slug, player.selectedTrack.slug)}
                         onClick={(event) => handleInternalLink(event, trackPath(player.releaseManifest!.slug, player.selectedTrack!.slug))}
                         className="bottom-player__track"
+                        aria-label={selectedTrackTitle}
+                        title={selectedTrackTitle}
                     >
-                        {player.selectedTrack.title}
+                        <TrackTitle track={player.selectedTrack} />
                     </a>
                     <a
                         href={releasePath(player.releaseManifest.slug)}

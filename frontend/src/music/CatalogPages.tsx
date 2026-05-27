@@ -12,6 +12,7 @@ import {
     formatTime,
     useMusicPlayer,
 } from './MusicPlayerContext';
+import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { handleInternalLink, releasePath, songPath, trackPath } from './routes';
 
 interface ReleasePageProps {
@@ -147,28 +148,31 @@ function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest
 
     return (
         <ol className="catalog-track-list">
-            {release.tracks.map((track) => (
-                <li key={track.trackId}>
-                    <button
-                        type="button"
-                        className="catalog-track-list__play"
-                        onClick={() => player.playTrack(release.releaseId, track.trackId)}
-                        aria-label={`Play ${track.title}`}
-                        title={`Play ${track.title}`}
-                    >
-                        <Play aria-hidden="true" />
-                    </button>
-                    <a
-                        href={trackPath(release.slug, track.slug)}
-                        onClick={(event) => handleInternalLink(event, trackPath(release.slug, track.slug))}
-                        className={activeTrack?.trackId === track.trackId ? 'is-active' : undefined}
-                    >
-                        <span>{track.trackNumber}</span>
-                        <strong>{track.title}</strong>
-                        <span>{formatTime(track.durationSeconds)}</span>
-                    </a>
-                </li>
-            ))}
+            {release.tracks.map((track) => {
+                const title = getTrackTitleLabel(track);
+                return (
+                    <li key={track.trackId}>
+                        <button
+                            type="button"
+                            className="catalog-track-list__play"
+                            onClick={() => player.playTrack(release.releaseId, track.trackId)}
+                            aria-label={`Play ${title}`}
+                            title={`Play ${title}`}
+                        >
+                            <Play aria-hidden="true" />
+                        </button>
+                        <a
+                            href={trackPath(release.slug, track.slug)}
+                            onClick={(event) => handleInternalLink(event, trackPath(release.slug, track.slug))}
+                            className={activeTrack?.trackId === track.trackId ? 'is-active' : undefined}
+                        >
+                            <span>{track.trackNumber}</span>
+                            <strong><TrackTitle track={track} /></strong>
+                            <span>{formatTime(track.durationSeconds)}</span>
+                        </a>
+                    </li>
+                );
+            })}
         </ol>
     );
 }
