@@ -334,6 +334,23 @@ export function normalizeReleaseTrackSlugs(release: DraftRelease): DraftRelease 
     return changed ? { ...release, tracks } : release;
 }
 
+export function regenerateReleaseTrackIds(release: DraftRelease): DraftRelease {
+    const withTitleSlugs = normalizeReleaseTrackSlugs({
+        ...release,
+        tracks: release.tracks.map((track) => ({
+            ...track,
+            slug: slugify(track.title),
+        })),
+    });
+    return {
+        ...withTitleSlugs,
+        tracks: withTitleSlugs.tracks.map((track) => ({
+            ...track,
+            trackId: stableId('track', `${release.slug}_${String(track.trackNumber).padStart(2, '0')}_${track.slug}`),
+        })),
+    };
+}
+
 function uniqueReleaseTrackSlug(
     base: string,
     track: DraftReleaseTrack,

@@ -5,7 +5,7 @@ use super::{
 use crate::{
     ApiError, CatalogArtist, CatalogEntityType, PublishedCatalog, PublishedCatalogRelease,
     PublishedCatalogSong, PublishedRelease, PublishedSong, PublishedSongPlacement, PublishedStatus,
-    WriteResult, ARTIST_NAME, ARTIST_SLUG,
+    Visibility, WriteResult, ARTIST_NAME, ARTIST_SLUG,
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
@@ -297,6 +297,24 @@ pub async fn get_public_release_by_slug(
         text: row.get("document"),
         e_tag: Some(timestamp_etag(row.get("updated_at"))),
     })
+}
+
+pub async fn get_published_release_visibility(
+    pool: &PgPool,
+    release_id: &str,
+) -> Result<Option<Visibility>, ApiError> {
+    let row = sqlx::query(
+        "SELECT visibility
+         FROM music_published_releases
+         WHERE release_id = $1",
+    )
+    .bind(release_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(map_db_read_error)?;
+
+    row.map(|row| parse_visibility(row.get::<String, _>("visibility").as_str()))
+        .transpose()
 }
 
 pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<PublishedSong, ApiError> {

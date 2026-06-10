@@ -19,11 +19,9 @@ import { useState } from 'react';
 import { navigateTo } from '../../music/routes';
 import {
     nextReleaseTrack,
-    normalizeReleaseTrackSlugs,
     recordingEncodeStatus,
+    regenerateReleaseTrackIds,
     sortedReleaseTracks,
-    stableId,
-    slugify,
 } from '../admin-helpers';
 import { useCatalog } from '../catalog-store';
 import { useNotifications } from '../notifications';
@@ -95,23 +93,6 @@ function swapTrackRecording(
             explicit: recording.explicit,
             isrc: recording.isrc,
         } : track),
-    };
-}
-
-function regenerateTrackIds(release: DraftRelease): DraftRelease {
-    const withTitleSlugs = normalizeReleaseTrackSlugs({
-        ...release,
-        tracks: release.tracks.map((track) => ({
-            ...track,
-            slug: slugify(track.title),
-        })),
-    });
-    return {
-        ...withTitleSlugs,
-        tracks: withTitleSlugs.tracks.map((track) => ({
-            ...track,
-            trackId: stableId('track', `${release.slug}_${String(track.trackNumber).padStart(2, '0')}_${track.slug}`),
-        })),
     };
 }
 
@@ -320,7 +301,7 @@ export function ReleaseTracklist({ release, onChange }: Props) {
                     <button
                         type="button"
                         className="admin-button"
-                        onClick={() => onChange(regenerateTrackIds(release))}
+                        onClick={() => onChange(regenerateReleaseTrackIds(release))}
                         title="Regenerate trackIds from the current title/number"
                     >
                         Regenerate track IDs

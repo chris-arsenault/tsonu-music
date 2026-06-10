@@ -10,6 +10,7 @@ import {
     parseLinks,
     parseTags,
     prepareDraftSongForSave,
+    regenerateReleaseTrackIds,
     currentRecordingFiles,
     isRecordingEncoded,
     sanitizeFilename,
@@ -265,6 +266,28 @@ describe('nextReleaseTrack + sortedReleaseTracks', () => {
             'reign-of-the-simmered',
             'reign-of-the-simmered-version-2',
         ]);
+    });
+
+    test('regenerates track IDs from release slug, track number, and title slug', () => {
+        const release = makeRelease({
+            slug: 'dreams-nightmares',
+            tracks: [
+                {
+                    trackId: stableId('track', 'old-id'),
+                    songId: stableId('song', 'boglyte'),
+                    recordingId: stableId('recording', 'boglyte'),
+                    discNumber: 1,
+                    trackNumber: 2,
+                    slug: 'old-slug',
+                    title: "Boglyte's Last Ride",
+                },
+            ],
+        });
+
+        const [track] = regenerateReleaseTrackIds(release).tracks;
+
+        expect(track.slug).toBe('boglyte-s-last-ride');
+        expect(track.trackId).toBe('track_dreams_nightmares_02_boglyte_s_last_ride');
     });
 
     test('sortedReleaseTracks orders by disc then track', () => {

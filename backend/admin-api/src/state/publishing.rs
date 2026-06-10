@@ -26,7 +26,12 @@ impl AppState {
         })?;
 
         validate_publishable_release(&draft, &release_id)?;
-        let visibility = request.visibility.unwrap_or(Visibility::Public);
+        let visibility = match request.visibility {
+            Some(visibility) => visibility,
+            None => db::get_published_release_visibility(&self.db, &release_id)
+                .await?
+                .unwrap_or(Visibility::Public),
+        };
         let published_at = request
             .published_at
             .unwrap_or_else(|| Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
