@@ -42,6 +42,7 @@ export interface DraftRecording {
     explicit: boolean;
     isrc?: string;
     description?: string;
+    aiAssistedComposition?: boolean;
     sourceMaster?: DraftSourceMaster;
     encodeJobIds?: StableId[];
     files?: RecordingFile[];

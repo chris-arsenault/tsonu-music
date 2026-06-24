@@ -171,6 +171,7 @@ export function prepareDraftSongForSave(song: DraftSong): DraftSong {
                 versionTitle: optionalText(recording.versionTitle),
                 artistName: optionalText(recording.artistName),
                 description: optionalText(recording.description),
+                aiAssistedComposition: recording.aiAssistedComposition || undefined,
                 encodeJobIds: recording.encodeJobIds ?? [],
                 files: currentRecordingFiles(recording),
             };

@@ -10,7 +10,7 @@ import {
     FaAmazon,
     FaApple,
 } from 'react-icons/fa';
-import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
+import { CalendarDays, Disc3, ListMusic, Play, Sparkles } from 'lucide-react';
 
 import InstagramIframe from './InstagramIframe';
 import { AuthProvider } from './auth-context';
@@ -25,6 +25,7 @@ import { recordSitePageView } from './player-analytics';
 import {
     decodePathPart,
     handleInternalLink,
+    AI_USE_PATH,
     releasePath,
     useCurrentRoute,
 } from './music/routes';
@@ -70,6 +71,10 @@ function renderPublicRoute(route: string) {
 
     if (parts[0] === 'privacy') {
         return <PrivacyPage />;
+    }
+
+    if (parts[0] === 'ai-use') {
+        return <AIUsePage />;
     }
 
     return <HomePage />;
@@ -431,7 +436,14 @@ function LaunchTracklist() {
                             className={isActive ? 'is-active' : undefined}
                         >
                             <span>{String(track.trackNumber).padStart(2, '0')}</span>
-                            <strong><TrackTitle track={track} /></strong>
+                            <strong className="catalog-track-list__title">
+                                <TrackTitle track={track} />
+                                {track.aiAssistedComposition ? (
+                                    <span className="ai-assisted-badge">
+                                        <Sparkles aria-hidden="true" /> AI-assisted
+                                    </span>
+                                ) : null}
+                            </strong>
                             <span>{formatTime(track.durationSeconds)}</span>
                         </a>
                     </li>
@@ -496,6 +508,56 @@ function PrivacyPage() {
     );
 }
 
+function AIUsePage() {
+    return (
+        <main className="info-page">
+            <section className="info-page__hero">
+                <p className="eyebrow">AI Use</p>
+                <h1>AI-assisted composition, human finished records</h1>
+                <p>
+                    Some Tsonu recordings are marked when artificial intelligence assisted the
+                    composition process. That mark means AI helped generate or shape early musical
+                    material. It does not mean the released audio is an untouched model output.
+                </p>
+            </section>
+
+            <section className="info-page__content" aria-label="AI use details">
+                <div>
+                    <h2>Composition</h2>
+                    <p>
+                        AI-assisted drafts are treated as raw composition material: themes, sections,
+                        orchestral sketches, counterlines, textures, or arrangement ideas that still
+                        need musical judgment.
+                    </p>
+                </div>
+                <div>
+                    <h2>Revision</h2>
+                    <p>
+                        The music is then revised by hand: foreground lines, bass motion, inner voices,
+                        transitions, orchestration, returns, and endings are checked and rewritten until
+                        the piece works as music, not just as a generated sketch.
+                    </p>
+                </div>
+                <div>
+                    <h2>Production</h2>
+                    <p>
+                        Final recordings are finished by hand in the production session, then mixed and
+                        mastered by hand before release.
+                    </p>
+                </div>
+                <div>
+                    <h2>Labeling</h2>
+                    <p>
+                        The AI-assisted composition label appears on recordings where that assistance was
+                        part of the writing process. Recordings without the label are not being declared
+                        as AI-assisted composition here.
+                    </p>
+                </div>
+            </section>
+        </main>
+    );
+}
+
 /* -----------------------------------------------------------------
  * Public shell
  * ----------------------------------------------------------------- */
@@ -546,6 +608,9 @@ function PublicApp() {
                     <p>&copy; {new Date().getFullYear()} Tsonu · All rights reserved</p>
                     <a href="/privacy" onClick={(event) => handleInternalLink(event, '/privacy')}>
                         Privacy
+                    </a>
+                    <a href={AI_USE_PATH} onClick={(event) => handleInternalLink(event, AI_USE_PATH)}>
+                        AI Use
                     </a>
                 </footer>
                 <StickyPlayer />

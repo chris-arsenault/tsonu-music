@@ -213,6 +213,7 @@ pub(crate) fn build_published_track(
         explicit: track.explicit.unwrap_or(recording.explicit),
         isrc: track.isrc.clone().or_else(|| recording.isrc.clone()),
         description: track.description.clone(),
+        ai_assisted_composition: recording.ai_assisted_composition,
         credits: track.credits.clone(),
         artwork: song.artwork.clone(),
         playback: TrackPlayback {

@@ -2,6 +2,8 @@ import { useEffect, useState, type MouseEvent } from 'react';
 
 const NAVIGATION_EVENT = 'tsonu:navigation';
 
+export const AI_USE_PATH = '/ai-use';
+
 export function releasePath(slug: string): string {
     return `/releases/${encodeURIComponent(slug)}`;
 }

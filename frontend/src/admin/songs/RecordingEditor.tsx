@@ -240,6 +240,17 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                     />
                     Explicit
                 </label>
+                <label className="admin-check">
+                    <input
+                        type="checkbox"
+                        checked={Boolean(recording.aiAssistedComposition)}
+                        onChange={(event) => onChange({
+                            ...recording,
+                            aiAssistedComposition: event.currentTarget.checked || undefined,
+                        })}
+                    />
+                    AI-assisted composition
+                </label>
             </div>
 
             <div className="admin-source-master">

@@ -43,6 +43,8 @@ pub(crate) struct DraftRecording {
     #[serde(default)]
     pub(crate) description: Option<String>,
     #[serde(default)]
+    pub(crate) ai_assisted_composition: bool,
+    #[serde(default)]
     pub(crate) source_master: Option<DraftSourceMaster>,
     #[serde(default)]
     pub(crate) encode_job_ids: Vec<String>,
@@ -214,6 +216,8 @@ pub(crate) struct PublishedReleaseTrack {
     pub(crate) isrc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) ai_assisted_composition: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credits: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -309,6 +313,8 @@ pub(crate) struct PublishedSongPlacement {
     pub(crate) track_slug: String,
     pub(crate) recording_id: String,
     pub(crate) track_number: u32,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) ai_assisted_composition: bool,
     pub(crate) release_artwork: Value,
 }
 
@@ -392,4 +398,8 @@ pub(crate) struct ObjectSummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) e_tag: Option<String>,
     pub(crate) size_bytes: i64,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }

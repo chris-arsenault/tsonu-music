@@ -226,12 +226,14 @@ fn validates_recording_files_as_publishable_media() {
 #[test]
 fn builds_published_track_from_recording_files() {
     let song = sample_draft_song();
-    let recording = &song.recordings[0];
+    let mut recording = song.recordings[0].clone();
+    recording.ai_assisted_composition = true;
     let track = sample_release_track();
 
-    let published = build_published_track(&track, &song, recording).unwrap();
+    let published = build_published_track(&track, &song, &recording).unwrap();
 
     assert_eq!(published.duration_seconds, 181.25);
+    assert!(published.ai_assisted_composition);
     assert_eq!(
         published.playback.hls.path,
         "recordings/recording_opening-dream_demo/files/20260523t000000z/hls/master.m3u8"
@@ -284,6 +286,7 @@ fn serializes_published_release_without_private_publish_fields() {
     assert!(value.get("manifestPath").is_none());
     assert!(value.get("tags").is_none());
     assert!(value["tracks"][0].get("sourceMaster").is_none());
+    assert!(value["tracks"][0].get("aiAssistedComposition").is_none());
     assert_eq!(value["status"], "published");
 }
 
@@ -489,6 +492,7 @@ fn sample_recording(encode_job_ids: Vec<String>) -> DraftRecording {
         explicit: false,
         isrc: None,
         description: None,
+        ai_assisted_composition: false,
         source_master: Some(DraftSourceMaster {
             bucket: "tsonu-music-masters".to_string(),
             key: "masters/recording_opening-dream_demo/source.wav".to_string(),

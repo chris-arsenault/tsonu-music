@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play } from 'lucide-react';
+import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play, Sparkles } from 'lucide-react';
 import { fetchReleaseManifest, fetchReleaseManifestBySlug, fetchSongManifestBySlug, getArtworkUrl } from '../catalog/catalog-client';
 import type {
     CatalogArtwork,
@@ -13,7 +13,7 @@ import {
     useMusicPlayer,
 } from './MusicPlayerContext';
 import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
-import { handleInternalLink, releasePath, songPath, trackPath } from './routes';
+import { AI_USE_PATH, handleInternalLink, releasePath, songPath, trackPath } from './routes';
 
 interface ReleasePageProps {
     slug: string;
@@ -139,6 +139,14 @@ function ArtworkImage({ artwork, className }: { artwork: CatalogArtwork | undefi
     return src && artwork ? <img className={className} src={src} alt={artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
 }
 
+function AiAssistedBadge() {
+    return (
+        <span className="ai-assisted-badge">
+            <Sparkles aria-hidden="true" /> AI-assisted
+        </span>
+    );
+}
+
 function ReleaseArtwork({ release, className }: { release: PublishedReleaseManifest | CatalogReleaseSummary; className: string }) {
     return <ArtworkImage artwork={release.artwork} className={className} />;
 }
@@ -167,7 +175,10 @@ function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest
                             className={activeTrack?.trackId === track.trackId ? 'is-active' : undefined}
                         >
                             <span>{track.trackNumber}</span>
-                            <strong><TrackTitle track={track} /></strong>
+                            <strong className="catalog-track-list__title">
+                                <TrackTitle track={track} />
+                                {track.aiAssistedComposition ? <AiAssistedBadge /> : null}
+                            </strong>
                             <span>{formatTime(track.durationSeconds)}</span>
                         </a>
                     </li>
@@ -302,7 +313,14 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
                     <div className="album-page-hero__meta">
                         <span>{formatTime(track.durationSeconds)}</span>
                         <span>Track {track.trackNumber}</span>
+                        {track.aiAssistedComposition ? <span><Sparkles aria-hidden="true" /> AI-assisted composition</span> : null}
                     </div>
+                    {track.aiAssistedComposition ? (
+                        <p className="track-page-hero__note">
+                            This recording is marked as AI-assisted composition. The music was finished, mixed, and mastered by hand.{' '}
+                            <a href={AI_USE_PATH} onClick={(event) => handleInternalLink(event, AI_USE_PATH)}>AI use note</a>
+                        </p>
+                    ) : null}
                     <div className="album-page-hero__actions">
                         <button type="button" onClick={() => player.playTrack(release.releaseId, track.trackId)}>
                             <Play aria-hidden="true" /> Play Track
@@ -356,7 +374,10 @@ export function SongPage({ slug }: SongPageProps) {
                                 onClick={(event) => handleInternalLink(event, trackPath(placement.releaseSlug, placement.trackSlug))}
                             >
                                 <span>{placement.trackNumber}</span>
-                                <strong>{placement.releaseTitle}</strong>
+                                <strong className="catalog-track-list__title">
+                                    {placement.releaseTitle}
+                                    {placement.aiAssistedComposition ? <AiAssistedBadge /> : null}
+                                </strong>
                                 <span>{formatReleaseKind(placement.releaseKind)}</span>
                             </a>
                         </li>

@@ -60,6 +60,7 @@
           "explicit": { "type": "boolean" },
           "isrc": { "type": "string" },
           "description": { "type": "string" },
+          "aiAssistedComposition": { "type": "boolean" },
           "sourceMaster": { "$ref": "common.defs.schema.json#/$defs/sourceMaster" },
           "encodeJobIds": {
             "type": "array",

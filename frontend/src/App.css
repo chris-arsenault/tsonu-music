@@ -1087,6 +1087,32 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     font-weight: 400;
     font-size: 1.1rem;
 }
+.catalog-track-list__title {
+    display: grid;
+    gap: 0.35rem;
+    align-items: start;
+}
+.ai-assisted-badge {
+    width: max-content;
+    max-width: 100%;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--gold);
+    border: 1px solid var(--line);
+    padding: 0.16rem 0.44rem;
+    font-family: var(--font-mono);
+    font-size: 0.64rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+.ai-assisted-badge svg {
+    width: 0.78rem;
+    height: 0.78rem;
+    flex: 0 0 auto;
+}
 .track-title {
     min-width: 0;
     display: grid;
@@ -1121,6 +1147,11 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     color: var(--muted);
     font-family: var(--font-mono);
     font-size: 0.82rem;
+}
+.track-page-hero__note {
+    max-width: 58ch;
+    border-left: 1px solid var(--line-strong);
+    padding-left: 1rem;
 }
 
 /* --------------------------------------------------------------
@@ -1469,24 +1500,29 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 /* --------------------------------------------------------------
    Privacy page
    -------------------------------------------------------------- */
-.privacy-page {
+.privacy-page,
+.info-page {
     padding: clamp(5rem, 10vw, 8rem) var(--gutter);
     background: var(--ink-1);
 }
 
 .privacy-page__hero,
-.privacy-page__content {
+.privacy-page__content,
+.info-page__hero,
+.info-page__content {
     max-width: var(--measure-wide);
     margin: 0 auto;
 }
 
-.privacy-page__hero {
+.privacy-page__hero,
+.info-page__hero {
     display: grid;
     gap: 1rem;
     padding-bottom: clamp(2rem, 5vw, 3.5rem);
 }
 
-.privacy-page__hero h1 {
+.privacy-page__hero h1,
+.info-page__hero h1 {
     max-width: 11ch;
     margin: 0;
     color: var(--ivory);
@@ -1496,8 +1532,12 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     font-style: italic;
     line-height: 0.95;
 }
+.info-page__hero h1 {
+    max-width: 13ch;
+}
 
-.privacy-page__hero p:last-child {
+.privacy-page__hero p:last-child,
+.info-page__hero p:last-child {
     max-width: 52rem;
     margin: 0;
     color: var(--ivory-soft);
@@ -1507,19 +1547,22 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     line-height: 1.55;
 }
 
-.privacy-page__content {
+.privacy-page__content,
+.info-page__content {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0 2.5rem;
     border-top: 1px solid var(--line-cool);
 }
 
-.privacy-page__content div {
+.privacy-page__content div,
+.info-page__content div {
     padding: 1.4rem 0;
     border-bottom: 1px solid var(--line-cool);
 }
 
-.privacy-page__content h2 {
+.privacy-page__content h2,
+.info-page__content h2 {
     margin: 0 0 0.6rem;
     color: var(--gold);
     font-family: var(--font-mono);
@@ -1529,7 +1572,8 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     text-transform: uppercase;
 }
 
-.privacy-page__content p {
+.privacy-page__content p,
+.info-page__content p {
     margin: 0;
     color: var(--ivory-soft);
     line-height: 1.65;
@@ -1660,7 +1704,8 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     .launch-hero__art img { object-position: center 20%; }
     .album-page-hero h1,
     .track-page-hero h1 { font-size: 2.4rem; }
-    .privacy-page__content {
+    .privacy-page__content,
+    .info-page__content {
         grid-template-columns: 1fr;
     }
     .catalog-track-list a {

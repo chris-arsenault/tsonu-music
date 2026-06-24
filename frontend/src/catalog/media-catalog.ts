@@ -116,6 +116,7 @@ export interface PublishedReleaseTrack {
     explicit: boolean;
     isrc?: string;
     description?: string;
+    aiAssistedComposition?: boolean;
     credits?: CatalogCredit[];
     artwork?: CatalogArtwork;
     playback: TrackPlayback;
@@ -145,6 +146,7 @@ export interface PublishedSongPlacement {
     trackSlug: string;
     recordingId: StableId;
     trackNumber: number;
+    aiAssistedComposition?: boolean;
     releaseArtwork?: CatalogArtwork;
 }
 
