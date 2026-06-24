@@ -1578,6 +1578,35 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     color: var(--ivory-soft);
     line-height: 1.65;
 }
+.info-steps {
+    grid-column: 1 / -1;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: info-step;
+}
+.info-steps li {
+    counter-increment: info-step;
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr);
+    gap: clamp(1rem, 4vw, 2.5rem);
+    padding: 1.35rem 0;
+    border-bottom: 1px solid var(--line-cool);
+}
+.info-steps li::before {
+    content: counter(info-step, decimal-leading-zero);
+    color: var(--gold);
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    letter-spacing: 0.16em;
+}
+.info-steps h2,
+.info-steps p {
+    grid-column: 2;
+}
+.info-steps h2 {
+    margin-top: 0;
+}
 
 /* --------------------------------------------------------------
    Footer
@@ -1707,6 +1736,13 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     .privacy-page__content,
     .info-page__content {
         grid-template-columns: 1fr;
+    }
+    .info-steps li {
+        grid-template-columns: 3rem minmax(0, 1fr);
+        gap: 0.8rem;
+    }
+    .info-steps li::before {
+        font-size: 0.72rem;
     }
     .catalog-track-list a {
         grid-template-columns: 32px minmax(0, 1fr) 58px;

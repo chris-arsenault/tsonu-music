@@ -516,43 +516,102 @@ function AIUsePage() {
                 <h1>AI-assisted composition, human finished records</h1>
                 <p>
                     Some Tsonu recordings are marked when artificial intelligence assisted the
-                    composition process. That mark means AI helped generate or shape early musical
-                    material. It does not mean the released audio is an untouched model output.
+                    composition process. That mark can mean AI helped plan the piece, write score
+                    material, review sections, or suggest revisions. It does not mean the released
+                    audio is an untouched model output or AI-generated audio.
                 </p>
             </section>
 
             <section className="info-page__content" aria-label="AI use details">
-                <div>
-                    <h2>Composition</h2>
-                    <p>
-                        AI-assisted drafts are treated as raw composition material: themes, sections,
-                        orchestral sketches, counterlines, textures, or arrangement ideas that still
-                        need musical judgment.
-                    </p>
-                </div>
-                <div>
-                    <h2>Revision</h2>
-                    <p>
-                        The music is then revised by hand: foreground lines, bass motion, inner voices,
-                        transitions, orchestration, returns, and endings are checked and rewritten until
-                        the piece works as music, not just as a generated sketch.
-                    </p>
-                </div>
-                <div>
-                    <h2>Production</h2>
-                    <p>
-                        Final recordings are finished by hand in the production session, then mixed and
-                        mastered by hand before release.
-                    </p>
-                </div>
-                <div>
-                    <h2>Labeling</h2>
-                    <p>
-                        The AI-assisted composition label appears on recordings where that assistance was
-                        part of the writing process. Recordings without the label are not being declared
-                        as AI-assisted composition here.
-                    </p>
-                </div>
+                <ol className="info-steps">
+                    <li>
+                        <h2>Direction</h2>
+                        <p>
+                            The process starts with human direction: what the piece is for, what emotional
+                            state it should reach, which themes or motifs matter, what instrumentation is
+                            in play, and what kind of musical form is being attempted.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Planning agents</h2>
+                        <p>
+                            Separate AI passes may draft the high-level shape: the journey of the piece,
+                            its sections, where the strongest events happen, what returns later, and how
+                            this piece should differ from nearby material.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Section contract</h2>
+                        <p>
+                            The plan is turned into a contract for sections: what each section does, what
+                            material it receives from earlier sections, what new material it must produce,
+                            and which ideas later sections need to reuse or transform.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Frame writing</h2>
+                        <p>
+                            An AI pass may write a thin musical frame: harmony, bass direction, important
+                            line shapes, and basic continuity. This is a scaffold, not the finished
+                            arrangement, and it is allowed to be reshaped when the music needs it.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Section writing</h2>
+                        <p>
+                            AI section agents may write concrete score material: melodies, bass lines,
+                            counterlines, harmonies, rhythms, orchestration, and accompaniment figures.
+                            These are actual note-list drafts, not just prose descriptions.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Threading material</h2>
+                        <p>
+                            When a motif, voicing, rhythm, or section idea needs to come back, the exact
+                            earlier material is passed forward so later sections transform that material
+                            rather than inventing a vague replacement.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Revision loop</h2>
+                        <p>
+                            Draft sections are inspected and revised. A pass can be rejected for sounding
+                            too generic, too thin, too busy, too repetitive, poorly voiced, weak at the
+                            seams, or wrong for the intended dramatic shape.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Merge review</h2>
+                        <p>
+                            The sections are merged and reviewed as one piece. This checks whether the
+                            transitions work, whether recurring ideas still sound related, whether the
+                            destination lands, and whether the whole track feels like one musical voice.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Human finishing</h2>
+                        <p>
+                            The accepted composition is then finished by hand in the production session:
+                            editing, sound choice, performance shaping, automation, effects, balances,
+                            arrangement cleanup, and final musical decisions.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Mix and master</h2>
+                        <p>
+                            The released recording is mixed and mastered by hand. The AI assistance is in
+                            the composition process, not in replacing the final production, mix, or master.
+                        </p>
+                    </li>
+                    <li>
+                        <h2>Labeling</h2>
+                        <p>
+                            The AI-assisted composition label appears on recordings where that assistance
+                            was part of the writing process. Recordings without the label are not being
+                            declared as AI-assisted composition here.
+                        </p>
+                    </li>
+                </ol>
             </section>
         </main>
     );
