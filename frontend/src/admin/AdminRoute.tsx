@@ -1,10 +1,11 @@
 import { LoaderCircle } from 'lucide-react';
+import { AuthProvider } from '../auth-context';
 import { useAuth } from '../use-auth';
 import AdminApp from './AdminApp';
 import { Login } from './Login';
 import './AdminApp.css';
 
-export function AdminRoute() {
+function AdminRouteInner() {
     const { status, signIn } = useAuth();
 
     if (status === 'loading') {
@@ -23,4 +24,12 @@ export function AdminRoute() {
     }
 
     return <Login onLogin={signIn} />;
+}
+
+export function AdminRoute() {
+    return (
+        <AuthProvider>
+            <AdminRouteInner />
+        </AuthProvider>
+    );
 }

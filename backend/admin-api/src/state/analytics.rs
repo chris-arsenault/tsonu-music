@@ -8,14 +8,21 @@ use lambda_http::http::HeaderMap;
 
 impl AppState {
     pub(crate) fn validate_public_write_origin(&self, headers: &HeaderMap) -> Result<(), ApiError> {
-        if headers.get("origin").is_none() || self.cors_origin(headers).is_some() {
-            return Ok(());
+        // Public analytics is a browser-only beacon. Browsers always attach an
+        // `Origin` header to cross-origin POSTs, so a missing origin indicates a
+        // non-browser caller and is rejected outright. A present origin must be
+        // on the allow-list.
+        match headers.get("origin") {
+            None => Err(ApiError::forbidden(
+                "origin_required",
+                "analytics events require a browser Origin header",
+            )),
+            Some(_) if self.cors_origin(headers).is_some() => Ok(()),
+            Some(_) => Err(ApiError::forbidden(
+                "origin_not_allowed",
+                "origin is not allowed to write analytics events",
+            )),
         }
-
-        Err(ApiError::forbidden(
-            "origin_not_allowed",
-            "origin is not allowed to write analytics events",
-        ))
     }
 
     pub(crate) async fn record_backend_play_event(

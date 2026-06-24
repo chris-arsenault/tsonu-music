@@ -296,7 +296,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
 
         const request = selectedReleaseSummary
             ? fetchReleaseManifest(catalogApiBaseUrl, selectedReleaseSummary, controller.signal)
-            : fetchReleaseManifestBySlug(catalogApiBaseUrl, releaseSlug, controller.signal);
+            : fetchReleaseManifestBySlug(catalogApiBaseUrl, releaseSlug!, controller.signal);
 
         request
             .then((manifest) => {

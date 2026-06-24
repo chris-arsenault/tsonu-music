@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import {
     FaTwitter,
     FaInstagram,
@@ -13,14 +13,13 @@ import {
 import { CalendarDays, Disc3, ListMusic, Play, Sparkles } from 'lucide-react';
 
 import InstagramIframe from './InstagramIframe';
-import { AuthProvider } from './auth-context';
-import { AdminRoute } from './admin/AdminRoute';
 import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
 import { getTrackTitleLabel, TrackTitle } from './music/TrackTitle';
 import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
+import { useDocumentMetadata } from './document-metadata';
 import { recordSitePageView } from './player-analytics';
 import {
     decodePathPart,
@@ -35,6 +34,7 @@ import logoSmall from './assets/tsonu-small-knight.png';
 import albumCover from './assets/so-we-sleep-front-no-text.jpg';
 
 const LAUNCH_ALBUM_SLUG = 'so-we-sleep';
+const AdminRoute = lazy(() => import('./admin/AdminRoute').then((module) => ({ default: module.AdminRoute })));
 
 function renderPublicRoute(route: string) {
     const pathname = route.split(/[?#]/)[0] || '/';
@@ -84,10 +84,17 @@ function renderPublicRoute(route: string) {
  * General home page — artist portal
  * ----------------------------------------------------------------- */
 function HomePage() {
+    useDocumentMetadata({
+        title: 'Tsonu Music',
+        description: 'Downtempo, orchestral electronica from Tsonu — music for dreamers, adventurers, and late-night listening.',
+    });
+
     const player = useMusicPlayer();
     const releases = player.catalog?.releases ?? [];
-    const featuredRelease = releases[0];
-    const otherReleases = releases.slice(1, 7);
+    const featuredRelease = releases.find((release) => release.slug === LAUNCH_ALBUM_SLUG) ?? releases[0];
+    const otherReleases = releases
+        .filter((release) => release.releaseId !== featuredRelease?.releaseId)
+        .slice(0, 6);
 
     return (
         <div className="home">
@@ -248,6 +255,11 @@ function CatalogRibbon({
  * So We Sleep — launch / campaign page
  * ----------------------------------------------------------------- */
 function SoWeSleepLaunchPage() {
+    useDocumentMetadata({
+        title: 'So We Sleep by Tsonu',
+        description: 'So We Sleep is the debut Tsonu album: orchestral downtempo built around dreams, fantasy, and late-night landscapes.',
+    });
+
     const player = useMusicPlayer();
     const featuredRelease = player.catalog?.releases.find((release) => release.slug === LAUNCH_ALBUM_SLUG);
     const trackCount = featuredRelease?.trackCount ?? 10;
@@ -454,6 +466,11 @@ function LaunchTracklist() {
 }
 
 function PrivacyPage() {
+    useDocumentMetadata({
+        title: 'Privacy — Tsonu Music',
+        description: 'How Tsonu Music uses first-party analytics for playback, visits, reliability, and site operation without ad tracking.',
+    });
+
     return (
         <main className="privacy-page">
             <section className="privacy-page__hero">
@@ -509,6 +526,11 @@ function PrivacyPage() {
 }
 
 function AIUsePage() {
+    useDocumentMetadata({
+        title: 'AI Use — Tsonu Music',
+        description: 'A note on Tsonu recordings marked as AI-assisted composition and the human finishing, mixing, and mastering process.',
+    });
+
     return (
         <main className="info-page">
             <section className="info-page__hero">
@@ -683,14 +705,26 @@ function AppContent() {
     const pathname = route.split(/[?#]/)[0] || '/';
 
     if (pathname.startsWith('/admin')) {
-        return <AdminRoute />;
+        return (
+            <Suspense
+                fallback={(
+                    <main className="admin-login-shell">
+                        <div className="admin-loading">
+                            <span>Loading admin</span>
+                        </div>
+                    </main>
+                )}
+            >
+                <AdminRoute />
+            </Suspense>
+        );
     }
 
     return <PublicApp />;
 }
 
 function App() {
-    return <AuthProvider><AppContent /></AuthProvider>;
+    return <AppContent />;
 }
 
 export default App;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { Activity, House, ListMusic, LogOut, Music2 } from 'lucide-react';
 import { getRuntimeConfig } from '../runtime-config';
+import { useDocumentMetadata } from '../document-metadata';
 import { useAuth } from '../use-auth';
 import { handleInternalLink, navigateTo, useCurrentRoute } from '../music/routes';
 import { buildAdminPath, parseAdminRoute } from './admin-routes';
@@ -14,6 +15,11 @@ import { ToastRegion } from './shared/ToastRegion';
 import './AdminApp.css';
 
 function AdminShellInner() {
+    useDocumentMetadata({
+        title: 'Admin — Tsonu Music',
+        description: 'Tsonu catalog operations admin.',
+    });
+
     const { signOut } = useAuth();
     const route = useCurrentRoute();
     const runtimeConfig = useMemo(() => getRuntimeConfig(), []);

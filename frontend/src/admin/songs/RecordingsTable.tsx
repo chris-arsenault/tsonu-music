@@ -23,7 +23,7 @@ export function RecordingsTable({ song, isSavedSong, onChange }: Props) {
         setExpandedId(rec.recordingId);
     }
 
-    function updateRecording(updated: DraftRecording, previousRecordingId = updated.recordingId) {
+    function updateRecording(updated: DraftRecording, previousRecordingId: string = updated.recordingId) {
         onChange({
             ...song,
             recordings: song.recordings.map((r) => r.recordingId === previousRecordingId ? updated : r),

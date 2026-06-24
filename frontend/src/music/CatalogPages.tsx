@@ -14,6 +14,8 @@ import {
 } from './MusicPlayerContext';
 import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { AI_USE_PATH, handleInternalLink, releasePath, songPath, trackPath } from './routes';
+import { recordReleaseView, recordTrackImpression } from '../player-analytics';
+import { useDocumentMetadata } from '../document-metadata';
 
 interface ReleasePageProps {
     slug: string;
@@ -188,7 +190,63 @@ function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest
     );
 }
 
+function useReleasePageAnalytics(release: PublishedReleaseManifest | undefined): void {
+    useEffect(() => {
+        if (!release) {
+            return;
+        }
+
+        recordReleaseView({
+            releaseId: release.releaseId,
+            assetId: release.artwork.assetId,
+            positionSeconds: 0,
+        });
+        release.tracks.forEach((track) => {
+            recordTrackImpression({
+                releaseId: release.releaseId,
+                songId: track.songId,
+                recordingId: track.recordingId,
+                trackId: track.trackId,
+                assetId: track.playback.hls.assetId,
+                positionSeconds: 0,
+                durationSeconds: track.durationSeconds,
+            });
+        });
+    }, [release]);
+}
+
+function useTrackPageAnalytics(
+    release: PublishedReleaseManifest | undefined,
+    track: PublishedReleaseTrack | undefined,
+): void {
+    useEffect(() => {
+        if (!release || !track) {
+            return;
+        }
+
+        recordReleaseView({
+            releaseId: release.releaseId,
+            assetId: release.artwork.assetId,
+            positionSeconds: 0,
+        });
+        recordTrackImpression({
+            releaseId: release.releaseId,
+            songId: track.songId,
+            recordingId: track.recordingId,
+            trackId: track.trackId,
+            assetId: track.playback.hls.assetId,
+            positionSeconds: 0,
+            durationSeconds: track.durationSeconds,
+        });
+    }, [release, track]);
+}
+
 export function CatalogPage() {
+    useDocumentMetadata({
+        title: 'Catalog — Tsonu Music',
+        description: 'Browse Tsonu releases, previews, demos, and first-party streaming tracks.',
+    });
+
     const player = useMusicPlayer();
 
     if (player.loadState === 'error') {
@@ -239,6 +297,11 @@ export function CatalogPage() {
 export function ReleasePage({ slug }: ReleasePageProps) {
     const player = useMusicPlayer();
     const state = useReleaseBySlug(slug);
+    useReleasePageAnalytics(state.release);
+    useDocumentMetadata({
+        title: state.release ? `${state.release.title} by ${state.release.artistName}` : 'Release — Tsonu Music',
+        description: state.release ? releaseDescription(state.release) : 'Tsonu release page.',
+    });
 
     if (state.error) {
         return <PageStatus error={state.error} />;
@@ -286,6 +349,16 @@ export function ReleasePage({ slug }: ReleasePageProps) {
 export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     const player = useMusicPlayer();
     const state = useReleaseBySlug(releaseSlug);
+    const track = state.release?.tracks.find((candidate) => candidate.slug === trackSlug);
+    useTrackPageAnalytics(state.release, track);
+    useDocumentMetadata({
+        title: track && state.release
+            ? `${track.title} — ${state.release.title} by ${state.release.artistName}`
+            : 'Track — Tsonu Music',
+        description: track && state.release
+            ? track.description ?? `${track.title} from ${state.release.title} by ${state.release.artistName}.`
+            : 'Tsonu track page.',
+    });
 
     if (state.error) {
         return <PageStatus error={state.error} />;
@@ -296,7 +369,6 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     }
 
     const release = state.release;
-    const track = release.tracks.find((candidate) => candidate.slug === trackSlug);
 
     if (!track) {
         return <PageStatus error="Track not found." />;
@@ -342,6 +414,10 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
 export function SongPage({ slug }: SongPageProps) {
     const player = useMusicPlayer();
     const state = useSongBySlug(slug);
+    useDocumentMetadata({
+        title: state.song ? `${state.song.title} by ${state.song.artistName}` : 'Song — Tsonu Music',
+        description: state.song?.description ?? 'Tsonu song page.',
+    });
 
     if (state.error) {
         return <PageStatus error={state.error} />;

@@ -18,7 +18,6 @@ dist/
 *.tfstate
 *.tfstate.*
 *.tfvars
-.terraform.lock.hcl
 
 # editor / OS
 .DS_Store

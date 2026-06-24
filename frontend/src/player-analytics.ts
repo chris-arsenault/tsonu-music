@@ -233,7 +233,9 @@ export function initializeRum(config: AppRuntimeConfig = getRuntimeConfig()): Pr
     }
 
     rumInitializationPromise = (async () => {
-        const reachable = await isRumDataplaneReachable(config.rum.endpoint);
+        const reachable = await isRumDataplaneReachable(
+            config.rum.endpoint ?? 'https://dataplane.rum.us-east-1.amazonaws.com',
+        );
         if (!reachable) {
             // Browser is going to block RUM beacons. Don't load the SDK at all;
             // every recordEvent() call will short-circuit on a null client.
