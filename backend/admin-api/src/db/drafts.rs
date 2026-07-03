@@ -345,6 +345,23 @@ fn draft_song_fields(song_id: &str, document: &Value) -> Result<DraftSong, ApiEr
                 "recording description must not be empty when provided",
             ));
         }
+
+        if recording
+            .ai_assisted_percent
+            .is_some_and(|percent| percent > 100)
+        {
+            return Err(ApiError::bad_request(
+                "invalid_recording",
+                "recording aiAssistedPercent must be between 0 and 100",
+            ));
+        }
+
+        if recording.ai_assisted_percent.is_some() && !recording.ai_assisted_composition {
+            return Err(ApiError::bad_request(
+                "invalid_recording",
+                "recording aiAssistedPercent requires aiAssistedComposition",
+            ));
+        }
     }
 
     Ok(song)

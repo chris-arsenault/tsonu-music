@@ -19,6 +19,10 @@ export function optionalText(value: string | undefined): string | undefined {
     return trimmed.length > 0 ? trimmed : undefined;
 }
 
+export function isValidAiAssistedPercent(value: number | undefined): boolean {
+    return value === undefined || (Number.isInteger(value) && value >= 0 && value <= 100);
+}
+
 export function slugify(value: string): string {
     const slug = value
         .trim()
@@ -111,6 +115,12 @@ export function recordingMetadataError(recording: DraftRecording): string | unde
     if (!recording.versionType) {
         return `Choose a version type for "${title}".`;
     }
+    if (!isValidAiAssistedPercent(recording.aiAssistedPercent)) {
+        return `Enter an AI-assisted estimate from 0 to 100 for "${title}".`;
+    }
+    if (recording.aiAssistedPercent !== undefined && !recording.aiAssistedComposition) {
+        return `Mark "${title}" as AI-assisted before setting an AI estimate.`;
+    }
     return undefined;
 }
 
@@ -172,6 +182,7 @@ export function prepareDraftSongForSave(song: DraftSong): DraftSong {
                 artistName: optionalText(recording.artistName),
                 description: optionalText(recording.description),
                 aiAssistedComposition: recording.aiAssistedComposition || undefined,
+                aiAssistedPercent: recording.aiAssistedComposition ? recording.aiAssistedPercent : undefined,
                 encodeJobIds: recording.encodeJobIds ?? [],
                 files: currentRecordingFiles(recording),
             };

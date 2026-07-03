@@ -165,6 +165,7 @@ export function SongDetail({
             const payload: DraftSong = {
                 ...preparedDraft,
                 description: optionalText(preparedDraft.description),
+                narrative: optionalText(preparedDraft.narrative),
                 lyrics: optionalText(preparedDraft.lyrics),
                 credits: parseOptionalJson(creditsText),
                 tags: parseTags(tagsText),
@@ -314,6 +315,10 @@ export function SongDetail({
                         <div className="admin-field admin-field--wide">
                             <label>Description</label>
                             <textarea rows={3} value={draft.description ?? ''} onChange={(event) => updateField('description', event.currentTarget.value)} />
+                        </div>
+                        <div className="admin-field admin-field--wide">
+                            <label>Narrative</label>
+                            <textarea rows={4} value={draft.narrative ?? ''} onChange={(event) => updateField('narrative', event.currentTarget.value)} />
                         </div>
                         <div className="admin-field admin-field--wide">
                             <label>Lyrics</label>

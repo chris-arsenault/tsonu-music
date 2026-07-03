@@ -19,6 +19,7 @@ pub(crate) fn build_published_song(draft: &DraftSong) -> PublishedSong {
         title: draft.title.clone(),
         artist_name: draft.artist_name.clone(),
         description: draft.description.clone(),
+        narrative: draft.narrative.clone(),
         lyrics: draft.lyrics.clone(),
         credits: draft.credits.clone(),
         tags: draft.tags.clone(),
@@ -213,7 +214,14 @@ pub(crate) fn build_published_track(
         explicit: track.explicit.unwrap_or(recording.explicit),
         isrc: track.isrc.clone().or_else(|| recording.isrc.clone()),
         description: track.description.clone(),
+        song_description: song.description.clone(),
+        song_narrative: song.narrative.clone(),
+        production_note: recording.description.clone(),
         ai_assisted_composition: recording.ai_assisted_composition,
+        ai_assisted_percent: recording
+            .ai_assisted_composition
+            .then_some(recording.ai_assisted_percent)
+            .flatten(),
         credits: track.credits.clone(),
         artwork: song.artwork.clone(),
         playback: TrackPlayback {

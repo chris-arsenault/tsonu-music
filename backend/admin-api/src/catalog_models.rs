@@ -14,6 +14,8 @@ pub(crate) struct DraftSong {
     #[serde(default)]
     pub(crate) description: Option<String>,
     #[serde(default)]
+    pub(crate) narrative: Option<String>,
+    #[serde(default)]
     pub(crate) lyrics: Option<String>,
     #[serde(default)]
     pub(crate) credits: Option<Value>,
@@ -44,6 +46,8 @@ pub(crate) struct DraftRecording {
     pub(crate) description: Option<String>,
     #[serde(default)]
     pub(crate) ai_assisted_composition: bool,
+    #[serde(default)]
+    pub(crate) ai_assisted_percent: Option<u32>,
     #[serde(default)]
     pub(crate) source_master: Option<DraftSourceMaster>,
     #[serde(default)]
@@ -216,8 +220,16 @@ pub(crate) struct PublishedReleaseTrack {
     pub(crate) isrc: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) song_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) song_narrative: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) production_note: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) ai_assisted_composition: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ai_assisted_percent: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credits: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -292,6 +304,8 @@ pub(crate) struct PublishedSong {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) narrative: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) lyrics: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) credits: Option<Value>,
@@ -315,6 +329,10 @@ pub(crate) struct PublishedSongPlacement {
     pub(crate) track_number: u32,
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) ai_assisted_composition: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) ai_assisted_percent: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) production_note: Option<String>,
     pub(crate) release_artwork: Value,
 }
 

@@ -342,7 +342,13 @@ pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<Publis
         "SELECT r.release_id, r.slug AS release_slug, r.title AS release_title, r.release_kind,
                 r.artwork AS release_artwork,
                 t.track_id, t.slug AS track_slug, t.recording_id, t.track_number,
-                COALESCE((t.document->>'aiAssistedComposition')::boolean, false) AS ai_assisted_composition
+                COALESCE((t.document->>'aiAssistedComposition')::boolean, false) AS ai_assisted_composition,
+                CASE
+                    WHEN COALESCE((t.document->>'aiAssistedComposition')::boolean, false)
+                    THEN (t.document->>'aiAssistedPercent')::integer
+                    ELSE NULL
+                END AS ai_assisted_percent,
+                t.document->>'productionNote' AS production_note
          FROM music_published_release_tracks t
          JOIN music_published_releases r ON r.release_id = t.release_id
          WHERE t.song_id = $1 AND r.visibility IN ('public', 'unlisted')
@@ -365,6 +371,10 @@ pub async fn get_public_song_by_slug(pool: &PgPool, slug: &str) -> Result<Publis
             recording_id: row.get("recording_id"),
             track_number: row.get::<i32, _>("track_number") as u32,
             ai_assisted_composition: row.get("ai_assisted_composition"),
+            ai_assisted_percent: row
+                .get::<Option<i32>, _>("ai_assisted_percent")
+                .and_then(|value| u32::try_from(value).ok()),
+            production_note: row.get("production_note"),
             release_artwork: row.get::<Json<Value>, _>("release_artwork").0,
         })
         .collect();

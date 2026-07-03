@@ -3,6 +3,7 @@ import {
     formatBytes,
     formatLinks,
     draftSongRecordingsError,
+    isValidAiAssistedPercent,
     isTemporaryRecordingId,
     newRecording,
     nextReleaseTrack,
@@ -124,6 +125,40 @@ describe('newRecording', () => {
 
         expect(prepared.recordings[0].recordingId).toBe('recording_reign_of_the_simmered_orchestral_edit');
         expect(prepared.recordings[0].slug).toBe('reign-of-the-simmered-orchestral-edit');
+    });
+});
+
+describe('recording AI estimate', () => {
+    test('validates integer percentage bounds', () => {
+        expect(isValidAiAssistedPercent(undefined)).toBe(true);
+        expect(isValidAiAssistedPercent(0)).toBe(true);
+        expect(isValidAiAssistedPercent(100)).toBe(true);
+        expect(isValidAiAssistedPercent(101)).toBe(false);
+        expect(isValidAiAssistedPercent(12.5)).toBe(false);
+    });
+
+    test('requires the recording AI flag before saving a percentage', () => {
+        const song = makeSong({
+            recordings: [makeRecording({ aiAssistedPercent: 35 })],
+        });
+
+        expect(draftSongRecordingsError(song)).toBe('Mark "Sample Recording" as AI-assisted before setting an AI estimate.');
+    });
+
+    test('keeps the percentage only for AI-assisted recordings', () => {
+        const assisted = makeRecording({
+            aiAssistedComposition: true,
+            aiAssistedPercent: 35,
+        });
+        const manual = makeRecording({
+            recordingId: stableId('recording', 'manual-recording'),
+            aiAssistedPercent: 20,
+        });
+
+        const prepared = prepareDraftSongForSave(makeSong({ recordings: [assisted, manual] }));
+
+        expect(prepared.recordings[0].aiAssistedPercent).toBe(35);
+        expect(prepared.recordings[1].aiAssistedPercent).toBeUndefined();
     });
 });
 

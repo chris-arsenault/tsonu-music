@@ -116,7 +116,11 @@ export interface PublishedReleaseTrack {
     explicit: boolean;
     isrc?: string;
     description?: string;
+    songDescription?: string;
+    songNarrative?: string;
+    productionNote?: string;
     aiAssistedComposition?: boolean;
+    aiAssistedPercent?: number;
     credits?: CatalogCredit[];
     artwork?: CatalogArtwork;
     playback: TrackPlayback;
@@ -130,6 +134,7 @@ export interface PublishedSongManifest {
     title: string;
     artistName: string;
     description?: string;
+    narrative?: string;
     lyrics?: string;
     credits?: CatalogCredit[];
     tags?: string[];
@@ -147,6 +152,8 @@ export interface PublishedSongPlacement {
     recordingId: StableId;
     trackNumber: number;
     aiAssistedComposition?: boolean;
+    aiAssistedPercent?: number;
+    productionNote?: string;
     releaseArtwork?: CatalogArtwork;
 }
 

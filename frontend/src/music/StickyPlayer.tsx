@@ -1,5 +1,5 @@
-import { AlertCircle, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
-import type { CSSProperties } from 'react';
+import { AlertCircle, Info, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
+import { useEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from 'react';
 import {
     formatQualityLabel,
     formatTime,
@@ -7,14 +7,35 @@ import {
 } from './MusicPlayerContext';
 import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { handleInternalLink, releasePath, trackPath } from './routes';
+import { AiAssistedBadge } from './AiAssistedBadge';
+import { releaseTrackNoteItems, TrackNotesList } from './TrackNotes';
 
 export default function StickyPlayer() {
     const player = useMusicPlayer();
+    const [notesOpen, setNotesOpen] = useState(false);
     const resolvedDuration = player.duration || player.selectedTrack?.durationSeconds || 0;
     const seekMax = Math.max(resolvedDuration, 0);
     const progress = seekMax > 0 ? Math.min(100, (player.currentTime / seekMax) * 100) : 0;
     const progressStyle = { '--progress': `${progress}%` } as CSSProperties;
     const selectedTrackTitle = player.selectedTrack ? getTrackTitleLabel(player.selectedTrack) : '';
+    const noteItems = player.selectedTrack ? releaseTrackNoteItems(player.selectedTrack) : [];
+
+    useEffect(() => {
+        setNotesOpen(false);
+    }, [player.selectedTrack?.trackId]);
+
+    function closeNotesOnBlur(event: FocusEvent<HTMLDivElement>) {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setNotesOpen(false);
+        }
+    }
+
+    function closeNotesOnEscape(event: KeyboardEvent<HTMLButtonElement>) {
+        if (event.key === 'Escape') {
+            setNotesOpen(false);
+            event.currentTarget.blur();
+        }
+    }
 
     if (player.loadState === 'error') {
         return (
@@ -47,22 +68,55 @@ export default function StickyPlayer() {
                 </a>
 
                 <div className="bottom-player__now-playing">
-                    <a
-                        href={trackPath(player.releaseManifest.slug, player.selectedTrack.slug)}
-                        onClick={(event) => handleInternalLink(event, trackPath(player.releaseManifest!.slug, player.selectedTrack!.slug))}
-                        className="bottom-player__track"
-                        aria-label={selectedTrackTitle}
-                        title={selectedTrackTitle}
-                    >
-                        <TrackTitle track={player.selectedTrack} />
-                    </a>
-                    <a
-                        href={releasePath(player.releaseManifest.slug)}
-                        onClick={(event) => handleInternalLink(event, releasePath(player.releaseManifest!.slug))}
-                        className="bottom-player__album"
-                    >
-                        {player.releaseManifest.artistName} — {player.releaseManifest.title}
-                    </a>
+                    <div className="bottom-player__title-row">
+                        <a
+                            href={trackPath(player.releaseManifest.slug, player.selectedTrack.slug)}
+                            onClick={(event) => handleInternalLink(event, trackPath(player.releaseManifest!.slug, player.selectedTrack!.slug))}
+                            className="bottom-player__track"
+                            aria-label={selectedTrackTitle}
+                            title={selectedTrackTitle}
+                        >
+                            <TrackTitle track={player.selectedTrack} />
+                        </a>
+                        {noteItems.length > 0 ? (
+                            <div
+                                className="bottom-player__info"
+                                onMouseEnter={() => setNotesOpen(true)}
+                                onMouseLeave={() => setNotesOpen(false)}
+                                onFocus={() => setNotesOpen(true)}
+                                onBlur={closeNotesOnBlur}
+                            >
+                                <button
+                                    type="button"
+                                    className="bottom-player__info-button"
+                                    aria-label="Track notes"
+                                    aria-expanded={notesOpen}
+                                    aria-controls="bottom-player-notes"
+                                    onClick={() => setNotesOpen((open) => !open)}
+                                    onKeyDown={closeNotesOnEscape}
+                                >
+                                    <Info aria-hidden="true" />
+                                </button>
+                                {notesOpen ? (
+                                    <div id="bottom-player-notes" className="bottom-player__info-popover" role="tooltip">
+                                        <TrackNotesList items={noteItems} />
+                                    </div>
+                                ) : null}
+                            </div>
+                        ) : null}
+                    </div>
+                    <div className="bottom-player__meta-row">
+                        <a
+                            href={releasePath(player.releaseManifest.slug)}
+                            onClick={(event) => handleInternalLink(event, releasePath(player.releaseManifest!.slug))}
+                            className="bottom-player__album"
+                        >
+                            {player.releaseManifest.artistName} — {player.releaseManifest.title}
+                        </a>
+                        {player.selectedTrack.aiAssistedComposition ? (
+                            <AiAssistedBadge percent={player.selectedTrack.aiAssistedPercent} />
+                        ) : null}
+                    </div>
                     {player.playbackError ? <span className="bottom-player__error">{player.playbackError}</span> : null}
                 </div>
 

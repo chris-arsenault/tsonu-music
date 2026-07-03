@@ -10,13 +10,14 @@ import {
     FaAmazon,
     FaApple,
 } from 'react-icons/fa';
-import { CalendarDays, Disc3, ListMusic, Play, Sparkles } from 'lucide-react';
+import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
 
 import InstagramIframe from './InstagramIframe';
 import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
 import { getTrackTitleLabel, TrackTitle } from './music/TrackTitle';
+import { AiAssistedBadge } from './music/AiAssistedBadge';
 import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
 import { useDocumentMetadata } from './document-metadata';
@@ -450,11 +451,7 @@ function LaunchTracklist() {
                             <span>{String(track.trackNumber).padStart(2, '0')}</span>
                             <strong className="catalog-track-list__title">
                                 <TrackTitle track={track} />
-                                {track.aiAssistedComposition ? (
-                                    <span className="ai-assisted-badge">
-                                        <Sparkles aria-hidden="true" /> AI-assisted
-                                    </span>
-                                ) : null}
+                                {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
                             </strong>
                             <span>{formatTime(track.durationSeconds)}</span>
                         </a>

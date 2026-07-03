@@ -232,6 +232,14 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                         onChange={(event) => onChange({ ...recording, isrc: event.currentTarget.value })}
                     />
                 </div>
+                <div className="admin-field admin-field--wide">
+                    <label>Production note</label>
+                    <textarea
+                        rows={4}
+                        value={recording.description ?? ''}
+                        onChange={(event) => onChange({ ...recording, description: event.currentTarget.value })}
+                    />
+                </div>
                 <label className="admin-check">
                     <input
                         type="checkbox"
@@ -247,10 +255,29 @@ export function RecordingEditor({ song, recording, isSavedSong, onChange, onRemo
                         onChange={(event) => onChange({
                             ...recording,
                             aiAssistedComposition: event.currentTarget.checked || undefined,
+                            aiAssistedPercent: event.currentTarget.checked ? recording.aiAssistedPercent : undefined,
                         })}
                     />
                     AI-assisted composition
                 </label>
+                <div className="admin-field">
+                    <label>AI estimate</label>
+                    <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        step="1"
+                        inputMode="numeric"
+                        value={recording.aiAssistedPercent ?? ''}
+                        disabled={!recording.aiAssistedComposition}
+                        onChange={(event) => onChange({
+                            ...recording,
+                            aiAssistedPercent: event.currentTarget.value === ''
+                                ? undefined
+                                : Number(event.currentTarget.value),
+                        })}
+                    />
+                </div>
             </div>
 
             <div className="admin-source-master">

@@ -225,15 +225,33 @@ fn validates_recording_files_as_publishable_media() {
 
 #[test]
 fn builds_published_track_from_recording_files() {
-    let song = sample_draft_song();
+    let mut song = sample_draft_song();
+    song.description = Some("A short song overview.".to_string());
+    song.narrative = Some("The dream begins at the threshold.".to_string());
     let mut recording = song.recordings[0].clone();
     recording.ai_assisted_composition = true;
+    recording.ai_assisted_percent = Some(35);
+    recording.description =
+        Some("Built from piano sketches and AI-assisted orchestration passes.".to_string());
     let track = sample_release_track();
 
     let published = build_published_track(&track, &song, &recording).unwrap();
 
     assert_eq!(published.duration_seconds, 181.25);
     assert!(published.ai_assisted_composition);
+    assert_eq!(published.ai_assisted_percent, Some(35));
+    assert_eq!(
+        published.song_description.as_deref(),
+        Some("A short song overview.")
+    );
+    assert_eq!(
+        published.song_narrative.as_deref(),
+        Some("The dream begins at the threshold.")
+    );
+    assert_eq!(
+        published.production_note.as_deref(),
+        Some("Built from piano sketches and AI-assisted orchestration passes.")
+    );
     assert_eq!(
         published.playback.hls.path,
         "recordings/recording_opening-dream_demo/files/20260523t000000z/hls/master.m3u8"
@@ -411,6 +429,7 @@ fn sample_draft_song() -> DraftSong {
         title: "Opening Dream".to_string(),
         artist_name: "Tsonu".to_string(),
         description: None,
+        narrative: None,
         lyrics: None,
         credits: None,
         tags: Some(vec!["demo".to_string()]),
@@ -493,6 +512,7 @@ fn sample_recording(encode_job_ids: Vec<String>) -> DraftRecording {
         isrc: None,
         description: None,
         ai_assisted_composition: false,
+        ai_assisted_percent: None,
         source_master: Some(DraftSourceMaster {
             bucket: "tsonu-music-masters".to_string(),
             key: "masters/recording_opening-dream_demo/source.wav".to_string(),

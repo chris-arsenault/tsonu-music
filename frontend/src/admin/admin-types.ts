@@ -43,6 +43,7 @@ export interface DraftRecording {
     isrc?: string;
     description?: string;
     aiAssistedComposition?: boolean;
+    aiAssistedPercent?: number;
     sourceMaster?: DraftSourceMaster;
     encodeJobIds?: StableId[];
     files?: RecordingFile[];
@@ -56,6 +57,7 @@ export interface DraftSong {
     title: string;
     artistName: string;
     description?: string;
+    narrative?: string;
     lyrics?: string;
     credits?: JsonValue;
     tags?: string[];

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play, Sparkles } from 'lucide-react';
+import { AlertCircle, CalendarDays, Disc3, ExternalLink, ListMusic, LoaderCircle, Play } from 'lucide-react';
 import { fetchReleaseManifest, fetchReleaseManifestBySlug, fetchSongManifestBySlug, getArtworkUrl } from '../catalog/catalog-client';
 import type {
     CatalogArtwork,
@@ -16,6 +16,8 @@ import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { AI_USE_PATH, handleInternalLink, releasePath, songPath, trackPath } from './routes';
 import { recordReleaseView, recordTrackImpression } from '../player-analytics';
 import { useDocumentMetadata } from '../document-metadata';
+import { AiAssistedBadge } from './AiAssistedBadge';
+import { NotesCallout, releaseTrackNoteItems, songNoteItems } from './TrackNotes';
 
 interface ReleasePageProps {
     slug: string;
@@ -141,14 +143,6 @@ function ArtworkImage({ artwork, className }: { artwork: CatalogArtwork | undefi
     return src && artwork ? <img className={className} src={src} alt={artwork.altText} /> : <ListMusic className={className} aria-hidden="true" />;
 }
 
-function AiAssistedBadge() {
-    return (
-        <span className="ai-assisted-badge">
-            <Sparkles aria-hidden="true" /> AI-assisted
-        </span>
-    );
-}
-
 function ReleaseArtwork({ release, className }: { release: PublishedReleaseManifest | CatalogReleaseSummary; className: string }) {
     return <ArtworkImage artwork={release.artwork} className={className} />;
 }
@@ -179,7 +173,7 @@ function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest
                             <span>{track.trackNumber}</span>
                             <strong className="catalog-track-list__title">
                                 <TrackTitle track={track} />
-                                {track.aiAssistedComposition ? <AiAssistedBadge /> : null}
+                                {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
                             </strong>
                             <span>{formatTime(track.durationSeconds)}</span>
                         </a>
@@ -350,13 +344,14 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     const player = useMusicPlayer();
     const state = useReleaseBySlug(releaseSlug);
     const track = state.release?.tracks.find((candidate) => candidate.slug === trackSlug);
+    const noteItems = useMemo(() => track ? releaseTrackNoteItems(track) : [], [track]);
     useTrackPageAnalytics(state.release, track);
     useDocumentMetadata({
         title: track && state.release
             ? `${track.title} — ${state.release.title} by ${state.release.artistName}`
             : 'Track — Tsonu Music',
         description: track && state.release
-            ? track.description ?? `${track.title} from ${state.release.title} by ${state.release.artistName}.`
+            ? track.description ?? track.songDescription ?? `${track.title} from ${state.release.title} by ${state.release.artistName}.`
             : 'Tsonu track page.',
     });
 
@@ -381,11 +376,11 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
                 <div className="track-page-hero__copy">
                     <p className="section-eyebrow">{release.title}</p>
                     <h1>{track.title}</h1>
-                    {track.description ? <p>{track.description}</p> : <p>{releaseDescription(release)}</p>}
+                    <NotesCallout items={noteItems.length > 0 ? noteItems : [{ key: 'release', label: 'Overview', text: releaseDescription(release) }]} />
                     <div className="album-page-hero__meta">
                         <span>{formatTime(track.durationSeconds)}</span>
                         <span>Track {track.trackNumber}</span>
-                        {track.aiAssistedComposition ? <span><Sparkles aria-hidden="true" /> AI-assisted composition</span> : null}
+                        {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
                     </div>
                     {track.aiAssistedComposition ? (
                         <p className="track-page-hero__note">
@@ -414,6 +409,7 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
 export function SongPage({ slug }: SongPageProps) {
     const player = useMusicPlayer();
     const state = useSongBySlug(slug);
+    const noteItems = useMemo(() => state.song ? songNoteItems(state.song) : [], [state.song]);
     useDocumentMetadata({
         title: state.song ? `${state.song.title} by ${state.song.artistName}` : 'Song — Tsonu Music',
         description: state.song?.description ?? 'Tsonu song page.',
@@ -437,7 +433,7 @@ export function SongPage({ slug }: SongPageProps) {
                 <div className="track-page-hero__copy">
                     <p className="section-eyebrow">Song</p>
                     <h1>{song.title}</h1>
-                    {song.description ? <p>{song.description}</p> : null}
+                    <NotesCallout items={noteItems} />
                 </div>
             </section>
             <section className="album-page-tracks" aria-label={`${song.title} placements`}>
@@ -452,7 +448,7 @@ export function SongPage({ slug }: SongPageProps) {
                                 <span>{placement.trackNumber}</span>
                                 <strong className="catalog-track-list__title">
                                     {placement.releaseTitle}
-                                    {placement.aiAssistedComposition ? <AiAssistedBadge /> : null}
+                                    {placement.aiAssistedComposition ? <AiAssistedBadge percent={placement.aiAssistedPercent} /> : null}
                                 </strong>
                                 <span>{formatReleaseKind(placement.releaseKind)}</span>
                             </a>
