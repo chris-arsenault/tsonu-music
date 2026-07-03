@@ -11,6 +11,9 @@ export default defineConfig({
   build: {
     outDir: 'build',
     sourcemap: true,
+    // The website Terraform module publishes the OG Lambda with one ENTRY_CSS
+    // value, so keep Vite's production build to a single stylesheet.
+    cssCodeSplit: false,
     rollupOptions: {
       output: {
         entryFileNames: 'assets/index-[hash].js',
