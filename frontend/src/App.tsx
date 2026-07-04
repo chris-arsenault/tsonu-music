@@ -13,11 +13,9 @@ import {
 import { CalendarDays, Disc3, ListMusic, Play } from 'lucide-react';
 
 import InstagramIframe from './InstagramIframe';
-import { CatalogPage, ReleasePage, SongPage, TrackPage } from './music/CatalogPages';
+import { CatalogPage, ReleasePage, ReleaseTrackBrowser, SongPage, TrackPage } from './music/CatalogPages';
 import { MusicPlayerProvider, formatTime, useMusicPlayer } from './music/MusicPlayerContext';
 import StickyPlayer from './music/StickyPlayer';
-import { getTrackTitleLabel, TrackTitle } from './music/TrackTitle';
-import { AiAssistedBadge } from './music/AiAssistedBadge';
 import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
 import { useDocumentMetadata } from './document-metadata';
@@ -428,37 +426,11 @@ function LaunchTracklist() {
     }
 
     return (
-        <ol className="catalog-track-list">
-            {release.tracks.map((track) => {
-                const isActive = player.selectedTrack?.trackId === track.trackId;
-                const title = getTrackTitleLabel(track);
-                return (
-                    <li key={track.trackId}>
-                        <button
-                            type="button"
-                            className="catalog-track-list__play"
-                            onClick={() => player.playTrack(release.releaseId, track.trackId)}
-                            aria-label={`Play ${title}`}
-                            title={`Play ${title}`}
-                        >
-                            <Play aria-hidden="true" />
-                        </button>
-                        <a
-                            href={`/tracks/${encodeURIComponent(release.slug)}/${encodeURIComponent(track.slug)}`}
-                            onClick={(event) => handleInternalLink(event, `/tracks/${encodeURIComponent(release.slug)}/${encodeURIComponent(track.slug)}`)}
-                            className={isActive ? 'is-active' : undefined}
-                        >
-                            <span>{String(track.trackNumber).padStart(2, '0')}</span>
-                            <strong className="catalog-track-list__title">
-                                <TrackTitle track={track} />
-                                {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
-                            </strong>
-                            <span>{formatTime(track.durationSeconds)}</span>
-                        </a>
-                    </li>
-                );
-            })}
-        </ol>
+        <ReleaseTrackBrowser
+            release={release}
+            activeTrack={player.selectedTrack}
+            trackNumberFormatter={(trackNumber) => String(trackNumber).padStart(2, '0')}
+        />
     );
 }
 

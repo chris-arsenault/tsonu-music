@@ -17,7 +17,7 @@ import { AI_USE_PATH, handleInternalLink, releasePath, songPath, trackPath } fro
 import { recordReleaseView, recordTrackImpression } from '../player-analytics';
 import { useDocumentMetadata } from '../document-metadata';
 import { AiAssistedBadge } from './AiAssistedBadge';
-import { NotesCallout, releaseTrackNoteItems, songNoteItems } from './TrackNotes';
+import { NotesCallout, releaseTrackNoteItems, songNoteItems, TrackNotesList } from './TrackNotes';
 
 interface ReleasePageProps {
     slug: string;
@@ -147,40 +147,111 @@ function ReleaseArtwork({ release, className }: { release: PublishedReleaseManif
     return <ArtworkImage artwork={release.artwork} className={className} />;
 }
 
-function TrackRows({ release, activeTrack }: { release: PublishedReleaseManifest; activeTrack?: PublishedReleaseTrack }) {
-    const player = useMusicPlayer();
+interface ReleaseTrackBrowserProps {
+    release: PublishedReleaseManifest;
+    activeTrack?: PublishedReleaseTrack;
+    initialDetailTrack?: PublishedReleaseTrack;
+    trackNumberFormatter?: (trackNumber: number) => string;
+}
+
+function TrackDetailPanel({
+    release,
+    track,
+}: {
+    release: PublishedReleaseManifest;
+    track: PublishedReleaseTrack | undefined;
+}) {
+    if (!track) {
+        return (
+            <aside className="track-detail-panel track-detail-panel--empty" aria-label="Track details">
+                <ListMusic aria-hidden="true" />
+                <p className="track-detail-panel__eyebrow">Track details</p>
+                <h2>Click on a track to see details.</h2>
+            </aside>
+        );
+    }
+
+    const noteItems = releaseTrackNoteItems(track);
 
     return (
-        <ol className="catalog-track-list">
-            {release.tracks.map((track) => {
-                const title = getTrackTitleLabel(track);
-                return (
-                    <li key={track.trackId}>
-                        <button
-                            type="button"
-                            className="catalog-track-list__play"
-                            onClick={() => player.playTrack(release.releaseId, track.trackId)}
-                            aria-label={`Play ${title}`}
-                            title={`Play ${title}`}
-                        >
-                            <Play aria-hidden="true" />
-                        </button>
-                        <a
-                            href={trackPath(release.slug, track.slug)}
-                            onClick={(event) => handleInternalLink(event, trackPath(release.slug, track.slug))}
-                            className={activeTrack?.trackId === track.trackId ? 'is-active' : undefined}
-                        >
-                            <span>{track.trackNumber}</span>
-                            <strong className="catalog-track-list__title">
-                                <TrackTitle track={track} />
-                                {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
-                            </strong>
-                            <span>{formatTime(track.durationSeconds)}</span>
-                        </a>
-                    </li>
-                );
-            })}
-        </ol>
+        <aside className="track-detail-panel" aria-label={`${getTrackTitleLabel(track)} details`}>
+            <p className="track-detail-panel__eyebrow">Track {track.trackNumber}</p>
+            <h2><TrackTitle track={track} /></h2>
+            <div className="track-detail-panel__meta">
+                <span>{formatTime(track.durationSeconds)}</span>
+                {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
+            </div>
+            {noteItems.length > 0 ? (
+                <TrackNotesList items={noteItems} />
+            ) : (
+                <p className="track-detail-panel__fallback">No detailed notes have been added for this track yet.</p>
+            )}
+            <a
+                className="track-detail-panel__link"
+                href={trackPath(release.slug, track.slug)}
+                onClick={(event) => handleInternalLink(event, trackPath(release.slug, track.slug))}
+            >
+                Open track page
+            </a>
+        </aside>
+    );
+}
+
+export function ReleaseTrackBrowser({
+    release,
+    activeTrack,
+    initialDetailTrack,
+    trackNumberFormatter = String,
+}: ReleaseTrackBrowserProps) {
+    const player = useMusicPlayer();
+    const [selectedDetailTrackId, setSelectedDetailTrackId] = useState(initialDetailTrack?.trackId);
+    const selectedDetailTrack = release.tracks.find((track) => track.trackId === selectedDetailTrackId);
+
+    useEffect(() => {
+        setSelectedDetailTrackId(initialDetailTrack?.trackId);
+    }, [initialDetailTrack?.trackId, release.releaseId]);
+
+    return (
+        <div className="track-detail-layout">
+            <ol className="catalog-track-list">
+                {release.tracks.map((track) => {
+                    const title = getTrackTitleLabel(track);
+                    const rowClassName = [
+                        'catalog-track-list__select',
+                        activeTrack?.trackId === track.trackId ? 'is-active' : undefined,
+                        selectedDetailTrackId === track.trackId ? 'is-selected' : undefined,
+                    ].filter(Boolean).join(' ');
+
+                    return (
+                        <li key={track.trackId}>
+                            <button
+                                type="button"
+                                className="catalog-track-list__play"
+                                onClick={() => player.playTrack(release.releaseId, track.trackId)}
+                                aria-label={`Play ${title}`}
+                                title={`Play ${title}`}
+                            >
+                                <Play aria-hidden="true" />
+                            </button>
+                            <button
+                                type="button"
+                                className={rowClassName}
+                                onClick={() => setSelectedDetailTrackId(track.trackId)}
+                                aria-pressed={selectedDetailTrackId === track.trackId}
+                            >
+                                <span>{trackNumberFormatter(track.trackNumber)}</span>
+                                <strong className="catalog-track-list__title">
+                                    <TrackTitle track={track} />
+                                    {track.aiAssistedComposition ? <AiAssistedBadge percent={track.aiAssistedPercent} /> : null}
+                                </strong>
+                                <span>{formatTime(track.durationSeconds)}</span>
+                            </button>
+                        </li>
+                    );
+                })}
+            </ol>
+            <TrackDetailPanel release={release} track={selectedDetailTrack} />
+        </div>
     );
 }
 
@@ -334,7 +405,7 @@ export function ReleasePage({ slug }: ReleasePageProps) {
             </section>
 
             <section className="album-page-tracks" aria-label={`${release.title} tracks`}>
-                <TrackRows release={release} activeTrack={player.selectedTrack} />
+                <ReleaseTrackBrowser release={release} activeTrack={player.selectedTrack} />
             </section>
         </main>
     );
@@ -344,7 +415,6 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
     const player = useMusicPlayer();
     const state = useReleaseBySlug(releaseSlug);
     const track = state.release?.tracks.find((candidate) => candidate.slug === trackSlug);
-    const noteItems = useMemo(() => track ? releaseTrackNoteItems(track) : [], [track]);
     useTrackPageAnalytics(state.release, track);
     useDocumentMetadata({
         title: track && state.release
@@ -376,7 +446,6 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
                 <div className="track-page-hero__copy">
                     <p className="section-eyebrow">{release.title}</p>
                     <h1>{track.title}</h1>
-                    <NotesCallout items={noteItems.length > 0 ? noteItems : [{ key: 'release', label: 'Overview', text: releaseDescription(release) }]} />
                     <div className="album-page-hero__meta">
                         <span>{formatTime(track.durationSeconds)}</span>
                         <span>Track {track.trackNumber}</span>
@@ -400,7 +469,7 @@ export function TrackPage({ releaseSlug, trackSlug }: TrackPageProps) {
             </section>
 
             <section className="album-page-tracks" aria-label={`${release.title} tracks`}>
-                <TrackRows release={release} activeTrack={track} />
+                <ReleaseTrackBrowser release={release} activeTrack={track} initialDetailTrack={track} />
             </section>
         </main>
     );
