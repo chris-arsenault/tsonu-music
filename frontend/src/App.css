@@ -2270,3 +2270,71 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
         padding: 0.75rem;
     }
 }
+
+.viz-debug__section {
+    margin: 0 0 0.6rem;
+}
+
+.viz-debug__section h3 {
+    margin: 0 0 0.3rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--line-strong);
+}
+
+.viz-debug__details {
+    margin: 0 0 0.6rem;
+}
+
+.viz-debug__details summary {
+    cursor: pointer;
+    color: var(--line-strong);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.viz-debug__details .viz-debug__plugins label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+}
+
+.viz-debug__control {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0 0 0.35rem;
+    cursor: pointer;
+}
+
+.viz-debug__control input[type="text"],
+.viz-debug__control select {
+    flex: 1;
+    min-width: 0;
+    padding: 0.15rem 0.3rem;
+    border: 1px solid var(--line);
+    border-radius: 0.2rem;
+    background: var(--panel-soft);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.7rem;
+}
+
+.viz-debug__control button {
+    padding: 0.15rem 0.45rem;
+    border: 1px solid var(--line);
+    border-radius: 0.2rem;
+    background: var(--panel-soft);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.7rem;
+    cursor: pointer;
+}
+
+.viz-debug__control button:hover {
+    border-color: var(--line-strong);
+}

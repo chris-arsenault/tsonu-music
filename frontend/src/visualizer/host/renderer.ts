@@ -11,6 +11,7 @@ import { createLayer, type VisualLayer } from '../core/layers';
 import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
+import type { DiagnosticsControls } from '../core/diagnostics';
 import { buildFirstViableScene } from '../core/scene-builder';
 import { assetResourceId, type AssetResource } from '../core/wiring';
 import { sceneSeed } from '../core/random';
@@ -25,6 +26,8 @@ export interface RendererFrame {
     features: AudioFeatureBus;
     deltaSeconds: number;
     profile: QualityProfile;
+    clearTransients?: boolean;
+    controls?: DiagnosticsControls;
 }
 
 export interface Renderer {
@@ -40,8 +43,19 @@ export interface Renderer {
     availableAssets(): readonly string[];
     /** Ids of the active plugins, for the diagnostics overlay. */
     activePluginIds(): string[];
+    /** Instance ids in graph order, for the diagnostics overlay's disable controls. */
+    activeInstanceIds(): string[];
+    /** Every resource the graph allocates, so an intermediate one can be inspected. */
+    resourceIds(): string[];
+    /** Graph edges as `from -> to`, feedback marked. */
+    edgeSummary(): string[];
+    gpuCapabilities(): { floatRenderTargets: boolean; maxTextureSize: number; maxPixelRatio: number };
+    renderSize(): { width: number; height: number };
+    estimatedTextureBytes(): number;
     themeId(): string;
     seed(): string;
+    /** Rebuilds from an explicit seed, so a reported scene can be reproduced exactly. */
+    rebuildFromSeed(seed: string, profile: QualityProfile): boolean;
     resize(): void;
     dispose(): void;
 }
@@ -85,9 +99,9 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let assetIds: readonly string[] = options.assets ?? [];
     let assetResources: readonly AssetResource[] = [];
 
-    function build(trackId: string | null, generation: number, profile: QualityProfile) {
+    function buildFromSeed(seed: string, profile: QualityProfile) {
         return buildFirstViableScene(
-            sceneSeed(trackId, generation),
+            seed,
             themes,
             {
                 available: registry.all(),
@@ -99,6 +113,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             },
             profile,
         );
+    }
+
+    function build(trackId: string | null, generation: number, profile: QualityProfile) {
+        return buildFromSeed(sceneSeed(trackId, generation), profile);
     }
 
     const initial = build(options.trackId, options.generation, options.profile);
@@ -129,6 +147,26 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     }
 
     sizeCanvas();
+
+    // Bound after the capability guards above, so the closures below need no further narrowing.
+    const activeDevice: Device = device;
+
+    /** Swaps in a newly built scene, keeping the current one if the build failed. */
+    const applyBuild = (result: ReturnType<typeof buildFromSeed>): boolean => {
+        if (!result.ok) {
+            // A failed rebuild is not a reason to stop rendering what already works.
+            console.warn('[visualizer] scene rebuild failed', result.failure.detail);
+            return false;
+        }
+
+        runtime.dispose();
+        scene = result.scene;
+        instances = instantiate(activeDevice, scene.graph);
+        layers = buildLayers(scene.graph);
+        runtime.setGraph(scene.graph, instances);
+
+        return true;
+    };
 
     return {
         ok: true,
@@ -161,6 +199,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
                     layers,
+                    clearTransients: frame.clearTransients,
+                    controls: frame.controls,
                 });
             },
 
@@ -169,21 +209,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             },
 
             rebuild(trackId, generation, profile) {
-                const result = build(trackId, generation, profile);
-                if (!result.ok) {
-                    // Keep the current scene rather than blanking: a failed rebuild is not a reason to
-                    // stop rendering what already works.
-                    console.warn('[visualizer] scene rebuild failed', result.failure.detail);
-                    return false;
-                }
+                return applyBuild(build(trackId, generation, profile));
+            },
 
-                runtime.dispose();
-                scene = result.scene;
-                instances = instantiate(device, scene.graph);
-                layers = buildLayers(scene.graph);
-                runtime.setGraph(scene.graph, instances);
-
-                return true;
+            rebuildFromSeed(seed, profile) {
+                return applyBuild(buildFromSeed(seed, profile));
             },
 
             setAssets(ids) {
@@ -208,6 +238,43 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
             activePluginIds() {
                 return scene.plugins.map((definition) => definition.id);
+            },
+
+            activeInstanceIds() {
+                return scene.graph.order.map((node) => node.instanceId);
+            },
+
+            resourceIds() {
+                return scene.graph.resources.map((resource) => resource.id);
+            },
+
+            edgeSummary() {
+                return [
+                    ...scene.wired.edges.map((edge) =>
+                        `${edge.from.instanceId}.${edge.from.port} -> ${edge.to.instanceId}.${edge.to.port}`
+                        + (edge.feedback ? ' (feedback)' : '')),
+                    ...scene.wired.assetBindings.map((binding) =>
+                        `${binding.resource} -> ${binding.instanceId}.${binding.port} (asset)`),
+                ];
+            },
+
+            gpuCapabilities() {
+                return {
+                    floatRenderTargets: device.capabilities.floatRenderTargets,
+                    maxTextureSize: device.capabilities.maxTextureSize,
+                    maxPixelRatio: device.capabilities.maxPixelRatio,
+                };
+            },
+
+            renderSize() {
+                return { width: canvas.width, height: canvas.height };
+            },
+
+            estimatedTextureBytes() {
+                // Half-float RGBA is eight bytes per pixel; a ping-ponged resource counts twice.
+                const perTarget = canvas.width * canvas.height * 8;
+                const pingPong = scene.graph.pingPong.length;
+                return (scene.graph.resources.length + pingPong) * perTarget;
             },
 
             themeId() {

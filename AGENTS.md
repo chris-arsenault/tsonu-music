@@ -24,7 +24,7 @@ DNS records for the three `tsonu.com` hostnames live in the `tsonu.com.` Route53
 - **Metadata**: shared Ahara RDS. Migrations live in `db/migrations`; runtime catalog rows are not committed to this repo.
 - **Media**: private source-master and generated-media S3 buckets. Public HLS, artwork, and lossless assets are served through CloudFront.
 - **Analytics**: CloudWatch RUM custom player events and an admin dashboard for player stats.
-- **Visualizer**: WebGL2 music visualizer in [`frontend/src/visualizer/`](./frontend/src/visualizer), loaded as a dynamic chunk on activation.
+- **Visualizer**: WebGL2 music visualizer in [`frontend/src/visualizer/`](./frontend/src/visualizer), loaded as a dynamic chunk on activation. See [`docs/visualizer.md`](./docs/visualizer.md).
 
 ## Documentation
 

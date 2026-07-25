@@ -5,7 +5,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { resolveAvailability, type VisualizerAvailability } from '../host/capabilities';
-import { startKernel, type KernelHandle, type KernelReadout } from '../host/kernel-loop';
+import {
+    startKernel,
+    type KernelControlHandle,
+    type KernelHandle,
+    type KernelReadout,
+} from '../host/kernel-loop';
+import type { DiagnosticsControls } from '../core/diagnostics';
 
 export interface KernelSubject {
     getAudioElement: () => HTMLAudioElement | null;
@@ -17,11 +23,15 @@ export interface KernelSubject {
     getBufferHealth?: () => { forwardBufferSeconds?: number; stalled?: boolean };
     /** Album artwork for asset-derivation plugins. Omit to run without artwork. */
     artworkSrc?: string;
+    /** Diagnostics overrides, pushed to the loop as they change. */
+    controls?: DiagnosticsControls;
 }
 
 export interface KernelState {
     availability?: VisualizerAvailability;
     readout?: KernelReadout;
+    /** Controls for the diagnostics overlay. Absent while the kernel is not running. */
+    handle?: KernelControlHandle;
 }
 
 /**
@@ -37,6 +47,8 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
     const [readout, setReadout] = useState<KernelReadout | undefined>(undefined);
 
     const handleRef = useRef<KernelHandle | undefined>(undefined);
+    // State as well as a ref, so the overlay re-renders once controls become available.
+    const [handle, setHandle] = useState<KernelHandle | undefined>(undefined);
 
     // Latest values, read when the kernel starts. Kept in refs so a track change pushes through
     // `setTrack` instead of restarting the loop and discarding unrelated state.
@@ -65,7 +77,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
             return undefined;
         }
 
-        const handle = startKernel({
+        const started = startKernel({
             element,
             canvas,
             trackId: trackIdRef.current,
@@ -77,18 +89,27 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
                 : undefined,
             onReadout: setReadout,
         });
-        handleRef.current = handle;
+        handleRef.current = started;
+        setHandle(started);
 
         return () => {
             handleRef.current = undefined;
-            handle.stop();
+            setHandle(undefined);
+            started.stop();
             setReadout(undefined);
         };
     }, [canRun, element, canvas, availability?.prefersReducedMotion]);
+
+    // Pushed every render rather than restarting the kernel, so toggling a control is immediate.
+    useEffect(() => {
+        if (subject.controls) {
+            handleRef.current?.setControls(subject.controls);
+        }
+    }, [subject.controls]);
 
     useEffect(() => {
         handleRef.current?.setTrack(subject.trackId, subject.trackDurationSeconds);
     }, [subject.trackId, subject.trackDurationSeconds]);
 
-    return { availability, readout };
+    return { availability, readout, handle };
 }

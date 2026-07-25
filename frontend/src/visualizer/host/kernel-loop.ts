@@ -27,6 +27,11 @@ import {
 } from '../core/assets';
 import { loadMaskAssets, loadTextures } from './asset-loader';
 import {
+    createDiagnosticsControls,
+    recordActivation,
+    type DiagnosticsControls,
+} from '../core/diagnostics';
+import {
     advancePerformance,
     applyReducedMotion,
     createPerformanceState,
@@ -67,7 +72,29 @@ export interface KernelReadout {
         seed: string;
         themeId: string;
         pluginIds: string[];
+        instanceIds: string[];
+        resourceIds: string[];
+        edges: string[];
+        assets: readonly string[];
+        activationHistory: readonly string[];
+        estimatedTextureBytes: number;
     };
+    gpu?: {
+        floatRenderTargets: boolean;
+        maxTextureSize: number;
+        maxPixelRatio: number;
+        renderWidth: number;
+        renderHeight: number;
+    };
+}
+
+/** Controls the overlay drives. Read every frame, so a change takes effect immediately. */
+export interface KernelControlHandle {
+    setControls(controls: DiagnosticsControls): void;
+    /** Rebuilds from an explicit seed, so a reported scene can be reproduced. */
+    reproduceSeed(seed: string): boolean;
+    /** Rebuilds with the current track's seed, discarding an override. */
+    rebuildCurrent(): boolean;
 }
 
 export interface KernelOptions {
@@ -87,7 +114,7 @@ export interface KernelOptions {
     onReadout: (readout: KernelReadout) => void;
 }
 
-export interface KernelHandle {
+export interface KernelHandle extends KernelControlHandle {
     setTrack(trackId: string | null, durationSeconds: number): void;
     stop(): void;
 }
@@ -126,6 +153,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
 
     let performance: PerformanceState = createPerformanceState();
     let lastRebuiltGeneration = clock.generation;
+    let controls: DiagnosticsControls = createDiagnosticsControls();
+    let activationHistory: readonly string[] = [];
 
     const currentProfile = (): QualityProfile => {
         if (typeof document !== 'undefined' && document.hidden) {
@@ -268,11 +297,19 @@ export function startKernel(options: KernelOptions): KernelHandle {
 
         if (renderer) {
             // A track change reseeds the scene (section 6.4). A quality step that changes the grammar
-            // rebuilds too, since the scene has to be assembled within the new budget.
+            // rebuilds too, since the scene has to be assembled within the new budget. Freezing
+            // mutations suppresses both, so a scene can be studied without shifting underneath.
             const grammarChanged = profileFor(previousLevel).reducedGrammar !== profile.reducedGrammar;
-            if (clock.generation !== lastRebuiltGeneration || grammarChanged) {
+            const shouldRebuild = clock.generation !== lastRebuiltGeneration || grammarChanged;
+
+            if (shouldRebuild && !controls.freezeMutations) {
                 lastRebuiltGeneration = clock.generation;
-                renderer.rebuild(clock.trackId, clock.generation, profile);
+                if (renderer.rebuild(clock.trackId, clock.generation, profile)) {
+                    activationHistory = renderer.activeInstanceIds().reduce(
+                        (history, instanceId) => recordActivation(history, instanceId),
+                        activationHistory,
+                    );
+                }
             }
 
             const stats = renderer.renderFrame({
@@ -280,6 +317,9 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 features: features.bus,
                 deltaSeconds,
                 profile,
+                // Impacts are transient history, dropped alongside audio events on seek and track change.
+                clearTransients: effects.includes('clear-analysis-history'),
+                controls,
             });
             renderStats = { ...stats, problems: renderer.problems() };
         }
@@ -307,6 +347,19 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         seed: renderer.seed(),
                         themeId: renderer.themeId(),
                         pluginIds: renderer.activePluginIds(),
+                        instanceIds: renderer.activeInstanceIds(),
+                        resourceIds: renderer.resourceIds(),
+                        edges: renderer.edgeSummary(),
+                        assets: renderer.availableAssets(),
+                        activationHistory,
+                        estimatedTextureBytes: renderer.estimatedTextureBytes(),
+                    }
+                    : undefined,
+                gpu: renderer
+                    ? {
+                        ...renderer.gpuCapabilities(),
+                        renderWidth: renderer.renderSize().width,
+                        renderHeight: renderer.renderSize().height,
                     }
                     : undefined,
             });
@@ -318,6 +371,18 @@ export function startKernel(options: KernelOptions): KernelHandle {
     frameHandle = requestAnimationFrame(frame);
 
     return {
+        setControls(next) {
+            controls = next;
+        },
+
+        reproduceSeed(seed) {
+            return renderer?.rebuildFromSeed(seed, currentProfile()) ?? false;
+        },
+
+        rebuildCurrent() {
+            return renderer?.rebuild(clock.trackId, clock.generation, currentProfile()) ?? false;
+        },
+
         setTrack(nextTrackId, durationSeconds) {
             if (nextTrackId === trackId && durationSeconds === trackDuration) {
                 return;

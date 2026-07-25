@@ -12,6 +12,11 @@ import type { PlaybackClock } from '../core/clock';
 import type { CompiledGraph, CompiledNode } from '../core/graph';
 import { composeLayers, type Crossfade, type VisualLayer } from '../core/layers';
 import {
+    isPluginDisabled,
+    simulationDelta,
+    type DiagnosticsControls,
+} from '../core/diagnostics';
+import {
     clearImpacts,
     createImpactBus,
     expireImpacts,
@@ -41,6 +46,8 @@ export interface RuntimeFrame {
     crossfades?: readonly Crossfade[];
     /** Set on the frame a seek or track change lands, to drop stale impacts alongside audio events. */
     clearTransients?: boolean;
+    /** Diagnostics overrides. Absent in normal operation. */
+    controls?: DiagnosticsControls;
 }
 
 export interface RuntimeStats {
@@ -162,18 +169,30 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
             const byInstance = new Map(instances.map((entry) => [entry.instanceId, entry]));
 
+            // Simulation freeze applies here rather than inside each plugin, since zero delta is a
+            // contract every plugin already honours.
+            const deltaSeconds = frame.controls
+                ? simulationDelta(frame.controls, frame.deltaSeconds)
+                : frame.deltaSeconds;
+
             for (const node of graph.order) {
                 const active = byInstance.get(node.instanceId);
                 if (!active) {
                     continue;
                 }
 
-                applyBindings(active, frame);
+                // A disabled plugin is skipped entirely, so its contribution disappears while everything
+                // downstream keeps running against whatever remains.
+                if (frame.controls && isPluginDisabled(frame.controls, node.instanceId)) {
+                    continue;
+                }
+
+                applyBindings(active, { ...frame, deltaSeconds });
 
                 active.instance.update({
                     clock: frame.clock,
                     features: frame.features,
-                    deltaSeconds: frame.deltaSeconds,
+                    deltaSeconds,
                     seed: hashSeed(active.instanceId),
                     renderWidth: plan.width,
                     renderHeight: plan.height,
@@ -198,7 +217,14 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 }
             }
 
-            present(device, plan, frame, presentShaderId, stats);
+            // Inspecting an intermediate resource replaces the composed output, which is how a field,
+            // mask, or depth texture is examined directly.
+            const inspected = frame.controls?.inspectResource;
+            if (inspected && plan.writeKeys[inspected]) {
+                presentSingle(device, plan, inspected, presentShaderId, stats);
+            } else {
+                present(device, plan, frame, presentShaderId, stats);
+            }
 
             return stats;
         },
@@ -218,6 +244,33 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             graph = undefined;
         },
     };
+}
+
+/** Draws one resource straight to the canvas, bypassing composition. */
+function presentSingle(
+    device: Device,
+    plan: RenderPlan,
+    resource: ResourceId,
+    presentShaderId: string,
+    stats: RuntimeStats,
+): void {
+    const program = device.useProgram(presentShaderId);
+    const key = plan.writeKeys[resource];
+    if (!program || !key) {
+        stats.skippedPasses += 1;
+        return;
+    }
+
+    const target = device.acquireTarget(key, plan.width, plan.height);
+
+    device.beginPass(null, 'none', true);
+    device.bindTexture(program, 'uSource', target.texture, 0);
+    device.setUniforms(program, {
+        uOpacity: 1,
+        uResolution: [device.canvas.width, device.canvas.height],
+    });
+    device.drawFullscreen();
+    stats.passesExecuted += 1;
 }
 
 /** Composites the layer stack onto the canvas. */
