@@ -27,11 +27,19 @@ import { mergeUniforms, resolveParameters } from '../core/parameters';
 import { modulateParameters } from '../core/modulation';
 import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
-import { frameSurvival, isMotionSource, type PersistenceSettings } from '../core/persistence';
+import {
+    blackFloorFor,
+    frameSurvival,
+    injectionFor,
+    isMotionSource,
+    type PersistenceSettings,
+} from '../core/persistence';
 import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
 import {
+    GRADE_SHADER,
+    GRADE_SHADER_ID,
     MOTION_SUM_SHADER,
     MOTION_SUM_SHADER_ID,
     PERSISTENCE_SHADER,
@@ -130,6 +138,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
     device.registerShader(MOTION_SUM_SHADER);
     device.registerShader(PERSISTENCE_SHADER);
+    device.registerShader(GRADE_SHADER);
 
     function resolveTexture(plan: RenderPlan, resource: ResourceId | undefined, previous: boolean): WebGLTexture | undefined {
         if (!resource) {
@@ -414,14 +423,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 }
 
                 // Present the slot last written, which under a frozen clock is the previous frame's.
-                presentTarget(
-                    device,
-                    ACCUMULATE_KEYS[advancing ? write : read],
-                    plan,
-                    frame,
-                    presentShaderId,
-                    stats,
-                );
+                presentTarget(device, ACCUMULATE_KEYS[advancing ? write : read], plan, stats);
             }
 
             stats.pendingShaders = device.pendingShaderCount();
@@ -434,6 +436,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // here rather than leaving the composite stage pointing at programs that no longer exist.
             device.registerShader(MOTION_SUM_SHADER);
             device.registerShader(PERSISTENCE_SHADER);
+            device.registerShader(GRADE_SHADER);
             accumulationPrimed = false;
 
             for (const active of instances) {
@@ -575,9 +578,10 @@ function sumMotion(
         return false;
     }
 
-    // Divided by the contributor count, so adding a second field redistributes the drag rather than
-    // doubling it and tearing the image apart.
-    const weight = 1 / sources.length;
+    // Softened by the square root of the contributor count rather than divided by it. Dividing meant
+    // a scene with two fields was dragged half as far as one with a single field, which read as the
+    // richer scenes being the slowest; the root keeps the sum bounded without cancelling it.
+    const weight = 1 / Math.sqrt(sources.length);
     let drawn = 0;
 
     for (const resource of sources) {
@@ -634,9 +638,14 @@ function advanceAccumulation(
     device.bindTexture(program, 'uComposite', compositeTarget.texture, 0);
     device.bindTexture(program, 'uHistory', read.texture, 1);
     device.bindTexture(program, 'uMotion', motion.texture, 2);
+    const survival = frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds);
+
     device.setUniforms(program, {
         uResolution: [plan.width, plan.height],
-        uSurvival: frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds),
+        uSurvival: survival,
+        // Complement of survival, so a static image converges to exactly itself rather than ramping.
+        uInjection: injectionFor(survival),
+        uBlackFloor: blackFloorFor(deltaSeconds),
         uMotionScale: frame.persistence.motionScale,
         uDelta: Math.max(0, deltaSeconds),
         uHasMotion: slots.hasMotion,
@@ -645,16 +654,20 @@ function advanceAccumulation(
     stats.passesExecuted += 1;
 }
 
-/** Draws a kernel target to the canvas without further grading. */
+/**
+ * Grades the accumulation onto the canvas.
+ *
+ * The final stage, and the only one that compresses. `ToneMapper` sits inside the graph, so it runs
+ * before the accumulation and cannot be the last word: whatever it rolled off was accumulated back
+ * into clipping and then presented with no compression at all.
+ */
 function presentTarget(
     device: Device,
     key: string,
     plan: RenderPlan,
-    frame: RuntimeFrame,
-    presentShaderId: string,
     stats: RuntimeStats,
 ): void {
-    const program = device.useProgram(presentShaderId);
+    const program = device.useProgram(GRADE_SHADER_ID);
     if (!program) {
         stats.skippedPasses += 1;
         return;
@@ -665,16 +678,12 @@ function presentTarget(
     device.beginPass(null, 'none', true);
     device.bindTexture(program, 'uSource', target.texture, 0);
     device.setUniforms(program, {
-        uOpacity: 1,
         uResolution: [device.canvas.width, device.canvas.height],
-        uTime: frame.clock.playbackTime,
-        uEnergy: frame.features.continuous.rms,
-        uBass: frame.features.continuous.bass,
-        uCentroid: frame.features.continuous.spectralCentroid,
-        uLayerPhase: 0,
-        // Grading already happened per layer on the way into the composite. Applying it again to the
-        // accumulation would re-tint trails every frame until they lost their colour entirely.
-        uChromatic: 0,
+        uExposure: 1.15,
+        uGamma: 2.2,
+        // Above one, so material that survived the accumulation reaches the screen with its colour
+        // rather than tending toward grey.
+        uSaturation: 1.35,
     });
     device.drawFullscreen();
     stats.passesExecuted += 1;

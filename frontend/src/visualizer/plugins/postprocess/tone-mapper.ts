@@ -136,7 +136,10 @@ float luminance(vec3 color) {
 }
 
 vec3 breathingPalette(float phase) {
-    return 0.5 + 0.5 * cos(6.2831853 * (phase + vec3(0.00, 0.34, 0.68)));
+    vec3 base = 0.5 + 0.5 * cos(6.2831853 * (phase + vec3(0.00, 0.34, 0.68)));
+    // Squared, which widens the gap between the leading channel and the other two. A raw cosine
+    // palette sits around half scale in every channel at once, which is the definition of pastel.
+    return base * base;
 }
 
 void main() {
@@ -160,7 +163,10 @@ void main() {
     );
     vec3 palette = breathingPalette(palettePhase);
     float monochrome = (1.0 - smoothstep(0.035, 0.20, saturation)) * uChromatic;
-    color = mix(color, palette * light * 1.35, monochrome * 0.92);
+    // Brightness rides on a floor rather than scaling the palette by luminance outright. Multiplying
+    // a palette by a luminance near one pushes its leading channel past one, which clips and drags
+    // the colour back toward white — the palette was being erased by the thing meant to apply it.
+    color = mix(color, palette * (0.28 + light * 0.85), monochrome * 0.92);
 
     float breath = 0.88
         + 0.10 * sin(uTime * (0.55 + uBass * 0.4) + uLayerPhase * 6.2831853)

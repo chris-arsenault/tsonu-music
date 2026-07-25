@@ -113,12 +113,21 @@ Every spatial field the scene produced — procedural, audio-driven, or mask-der
 into one motion field, additively and weighted by the contributor count, so several fields compound
 into one drag rather than one winning.
 
-The kernel owns an accumulation buffer. Each frame it is gathered through that motion field,
-decayed, and screened with the new composite; the accumulation is what reaches the screen. How
-strongly a scene accumulates comes from its theme's persistence character and its layers'
-feedback participation, floored so no scene is completely static and capped so none becomes a smear.
-Survival is expressed per second, so trail length is a duration rather than a frame count. A frozen
-clock holds the accumulation exactly; a seek or track change clears it.
+The kernel owns an accumulation buffer. Each frame it is gathered through that motion field, decayed,
+and combined with the new composite as a leaky integrator: survival and injection are complements, so
+a static image converges to exactly itself and a trail comes from the warp rather than from a
+build-up. A small absolute amount is subtracted per second as well, so an abandoned trail reaches
+true black instead of leaving a haze. How strongly a scene accumulates comes from its theme's
+persistence character and its layers' feedback participation, floored so no scene is completely
+static and capped where trails would stop being motion and start being lag. Survival is expressed per
+second, so trail length is a duration rather than a frame count, and it is also the image's response
+time. A frozen clock holds the accumulation exactly; a seek or track change clears it.
+
+The accumulation is graded onto the canvas last, and that is the only stage that compresses.
+Luminance is rolled off and the colour rescaled by the same factor, rather than each channel being
+compressed on its own — per-channel compression pulls the brightest channel down hardest, which
+desaturates exactly the material that was most saturated. `ToneMapper` still runs inside the graph,
+but it cannot be the final word, because everything after it can still add light.
 
 `FeedbackFlowTransform`, `FeedbackInjector`, and `ParticleTrailInjector` shape this loop rather than
 being the only thing that creates one. See

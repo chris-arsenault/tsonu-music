@@ -52,6 +52,28 @@ The arithmetic lives in `core/persistence.ts` as plain functions over numbers, p
 [ADR-0003](./0003-visualizer-pure-core-thin-shell.md). `host/composite-shaders.ts` mirrors it in
 GLSL.
 
+### Amendment, same day: the combine and the order of compression
+
+The first implementation screened the composite onto the accumulation and presented the result with
+no compression, leaving `ToneMapper` inside the graph as the only tone map — which put it *before*
+the accumulation. On a real device the image washed out to white with a yellow cast within seconds.
+
+Screen combines each channel toward one independently and has no fixed point, so any pixel receiving
+repeated contribution climbs to white, and the channels arrive in the order they started: blue is
+usually lowest in these palettes and saturates last, which is precisely a yellow cast fading to
+white. Compression happening before the stage that adds light could not correct it.
+
+The combine is now a leaky integrator whose survival and injection are complements, so a static image
+converges to exactly itself and the trail comes from the warp. A small absolute amount is subtracted
+per second so an abandoned trail reaches true black rather than leaving a haze. Grading moved to the
+end as a kernel-owned stage that rolls off luminance and rescales the colour by the same factor,
+because per-channel compression desaturates the most saturated material hardest.
+
+Survival's ceiling came down from 0.8 per second to 0.25. Because survival and injection are
+complements, survival *is* the image's response time: a scene keeping most of a second's history
+necessarily takes most of a second to show anything new, and a half-life over two seconds meant every
+change arrived through a two-second filter.
+
 ## Consequences
 
 Every scene has a memory, and the accumulation is what reaches the screen. A displacement applied

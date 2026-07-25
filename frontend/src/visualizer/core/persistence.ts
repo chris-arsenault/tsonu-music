@@ -61,18 +61,29 @@ export interface PersistenceInput {
 }
 
 /**
- * Survival bounds.
+ * Survival bounds, as the fraction still present one second later.
  *
- * The floor is the substance of "no scene is ever completely static": even a family that wants crisp
- * geometry keeps a trace of the previous frame, which at sixty frames a second is a survival factor
- * around 0.91 per frame. The ceiling stops the accumulation from becoming a smear that never clears.
+ * These are also the image's response time, because survival and injection are complements: a scene
+ * keeping most of a second's history necessarily takes most of a second to show anything new. The
+ * ceiling was 0.8, a half-life over two seconds, which is why the large-scale motion read as sluggish
+ * — every change was arriving through a two-second filter.
+ *
+ * The range now spans roughly a quarter-second trail to three-quarters of a second. The floor is the
+ * substance of "no scene is ever completely static"; the ceiling is where trails stop being motion
+ * and start being lag.
  */
-const SURVIVAL_FLOOR = 0.004;
-const SURVIVAL_CEILING = 0.8;
+const SURVIVAL_FLOOR = 0.02;
+const SURVIVAL_CEILING = 0.25;
 
-/** Displacement bounds in UV per second, per unit of field magnitude. */
-const MOTION_FLOOR = 0.02;
-const MOTION_CEILING = 0.34;
+/**
+ * Displacement bounds in UV per second, per unit of field magnitude.
+ *
+ * Raised from a ceiling of 0.34: several field modes are far weaker than unit magnitude — the curl
+ * mode differences an fbm over a hundredth of a unit — so the effective drag sat well under the
+ * nominal figure and the large-scale motion read as sluggish.
+ */
+const MOTION_FLOOR = 0.05;
+const MOTION_CEILING = 0.85;
 
 /** What a theme leaves unstated. Matches the neutral value in `character`. */
 export const DEFAULT_THEME_PERSISTENCE = 0.4;
@@ -137,16 +148,61 @@ export function frameSurvival(survivalPerSecond: number, deltaSeconds: number): 
 }
 
 /**
+ * Smallest share of the new frame that always reaches the accumulation.
+ *
+ * A safety rail rather than a tuning value: the survival ceiling already keeps injection well above
+ * it. Raising it further would break the complement relationship and turn the integrator back into a
+ * brightness ramp, which is the failure it exists to avoid.
+ */
+const MINIMUM_INJECTION = 0.01;
+
+/**
+ * How much of this frame's composite enters the accumulation.
+ *
+ * The complement of survival, so the two sum to one and a static image converges to exactly itself.
+ * This is what stops the accumulation from being a brightness ramp.
+ */
+export function injectionFor(survivalPerFrame: number): number {
+    return Math.max(1 - clamp01(survivalPerFrame), MINIMUM_INJECTION);
+}
+
+/**
+ * Subtracted from the accumulation per second so trails reach true black.
+ *
+ * A purely multiplicative decay approaches zero without arriving, leaving a haze that everything
+ * afterwards is composited on top of. Expressed per second like survival, because a per-frame
+ * constant erases a trail at whatever rate the display happens to run at — and because at a quarter
+ * per second it was consuming dim material faster than the drag could carry it anywhere.
+ */
+export const BLACK_FLOOR_PER_SECOND = 0.09;
+
+/** Absolute amount removed this frame. Zero while frozen, so a held image does not fade. */
+export function blackFloorFor(deltaSeconds: number): number {
+    return deltaSeconds > 0 ? BLACK_FLOOR_PER_SECOND * deltaSeconds : 0;
+}
+
+/**
  * Combines what the layer stack drew this frame with the decayed accumulation.
  *
- * Screen rather than addition, so a bright trail crossing bright new material rolls off toward white
- * instead of clipping there and staying. With a survival of zero this returns the incoming value
- * unchanged, which is the degenerate case that makes a non-accumulating scene behave exactly as it
- * did before the accumulator existed.
+ * A leaky integrator, not a screen. Screen combines each channel toward one independently, so the
+ * channel nearest one saturates first and the rest follow in order — over hundreds of frames every
+ * pixel receiving repeated contribution ends up white, with whatever channel started lowest lagging
+ * as a colour cast. That is a brightness ramp with no fixed point, and it is why the image washed out
+ * and read yellow.
+ *
+ * Here a static image converges to exactly itself, and a trail comes from the *warp* — history
+ * sampled from a displaced position decays behind whatever moved. With a survival of zero this
+ * returns the incoming value unchanged, the degenerate case that makes a non-accumulating scene
+ * behave as it did before the accumulator existed.
  */
-export function accumulate(history: number, incoming: number, survival: number): number {
-    const kept = history * survival;
-    return 1 - (1 - incoming) * (1 - kept);
+export function accumulate(
+    history: number,
+    incoming: number,
+    survival: number,
+    blackFloor = 0,
+): number {
+    const kept = Math.max(history * survival - blackFloor, 0);
+    return kept + incoming * injectionFor(survival);
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
     accumulate,
+    blackFloorFor,
     DEFAULT_THEME_PERSISTENCE,
     frameSurvival,
     gatherOffset,
@@ -112,20 +113,47 @@ describe('accumulation', () => {
         expect(accumulate(0.9, 0.3, 0)).toBeCloseTo(0.3, 10);
     });
 
-    test('a trail crossing new material rolls off rather than clipping', () => {
-        const combined = accumulate(0.8, 0.8, 1);
+    test('history and new material both reach the result', () => {
+        // Compression is the grade's job now, at the end of the frame. Holding headroom here is what
+        // lets the final tone map roll off on luminance and keep the hue.
+        const combined = accumulate(0.8, 0.8, 0.95);
 
-        expect(combined).toBeGreaterThan(0.8);
-        expect(combined).toBeLessThan(1);
+        expect(combined).toBeGreaterThan(0.7);
+        expect(combined).toBeLessThan(0.85);
     });
 
-    test('repeated accumulation approaches white without exceeding it', () => {
-        let value = 0;
-        for (let frame = 0; frame < 500; frame += 1) {
-            value = accumulate(value, 0.4, 0.99);
+    test('a static image converges to itself rather than ramping', () => {
+        // Survival and injection are complements, so the fixed point is the input. A screen combine
+        // had no fixed point at all: every pixel receiving repeated contribution climbed to white,
+        // with the channel that started lowest lagging behind as a colour cast.
+        for (const survival of [0.9, 0.95, 0.99]) {
+            let value = 0;
+            for (let frame = 0; frame < 3000; frame += 1) {
+                value = accumulate(value, 0.4, survival);
+            }
+
+            expect(value, `survival ${survival}`).toBeLessThanOrEqual(0.4);
+            expect(value, `survival ${survival}`).toBeGreaterThan(0.2);
+        }
+    });
+
+    test('an abandoned trail reaches true black rather than lingering', () => {
+        // A purely multiplicative decay approaches zero without arriving, leaving a haze under
+        // everything drawn afterwards.
+        let value = 1;
+        for (let frame = 0; frame < 600; frame += 1) {
+            value = accumulate(value, 0, 0.98, blackFloorFor(1 / 60));
         }
 
-        expect(value).toBeLessThanOrEqual(1);
+        expect(value).toBe(0);
+    });
+
+    test('the black floor is a rate, so a trail dies over the same time at any frame rate', () => {
+        expect(blackFloorFor(1 / 30)).toBeCloseTo(blackFloorFor(1 / 60) * 2, 10);
+    });
+
+    test('a frozen clock removes nothing, so a held image does not fade', () => {
+        expect(blackFloorFor(0)).toBe(0);
     });
 });
 
@@ -223,7 +251,12 @@ function run(
                 const [dx, dy] = gatherOffset(swirlField(x, y), current.motionScale, deltaSeconds);
                 // The offset is in UV; the grid is in texels.
                 const history = sample(grid, x + dx * SIDE, y + dy * SIDE);
-                next[y * SIDE + x] = accumulate(history, composite[y * SIDE + x], survival);
+                next[y * SIDE + x] = accumulate(
+                    history,
+                    composite[y * SIDE + x],
+                    survival,
+                    blackFloorFor(deltaSeconds),
+                );
             }
         }
 
@@ -239,65 +272,85 @@ function run(
 }
 
 describe('the composite recurrence produces motion', () => {
-    const moving: PersistenceSettings = { survivalPerSecond: 0.4, motionScale: 0.25 };
+    // A larger UV rate than a real scene uses, because this grid is twenty-four texels across: the
+    // recurrence is what is under test, and it needs the drag to cover comparable ground per frame.
+    const moving: PersistenceSettings = { survivalPerSecond: 0.4, motionScale: 1.6 };
 
-    test('a source that regenerates the same image still produces a moving picture', () => {
-        // This is the whole defect in one assertion. The stripe never changes; only the accumulation
-        // being dragged and decayed makes the frame differ from the last.
-        const { deltas } = run(moving, 1 / 60, 120);
-        const settled = deltas.slice(60);
+    test('a moving source leaves a trail lagging behind it', () => {
+        // The property that matters, and the one the leaky integrator actually provides. A screen
+        // combine also produced motion from a *static* source, but only by ramping every pixel toward
+        // white — motion as a symptom of the washout rather than as an image.
+        const travelling = (frame: number) => {
+            const grid = new Float32Array(SIDE * SIDE);
+            const column = 4 + Math.floor(frame / 12) % 12;
+            for (let y = 0; y < SIDE; y += 1) {
+                grid[y * SIDE + column] = 1;
+            }
+            return grid;
+        };
 
-        for (const delta of settled) {
-            expect(delta).toBeGreaterThan(1e-4);
+        let accumulation = new Float32Array(SIDE * SIDE);
+        const survival = frameSurvival(moving.survivalPerSecond, 1 / 60);
+        const floor = blackFloorFor(1 / 60);
+
+        for (let frame = 0; frame < 200; frame += 1) {
+            const composite = travelling(frame);
+            const next = new Float32Array(SIDE * SIDE);
+            for (let y = 0; y < SIDE; y += 1) {
+                for (let x = 0; x < SIDE; x += 1) {
+                    const [dx, dy] = gatherOffset(swirlField(x, y), moving.motionScale, 1 / 60);
+                    const history = sample(accumulation, x + dx * SIDE, y + dy * SIDE);
+                    next[y * SIDE + x] = accumulate(history, composite[y * SIDE + x], survival, floor);
+                }
+            }
+            accumulation = next;
         }
+
+        const current = travelling(199);
+        let behind = 0;
+        for (let index = 0; index < accumulation.length; index += 1) {
+            // Lit in the accumulation but not drawn this frame: it can only be history.
+            if (accumulation[index] > 0.02 && current[index] === 0) {
+                behind += 1;
+            }
+        }
+
+        expect(behind).toBeGreaterThan(SIDE);
     });
 
-    test('a frozen source and a frozen field settle only after seconds, not frames', () => {
-        // With a genuinely unchanging input and an unchanging field this is a fixed-point iteration
-        // and it does eventually settle — correctly so, and G-Force would do the same. What matters
-        // is that the transient is long: the accumulation turns a moment of input into seconds of
-        // evolving picture rather than resolving within a frame or two.
-        const { deltas } = run(moving, 1 / 60, 400);
+    test('a static source converges to itself rather than ramping', () => {
+        // Survival and injection are complements, so a genuinely unchanging input reaches a fixed
+        // point equal to that input. This is the assertion the screen combine could never satisfy:
+        // it had no fixed point, so a still image climbed to white and stayed there.
+        const { deltas, final } = run(moving, 1 / 60, 400);
 
-        expect(deltas[120]).toBeGreaterThan(1e-4);
-        expect(deltas[399]).toBeLessThan(deltas[120]);
+        expect(deltas[399]).toBeLessThan(deltas[20]);
+        expect(Math.max(...final)).toBeLessThanOrEqual(1);
     });
 
-    test('a field that moves with the music never settles', () => {
-        // The real case: `motionScale` is bass-driven and the field itself is audio-modulated, so the
-        // operator being iterated changes every frame and the picture keeps reorganizing. This is why
-        // making the audio features actually vary was a prerequisite rather than a separate concern.
-        const breathing = (frame: number): PersistenceSettings => ({
-            survivalPerSecond: moving.survivalPerSecond,
-            motionScale: 0.06 + 0.28 * (0.5 + 0.5 * Math.sin(frame / 37)),
-        });
+    test('a stronger field carries material further from where it was drawn', () => {
+        // Measured as spread rather than as frame-to-frame delta: a fast drag samples further from
+        // the lit column each frame, so the temporal difference can fall even as the motion rises.
+        const spread = (motionScale: number) => {
+            const { final } = run({ ...moving, motionScale }, 1 / 60, 180);
+            let lit = 0;
+            for (let index = 0; index < final.length; index += 1) {
+                if (final[index] > 0.01) {
+                    lit += 1;
+                }
+            }
+            return lit;
+        };
 
-        const { deltas } = run(breathing, 1 / 60, 400);
-
-        expect(deltas[399]).toBeGreaterThan(1e-4);
-    });
-
-    test('a frozen clock holds the frame exactly', () => {
-        const primed = run(moving, 1 / 60, 30);
-        const frozenSurvival = frameSurvival(moving.survivalPerSecond, 0);
-        const [dx, dy] = gatherOffset(swirlField(3, 3), moving.motionScale, 0);
-
-        expect(frozenSurvival).toBe(1);
-        expect([dx, dy]).toEqual([0, 0]);
-        expect(primed.final.some((value) => value > 0)).toBe(true);
-    });
-
-    test('a stronger field moves the picture more', () => {
-        const gentle = run({ ...moving, motionScale: 0.02 }, 1 / 60, 120).deltas.slice(60);
-        const strong = run({ ...moving, motionScale: 0.34 }, 1 / 60, 120).deltas.slice(60);
-
-        const mean = (values: number[]) => values.reduce((a, b) => a + b, 0) / values.length;
-        expect(mean(strong)).toBeGreaterThan(mean(gentle));
+        expect(spread(2.4)).toBeGreaterThan(spread(0.15));
     });
 
     test('one second of playback looks the same at thirty frames as at sixty', () => {
-        const atSixty = run(moving, 1 / 60, 60).final;
-        const atThirty = run(moving, 1 / 30, 30).final;
+        // A gentler drag than the default, so the comparison measures the per-second formulation
+        // rather than how differently a coarse step samples a strong swirl.
+        const gentle: PersistenceSettings = { ...moving, motionScale: 0.5 };
+        const atSixty = run(gentle, 1 / 60, 60).final;
+        const atThirty = run(gentle, 1 / 30, 30).final;
 
         let difference = 0;
         for (let index = 0; index < atSixty.length; index += 1) {
@@ -316,7 +369,7 @@ describe('the composite recurrence produces motion', () => {
         let litAway = 0;
         for (let y = 0; y < SIDE; y += 1) {
             for (let x = 0; x < SIDE; x += 1) {
-                if (Math.abs(x - 4) > 2 && final[y * SIDE + x] > 0.01) {
+                if (Math.abs(x - 4) > 2 && final[y * SIDE + x] > 0.002) {
                     litAway += 1;
                 }
             }
