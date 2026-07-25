@@ -6,6 +6,11 @@ model = "flux-2-pro"
 # converts each one into a signed distance field, gradient field, and stencil, so what matters is a
 # clean continuous boundary and nothing else.
 #
+# The band-identity sections below decompose the Tsonu emblem
+# (frontend/src/assets/tsonu-small-knight.png) into reusable shapes: its T-trunk tree of life, its
+# visored knights at decks and keys, and its runic inscription ring. Using the emblem's own motifs
+# means a scene reads as Tsonu's rather than as generic fantasy stock.
+#
 # Generate with:
 #   cd ~/repos/illuminator
 #   with-cred -- node dist/cli.js generate ~/repos/tsonu-music/assets/visualizer-masks --and-process
@@ -64,6 +69,59 @@ type = "mask"
 prompt_inline = """
 A symmetrical inkblot broken into one large central mass and four smaller detached islands, evenly
 distributed and clearly separated from one another.
+"""
+
+# --- Synth and instrument forms: the emblem's decks and keys ---
+
+[[section]]
+id = "synth"
+title = "Synth"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "keyboard-octaves"
+file = "masks/keyboard-octaves.png"
+type = "mask"
+prompt_inline = """
+A piano keyboard seen straight on from above, several octaves wide, filling the frame as a solid band
+with the black keys reading as evenly spaced rectangular gaps cut into it.
+"""
+
+[[section.asset]]
+id = "modular-panel"
+file = "masks/modular-panel.png"
+type = "mask"
+prompt_inline = """
+A modular synthesiser front panel seen straight on, filling the frame as one solid rectangle with a
+regular grid of circular knob and jack openings cut out of it, all openings evenly spaced.
+"""
+
+[[section.asset]]
+id = "patch-cables"
+file = "masks/patch-cables.png"
+type = "mask"
+prompt_inline = """
+Several long smooth cables arcing across the frame in loose curves, each of uniform thickness,
+crossing over one another with generous open space between them.
+"""
+
+[[section.asset]]
+id = "turntable"
+file = "masks/turntable.png"
+type = "mask"
+prompt_inline = """
+A turntable seen straight on from above: one large circular platter with a small circular label opening
+at its centre, and a slender straight tonearm reaching in from the upper right edge.
+"""
+
+[[section.asset]]
+id = "oscillator-stack"
+file = "masks/oscillator-stack.png"
+type = "mask"
+prompt_inline = """
+Four horizontal waveform traces stacked evenly one above another, each a single continuous line of
+uniform thickness — a sine, a triangle, a square, and a sawtooth — with clear open space between them.
 """
 
 # --- Geometric and architectural masks ---
@@ -125,4 +183,151 @@ type = "mask"
 prompt_inline = """
 A breaking wave silhouette with a long curling crest and scattered droplets above it, reading as one
 continuous mass with a few clearly detached fragments.
+"""
+
+# --- Tree of life: the emblem's T-trunk tree ---
+
+[[section]]
+id = "tree-of-life"
+title = "Tree of life"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "tree-of-life-full"
+file = "masks/tree-of-life-full.png"
+type = "mask"
+prompt_inline = """
+A tree of life silhouette with a single broad vertical trunk, branches spreading symmetrically to
+either side across the upper half and roots mirroring them across the lower half, so the whole shape
+reads as one connected form with even open gaps between every limb.
+"""
+
+[[section.asset]]
+id = "tree-of-life-ringed"
+file = "masks/tree-of-life-ringed.png"
+type = "mask"
+prompt_inline = """
+A tree of life silhouette enclosed in a single unbroken circular ring, branches above and roots below
+reaching out to meet the ring, with clear open space between the limbs and the ring itself of even
+thickness all the way round.
+"""
+
+[[section.asset]]
+id = "tree-canopy"
+file = "masks/tree-canopy.png"
+type = "mask"
+prompt_inline = """
+A dense tree canopy silhouette of overlapping pointed leaves filling the upper two thirds of the
+frame, supported by a short thick trunk, with small gaps of open space scattered through the foliage.
+"""
+
+[[section.asset]]
+id = "root-network"
+file = "masks/root-network.png"
+type = "mask"
+prompt_inline = """
+A spreading root system silhouette descending from a single thick stem at the top of the frame,
+dividing repeatedly into finer tapering roots that reach evenly toward the lower corners.
+"""
+
+# --- Knights: the emblem's armoured figures ---
+
+[[section]]
+id = "knights"
+title = "Knights"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "knight-helm"
+file = "masks/knight-helm.png"
+type = "mask"
+prompt_inline = """
+A closed medieval great helm silhouette in three-quarter profile, rounded dome, narrow horizontal
+visor slit piercing the shape, and a plain gorget below, reading as one solid form with the visor slit
+as the only interior opening.
+"""
+
+[[section.asset]]
+id = "knight-bust"
+file = "masks/knight-bust.png"
+type = "mask"
+prompt_inline = """
+An armoured knight bust silhouette facing forward, visored helm, broad pauldrons, and upper
+breastplate, cropped at the chest, reading as one bold symmetrical mass.
+"""
+
+[[section.asset]]
+id = "knight-at-keys"
+file = "masks/knight-at-keys.png"
+type = "mask"
+prompt_inline = """
+An armoured knight silhouette in a visored helm seen from the side, arms reaching forward and down to
+a keyboard instrument in front of it, the knight and the instrument reading as two clearly separated
+shapes.
+"""
+
+[[section.asset]]
+id = "knight-pair"
+file = "masks/knight-pair.png"
+type = "mask"
+prompt_inline = """
+Two armoured knight silhouettes in visored helms facing one another symmetrically across the frame,
+each leaning inward with arms lowered, with a clear vertical gap of open space between them.
+"""
+
+# --- Runic and elvish symbology: the emblem's inscription ring ---
+
+[[section]]
+id = "runes"
+title = "Runic symbology"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "rune-ring"
+file = "masks/rune-ring.png"
+type = "mask"
+prompt_inline = """
+A circular band of invented angular runic glyphs, each built from straight strokes and small dots,
+evenly spaced around one unbroken ring near the edge of the frame, with the centre of the frame left
+completely empty.
+"""
+
+[[section.asset]]
+id = "rune-row"
+file = "masks/rune-row.png"
+type = "mask"
+prompt_inline = """
+A single horizontal line of invented angular runic glyphs across the middle of the frame, built from
+straight strokes and small dots, evenly spaced and clearly separated from one another, with empty
+space above and below.
+"""
+
+[[section.asset]]
+id = "elvish-script"
+file = "masks/elvish-script.png"
+type = "mask"
+prompt_inline = """
+A band of invented flowing calligraphic script across the frame, all curves and tapering strokes with
+long ascenders and descenders, reading as elegant fantasy lettering rather than any real alphabet.
+"""
+
+[[section.asset]]
+id = "elvish-interlace"
+file = "masks/elvish-interlace.png"
+type = "mask"
+prompt_inline = """
+A symmetrical interlaced knotwork panel of smooth continuous bands weaving over and under one another,
+filling the frame evenly with regular open spaces between the bands and uniform band thickness.
+"""
+
+[[section.asset]]
+id = "elvish-star"
+file = "masks/elvish-star.png"
+type = "mask"
+prompt_inline = """
+An eight-pointed star emblem with slender tapering points radiating from a small open centre, each
+point flanked by a single narrow leaf shape, the whole figure rotationally symmetrical.
 """
