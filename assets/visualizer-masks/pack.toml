@@ -27,8 +27,10 @@ aspect = "1:1"
 [style.stencil]
 name = "Stencil"
 artistic = "flat two-tone stencil, pure white shape on pure black field, no shading, no texture, no gradient, no outline, no perspective"
-composition = "single centered shape filling most of the frame with even margins, nothing cropped at the edges"
-medium_notes = "hard-edged vector-like silhouette, uniform fill, maximum contrast between shape and field"
+composition = "single centered shape floating free on an empty black field with even margins, nothing cropped at the edges, and absolutely no border, frame, box, panel edge or rectangular outline anywhere near the edges of the image"
+# A frame around the edge is the one failure that ruins a mask outright: the distance field reads it as
+# real geometry, so every scene using the mask shows a bright rectangle.
+medium_notes = "hard-edged vector-like silhouette, uniform fill, maximum contrast between shape and field, edges of the image left pure black"
 
 [palette.monochrome]
 name = "Monochrome"
@@ -57,9 +59,11 @@ outward from a heavier centre mass and two narrow gaps piercing the interior.
 id = "inkblot-tall"
 file = "masks/inkblot-tall.png"
 type = "mask"
+# The first attempt read as a goblet. Described with ragged blotted edges to keep it organic.
 prompt_inline = """
-A tall bilaterally symmetrical inkblot silhouette, narrow at the base and spreading into two broad
-upper wings, with a single hollow at its centre.
+A tall bilaterally symmetrical ink blot, narrow at the base and spreading into two broad upper lobes,
+with ragged blotted edges, several small holes pierced through the mass, and a few detached specks of
+spatter beside it.
 """
 
 [[section.asset]]
@@ -272,9 +276,13 @@ shapes.
 id = "knight-pair"
 file = "masks/knight-pair.png"
 type = "mask"
+# Two earlier attempts rendered this as a two-panel diptych with a white divider bar, which the distance
+# field reads as real geometry. Stated as one continuous scene with the split explicitly ruled out.
 prompt_inline = """
-Two armoured knight silhouettes in visored helms facing one another symmetrically across the frame,
-each leaning inward with arms lowered, with a clear vertical gap of open space between them.
+One single continuous illustration of two armoured knights in visored helms standing on the same
+ground, turned toward each other and leaning inward, shown full length with a gap of empty black
+between their bodies. It is one undivided picture: no diptych, no split screen, no panels, no dividing
+line or bar between them, and no border anywhere.
 """
 
 # --- Runic and elvish symbology: the emblem's inscription ring ---
@@ -309,9 +317,12 @@ space above and below.
 id = "elvish-script"
 file = "masks/elvish-script.png"
 type = "mask"
+# "Calligraphic script" alone produced legible blackletter Latin, which reads as a wordmark rather than
+# as a mask. Described as abstract strokes instead, with legibility explicitly ruled out.
 prompt_inline = """
-A band of invented flowing calligraphic script across the frame, all curves and tapering strokes with
-long ascenders and descenders, reading as elegant fantasy lettering rather than any real alphabet.
+Three stacked horizontal bands of flowing abstract calligraphic strokes, thick tapering curves with
+long looping ascenders and descenders joined into continuous runs. It must suggest an unfamiliar
+decorative script while containing no readable letters, words or characters from any real alphabet.
 """
 
 [[section.asset]]

@@ -36,3 +36,7 @@ pnpm-debug.log*
 
 # local paste captures
 .sulion-paste/
+
+# illuminator generation output; the processed masks that ship are copied into
+# frontend/public/masks/ and committed there. Raw renders are regenerable from the pack.
+assets/*/output/

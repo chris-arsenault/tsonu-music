@@ -1,4 +1,182 @@
 {
   "version": 1,
-  "masks": []
+  "masks": [
+    {
+      "id": "tree-of-life-full",
+      "file": "tree-of-life-full.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "tree", "organic", "symmetric"]
+    },
+    {
+      "id": "tree-of-life-ringed",
+      "file": "tree-of-life-ringed.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "tree", "organic", "symmetric", "enclosing"]
+    },
+    {
+      "id": "tree-canopy",
+      "file": "tree-canopy.png",
+      "interpretation": "luminance",
+      "tags": ["band", "tree", "organic", "dense"]
+    },
+    {
+      "id": "root-network",
+      "file": "root-network.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "tree", "organic", "branching"]
+    },
+    {
+      "id": "branch-network",
+      "file": "branch-network.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["tree", "organic", "branching", "dense"]
+    },
+    {
+      "id": "knight-helm",
+      "file": "knight-helm.png",
+      "interpretation": "luminance",
+      "tags": ["band", "knight", "figure", "solid"]
+    },
+    {
+      "id": "knight-bust",
+      "file": "knight-bust.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "knight", "figure", "solid", "symmetric"]
+    },
+    {
+      "id": "knight-at-keys",
+      "file": "knight-at-keys.png",
+      "interpretation": "luminance",
+      "tags": ["band", "knight", "figure", "instrument"]
+    },
+    {
+      "id": "knight-pair",
+      "file": "knight-pair.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "knight", "figure", "symmetric"]
+    },
+    {
+      "id": "rune-ring",
+      "file": "rune-ring.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "runic", "enclosing", "sparse"]
+    },
+    {
+      "id": "rune-row",
+      "file": "rune-row.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["band", "runic", "sparse"]
+    },
+    {
+      "id": "elvish-script",
+      "file": "elvish-script.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["band", "runic", "flowing", "sparse"]
+    },
+    {
+      "id": "elvish-interlace",
+      "file": "elvish-interlace.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tile": true,
+      "tags": ["band", "runic", "geometric", "lattice"]
+    },
+    {
+      "id": "elvish-star",
+      "file": "elvish-star.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["band", "runic", "geometric", "radial", "symmetric"]
+    },
+    {
+      "id": "keyboard-octaves",
+      "file": "keyboard-octaves.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["band", "instrument", "geometric", "grid"]
+    },
+    {
+      "id": "modular-panel",
+      "file": "modular-panel.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["band", "instrument", "geometric", "grid"]
+    },
+    {
+      "id": "patch-cables",
+      "file": "patch-cables.png",
+      "interpretation": "luminance",
+      "tags": ["band", "instrument", "flowing", "sparse"]
+    },
+    {
+      "id": "turntable",
+      "file": "turntable.png",
+      "interpretation": "luminance",
+      "tags": ["band", "instrument", "radial", "solid"]
+    },
+    {
+      "id": "oscillator-stack",
+      "file": "oscillator-stack.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["band", "instrument", "geometric", "sparse"]
+    },
+    {
+      "id": "inkblot-symmetric",
+      "file": "inkblot-symmetric.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["rorschach", "organic", "solid", "symmetric"]
+    },
+    {
+      "id": "inkblot-tall",
+      "file": "inkblot-tall.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["rorschach", "organic", "solid", "symmetric"]
+    },
+    {
+      "id": "inkblot-scattered",
+      "file": "inkblot-scattered.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["rorschach", "organic", "scattered", "symmetric"]
+    },
+    {
+      "id": "mandala-eightfold",
+      "file": "mandala-eightfold.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["geometric", "radial", "symmetric", "enclosing"]
+    },
+    {
+      "id": "lattice-hex",
+      "file": "lattice-hex.png",
+      "interpretation": "luminance",
+      "tile": true,
+      "tags": ["geometric", "lattice", "grid", "dense"]
+    },
+    {
+      "id": "arch-window",
+      "file": "arch-window.png",
+      "interpretation": "luminance",
+      "mirror": true,
+      "tags": ["architectural", "geometric", "symmetric"]
+    },
+    {
+      "id": "wave-crest",
+      "file": "wave-crest.png",
+      "interpretation": "luminance",
+      "tags": ["organic", "flowing", "scattered"]
+    }
+  ]
 }
