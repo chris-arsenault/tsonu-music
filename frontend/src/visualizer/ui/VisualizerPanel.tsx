@@ -6,13 +6,18 @@
  * never opens it pays no GPU or main-thread cost at all.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useMusicPlayer } from '../../music/MusicPlayerContext';
 import { collectFaults, describeFault, describeTier, selectTier, tierNeedsGpu } from '../core/fallback';
+import { createDiagnosticsControls, type DiagnosticsControls } from '../core/diagnostics';
 import { describeUnavailableReason } from '../host/capabilities';
 import { createSimpleWaveform, type SimpleWaveform } from '../host/simple-waveform';
+import { isVisualizerDebugEnabled } from './debug-flag';
 import { readPreference, writePreference } from './preference';
 import { useKernelReadout } from './use-kernel-readout';
+
+// Lazy, so the diagnostics UI is not carried by listeners who never open it.
+const DiagnosticsPanel = lazy(() => import('./DiagnosticsPanel'));
 
 export default function VisualizerPanel() {
     const player = useMusicPlayer();
@@ -20,9 +25,13 @@ export default function VisualizerPanel() {
     const [expanded, setExpanded] = useState(false);
     const [glCanvas, setGlCanvas] = useState<HTMLCanvasElement | null>(null);
     const [fallbackCanvas, setFallbackCanvas] = useState<HTMLCanvasElement | null>(null);
+    // `?viz-debug=1` opens it immediately; otherwise it is one click away inside the modal.
+    const [showDiagnostics, setShowDiagnostics] = useState(() => isVisualizerDebugEnabled());
+    const [controls, setControls] = useState<DiagnosticsControls>(createDiagnosticsControls);
 
-    // The kernel runs only while the modal is open.
-    const { availability, readout } = useKernelReadout(
+    // The kernel runs only while the modal is open. The diagnostics panel reports on this one rather
+    // than starting a second.
+    const { availability, readout, handle } = useKernelReadout(
         {
             getAudioElement: player.getAudioElement,
             trackId: player.selectedTrack?.trackId ?? null,
@@ -30,6 +39,7 @@ export default function VisualizerPanel() {
             canvas: glCanvas,
             getBufferHealth: player.getBufferHealth,
             artworkSrc: player.artworkSrc,
+            controls,
         },
         enabled && expanded,
     );
@@ -60,7 +70,8 @@ export default function VisualizerPanel() {
     const faults = readout
         ? collectFaults({
             webgl2Available: readout.renderFailure !== 'no-webgl2',
-            floatRenderTargets: readout.renderFailure !== 'no-float-render-targets',
+            floatRenderTargets: readout.gpu?.floatRenderTargets
+                ?? readout.renderFailure !== 'no-float-render-targets',
             contextLost: false,
             shaderErrorCount: readout.render?.problems.length ?? 0,
             analysisFlatlined: readout.flatlined,
@@ -69,7 +80,7 @@ export default function VisualizerPanel() {
             canvasWidth: glCanvas?.clientWidth ?? 1,
             canvasHeight: glCanvas?.clientHeight ?? 1,
             performanceSuspended: readout.performance?.profile.suspended ?? false,
-            prefersReducedMotion: false,
+            prefersReducedMotion: availability?.prefersReducedMotion ?? false,
         })
         : [];
 
@@ -143,17 +154,46 @@ export default function VisualizerPanel() {
 
                         <div className="visualizer-modal__status">
                             <span>{describeTier(tier)}</span>
+                            {readout?.performance ? (
+                                <span>
+                                    L{readout.performance.level} · {readout.frameTimeMs.toFixed(0)}ms
+                                </span>
+                            ) : null}
                             {faults.length > 0 ? <span>{describeFault(faults[0])}</span> : null}
                         </div>
 
-                        <button
-                            type="button"
-                            className="visualizer-modal__close"
-                            onClick={() => setExpanded(false)}
-                            aria-label="Close visualizer"
-                        >
-                            ×
-                        </button>
+                        <div className="visualizer-modal__chrome">
+                            <button
+                                type="button"
+                                className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
+                                onClick={() => setShowDiagnostics((open) => !open)}
+                                aria-pressed={showDiagnostics}
+                                title="Diagnostics"
+                            >
+                                Diagnostics
+                            </button>
+                            <button
+                                type="button"
+                                className="visualizer-modal__button"
+                                onClick={() => setExpanded(false)}
+                                aria-label="Close visualizer"
+                            >
+                                ×
+                            </button>
+                        </div>
+
+                        {showDiagnostics && readout ? (
+                            <Suspense fallback={null}>
+                                <DiagnosticsPanel
+                                    readout={readout}
+                                    faults={faults}
+                                    controls={controls}
+                                    onControls={setControls}
+                                    handle={handle}
+                                    onClose={() => setShowDiagnostics(false)}
+                                />
+                            </Suspense>
+                        ) : null}
                     </div>
                 </div>
             ) : null}

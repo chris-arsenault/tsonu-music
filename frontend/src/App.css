@@ -2006,18 +2006,17 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 /* -----------------------------------------------------------------
  * Visualizer diagnostics (?viz-debug=1)
  * ----------------------------------------------------------------- */
-.viz-debug {
-    position: fixed;
-    right: 0.75rem;
-    bottom: 8.5rem;
-    z-index: 200;
-    width: min(22rem, calc(100vw - 1.5rem));
-    max-height: 60vh;
-    overflow-y: auto;
+.viz-diagnostics {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    width: min(23rem, 100%);
     box-sizing: border-box;
-    padding: 0.75rem 0.85rem;
-    border: 1px solid var(--line);
-    border-radius: 0.5rem;
+    border-left: 1px solid var(--line);
     background: rgba(8, 8, 10, 0.94);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -2027,36 +2026,63 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     color: var(--text);
 }
 
-.viz-debug__header {
+.viz-diagnostics__header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    margin-bottom: 0.6rem;
-    padding-bottom: 0.5rem;
+    padding: 0.6rem 0.85rem;
     border-bottom: 1px solid var(--line);
 }
 
-.viz-debug__toggle {
-    display: inline-flex;
+.viz-diagnostics__header button {
+    border: 1px solid var(--line);
+    border-radius: 0.2rem;
+    background: transparent;
+    color: var(--text);
+    width: 1.5rem;
+    height: 1.5rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.viz-diagnostics__body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.7rem 0.85rem 1rem;
+}
+
+.viz-diagnostics__details {
+    margin: 0 0 0.6rem;
+}
+
+.viz-diagnostics__details summary {
+    cursor: pointer;
+    color: var(--line-strong);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.viz-diagnostics__details .viz-debug__plugins label {
+    display: flex;
     align-items: center;
     gap: 0.35rem;
     cursor: pointer;
-    white-space: nowrap;
 }
 
-.viz-debug__toggle input:disabled {
-    cursor: not-allowed;
+.viz-diagnostics__controls-heading {
+    margin: 0.8rem 0 0.4rem;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--line-strong);
 }
 
 .viz-debug__reasons {
     margin: 0 0 0.6rem;
     padding-left: 1.1rem;
-    color: var(--muted);
-}
-
-.viz-debug__note {
-    margin: 0.5rem 0 0;
     color: var(--muted);
 }
 
@@ -2112,16 +2138,6 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 .viz-debug__meter-value {
     text-align: right;
     font-variant-numeric: tabular-nums;
-}
-
-.viz-debug__canvas {
-    display: block;
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    margin: 0 0 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 0.35rem;
-    background: #000;
 }
 
 .viz-debug__plugins {
@@ -2243,23 +2259,36 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     color: var(--muted);
 }
 
-.visualizer-modal__close {
+.visualizer-modal__chrome {
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    width: 2rem;
+    z-index: 3;
+    display: flex;
+    gap: 0.4rem;
+}
+
+.visualizer-modal__button {
+    min-width: 2rem;
     height: 2rem;
+    padding: 0 0.6rem;
     border: 1px solid var(--line);
     border-radius: 0.3rem;
     background: rgba(0, 0, 0, 0.6);
     color: var(--text);
-    font-size: 1.1rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
     line-height: 1;
     cursor: pointer;
 }
 
-.visualizer-modal__close:hover {
+.visualizer-modal__button:hover {
     border-color: var(--line-strong);
+}
+
+.visualizer-modal__button.is-active {
+    border-color: var(--line-strong);
+    color: var(--line-strong);
 }
 
 @media (max-width: 900px) {
@@ -2282,25 +2311,6 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--line-strong);
-}
-
-.viz-debug__details {
-    margin: 0 0 0.6rem;
-}
-
-.viz-debug__details summary {
-    cursor: pointer;
-    color: var(--line-strong);
-    font-size: 0.68rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.viz-debug__details .viz-debug__plugins label {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    cursor: pointer;
 }
 
 .viz-debug__control {

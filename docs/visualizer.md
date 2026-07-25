@@ -13,7 +13,9 @@ A persisted toggle sits beside the player's seek bar with an artwork thumbnail. 
 off for a first-time visitor. The thumbnail shows release artwork and runs nothing; the kernel starts
 when the expanded modal opens and stops when it closes.
 
-Development diagnostics are reached with `?viz-debug=1`.
+Diagnostics are a **Diagnostics** button in the modal's top-right corner, opening a panel over the
+right-hand side. `?viz-debug=1` opens it immediately on load. It reports on the kernel the modal is
+running rather than starting one of its own.
 
 ## Layout
 
