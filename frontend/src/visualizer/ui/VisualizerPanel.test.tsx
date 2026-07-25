@@ -3,17 +3,19 @@ import { beforeEach, describe, expect, test, vi } from 'vitest';
 import VisualizerPanel from './VisualizerPanel';
 
 const useKernelReadoutMock = vi.hoisted(() => vi.fn(() => ({})));
+const musicPlayerMock = vi.hoisted(() => ({
+    artworkAltText: 'Release artwork',
+    artworkSrc: '/artwork.png',
+    getAudioElement: () => null,
+    getBufferHealth: () => ({}),
+    playbackEngine: 'pending',
+    prepareVisualizerPlayback: () => true,
+    selectedTrack: null,
+    visualizerSupported: true,
+}));
 
 vi.mock('../../music/MusicPlayerContext', () => ({
-    useMusicPlayer: () => ({
-        artworkAltText: 'Release artwork',
-        artworkSrc: '/artwork.png',
-        getAudioElement: () => null,
-        getBufferHealth: () => ({}),
-        playbackEngine: 'pending',
-        prepareVisualizerPlayback: () => true,
-        selectedTrack: null,
-    }),
+    useMusicPlayer: () => musicPlayerMock,
 }));
 
 vi.mock('./use-kernel-readout', () => ({
@@ -23,17 +25,18 @@ vi.mock('./use-kernel-readout', () => ({
 describe('VisualizerPanel', () => {
     beforeEach(() => {
         useKernelReadoutMock.mockReturnValue({});
+        musicPlayerMock.visualizerSupported = true;
     });
 
-    test('offers a clickable artwork thumbnail before the listener opts in', () => {
+    test('offers one text launcher without another artwork thumbnail or checkbox', () => {
         const html = renderToStaticMarkup(<VisualizerPanel />);
 
-        expect(html).toContain('aria-label="Open visualizer"');
-        expect(html).toContain('<img src="/artwork.png"');
-        expect(html).not.toContain('disabled=""');
+        expect(html).toContain('>Open visualizer</button>');
+        expect(html).not.toContain('<img');
+        expect(html).not.toContain('type="checkbox"');
     });
 
-    test('keeps the artwork control when the current engine is native HLS', () => {
+    test('keeps the launcher while eligible native HLS prepares its hls.js transition', () => {
         useKernelReadoutMock.mockReturnValue({
             availability: {
                 available: false,
@@ -44,9 +47,16 @@ describe('VisualizerPanel', () => {
 
         const html = renderToStaticMarkup(<VisualizerPanel />);
 
-        expect(html).toContain('aria-label="Open visualizer availability details"');
-        expect(html).toContain('<img src="/artwork.png"');
-        expect(html).toContain('This browser plays HLS natively');
-        expect(html).not.toContain('disabled=""');
+        expect(html).toContain('>Open visualizer</button>');
+        expect(html).not.toContain('<img');
+        expect(html).not.toContain('type="checkbox"');
+    });
+
+    test('does not offer the visualizer on an unsupported browser', () => {
+        musicPlayerMock.visualizerSupported = false;
+
+        const html = renderToStaticMarkup(<VisualizerPanel />);
+
+        expect(html).not.toContain('Open visualizer');
     });
 });

@@ -9,11 +9,10 @@ the code refer to it. Decisions are recorded in [adr/](./adr).
 
 ## Surface
 
-A persisted toggle sits beside the player's seek bar with an artwork thumbnail. The visualizer is
-off for a first-time visitor. The thumbnail shows release artwork and runs nothing; the kernel starts
-when the expanded modal opens and stops when it closes. The artwork control remains present when the
-current playback engine cannot be analysed, so the limitation is explained instead of replacing the
-control with an unlabeled status dot.
+An **Open visualizer** button sits beside the player's seek bar. The player's existing left-hand
+artwork remains the only album thumbnail. Opening the modal starts the kernel; closing it stops the
+kernel. Chromium and Firefox show the button because they can switch to the required hls.js playback
+path. Safari remains on native HLS and does not offer the visualizer.
 
 Diagnostics are a **Diagnostics** button in the modal's top-right corner, opening a panel over the
 right-hand side. `?viz-debug=1` opens it immediately on load. It reports on the kernel the modal is

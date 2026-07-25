@@ -1,9 +1,8 @@
 /**
  * The visualizer's surface in the player.
  *
- * A persisted toggle, a thumbnail beside the seek bar, and a modal. The thumbnail shows release artwork
- * and runs nothing: the kernel starts when the modal opens and stops when it closes, so a listener who
- * never opens it pays no GPU or main-thread cost at all.
+ * One launcher beside the seek bar and a modal. The kernel starts when the modal opens and stops when
+ * it closes, so a listener who never opens it pays no GPU or main-thread cost at all.
  */
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
@@ -14,7 +13,6 @@ import { createDiagnosticsControls, type DiagnosticsControls } from '../core/dia
 import { describeUnavailableReason } from '../host/capabilities';
 import { createSimpleWaveform, type SimpleWaveform } from '../host/simple-waveform';
 import { isVisualizerDebugEnabled } from './debug-flag';
-import { readPreference, writePreference } from './preference';
 import { useKernelReadout } from './use-kernel-readout';
 
 // Lazy, so the diagnostics UI is not carried by listeners who never open it.
@@ -22,7 +20,6 @@ const DiagnosticsPanel = lazy(() => import('./DiagnosticsPanel'));
 
 export default function VisualizerPanel() {
     const player = useMusicPlayer();
-    const [enabled, setEnabled] = useState(() => readPreference());
     const [expanded, setExpanded] = useState(false);
     const [glCanvas, setGlCanvas] = useState<HTMLCanvasElement | null>(null);
     const [fallbackCanvas, setFallbackCanvas] = useState<HTMLCanvasElement | null>(null);
@@ -43,26 +40,17 @@ export default function VisualizerPanel() {
             artworkSrc: player.artworkSrc,
             controls,
         },
-        enabled && expanded,
+        expanded,
     );
     const unavailableMessage = availability && !availability.available
         ? availability.reasons.map(describeUnavailableReason).join(' ')
         : undefined;
 
-    const toggle = useCallback((next: boolean) => {
-        setEnabled(next);
-        writePreference(next);
-        if (!next) {
-            setExpanded(false);
-        }
-    }, []);
-
     const openVisualizer = useCallback(() => {
         if (player.prepareVisualizerPlayback()) {
-            toggle(true);
+            setExpanded(true);
         }
-        setExpanded(true);
-    }, [player, toggle]);
+    }, [player]);
 
     useEffect(() => {
         if (!expanded) {
@@ -97,8 +85,8 @@ export default function VisualizerPanel() {
         : [];
 
     const tier = selectTier(faults);
-    const showFallbackCanvas = expanded && enabled && readout !== undefined && tier === 'waveform';
-    const showArtworkOnly = expanded && enabled && (tier === 'artwork' || tier === 'empty');
+    const showFallbackCanvas = expanded && readout !== undefined && tier === 'waveform';
+    const showArtworkOnly = expanded && (tier === 'artwork' || tier === 'empty');
 
     useFallbackWaveform(showFallbackCanvas ? fallbackCanvas : null, readout?.bus.waveform);
 
@@ -188,30 +176,15 @@ export default function VisualizerPanel() {
 
     return (
         <>
-            <div className="bottom-player__visualizer" title={unavailableMessage}>
-                {unavailableMessage ? (
-                    <span className="bottom-player__visualizer-unavailable" aria-hidden="true" />
-                ) : (
-                    <label className="bottom-player__visualizer-toggle" title="Show visualizer">
-                        <input
-                            type="checkbox"
-                            checked={enabled}
-                            onChange={(event) => toggle(event.currentTarget.checked)}
-                        />
-                        <span className="sr-only">Enable visualizer</span>
-                    </label>
-                )}
-
+            {player.visualizerSupported ? (
                 <button
                     type="button"
-                    className="bottom-player__visualizer-thumb"
+                    className="bottom-player__visualizer"
                     onClick={openVisualizer}
-                    aria-label={unavailableMessage ? 'Open visualizer availability details' : 'Open visualizer'}
-                    title={unavailableMessage ?? 'Open visualizer'}
                 >
-                    <img src={player.artworkSrc} alt="" />
+                    Open visualizer
                 </button>
-            </div>
+            ) : null}
 
             {modal && typeof document !== 'undefined' ? createPortal(modal, document.body) : modal}
         </>

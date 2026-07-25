@@ -4,11 +4,9 @@ The React surface in the public player, plus the development diagnostics overlay
 
 - **Availability gate** — resolves whether the visualizer is offered at all, from the playback path
   in use, the WebGL2 capability probe, and reduced-motion preference.
-- **Toggle** — a persisted opt-in control in the player. The visualizer is off for a first-time
-  visitor, and no audio tap exists until it is enabled.
-- **Thumbnail** — sits beside the player timeline. It presents release artwork while idle and does
-  not run the kernel.
-- **Modal** — expanded presentation. The kernel starts when it opens and stops when it closes.
+- **Launcher** — one **Open visualizer** text button in the player, with no second artwork thumbnail
+  or persisted enable state.
+- **Modal** — expanded presentation. Opening it starts the kernel and closing it stops the kernel.
 - **Fallback tiers** — the same slot renders a reduced plugin graph, a simple waveform, static
   release artwork, or an empty background, depending on what the runtime can support.
 - **Diagnostics overlay** — reached with `?viz-debug=1`. Exposes playback state and generation,

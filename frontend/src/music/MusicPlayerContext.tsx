@@ -85,6 +85,8 @@ export interface MusicPlayerContextValue {
     canGoForward: boolean;
     /** The engine currently feeding the audio element. The visualizer gates its irreversible tap on this. */
     playbackEngine: PlaybackEngine;
+    /** Whether this browser can switch to the hls.js path required by the visualizer. */
+    visualizerSupported: boolean;
     /**
      * The single audio element, for the visualizer's analysis tap. Read at call time rather than
      * exposed as state, since the element is mounted once and never remounted.
@@ -962,6 +964,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         canGoBack,
         canGoForward,
         playbackEngine,
+        visualizerSupported: supportsHlsJsVisualizer(browserFamily),
         getAudioElement: () => audioRef.current,
         getBufferHealth,
         prepareVisualizerPlayback,
