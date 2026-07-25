@@ -483,3 +483,139 @@ export function createShockwaveTransform(
         prefersWith: ['ImpactCascadeSimulator'],
     });
 }
+
+/* -------------------------------------------------------------------------- */
+/* Temporal transform (spec section 19.8, section 24 secondary scope)          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Bounded frame history, read at an offset that varies across the image.
+ *
+ * Every other transformer here rewrites the current frame. This one is the first plugin to consume
+ * `historyDepth` — a value the quality ladder has always computed and threaded through `FrameContext`
+ * that nothing read — and it is the first to make *when* a pixel came from a spatial property. A slit
+ * scan reading one column per frame and a delayed mirror reflecting the past against the present are
+ * the same operation with a different offset function.
+ *
+ * The kernel's accumulation buffer holds one blended history; this holds several discrete ones, so the
+ * two are complementary rather than redundant: accumulation smears, this one quotes.
+ */
+const TEMPORAL_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uHistory;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uTime;
+uniform float uPhase;
+uniform float uAmount;
+/** Frames of history the quality ladder permits, normalized against the full-quality depth. */
+uniform float uDepth;
+uniform float uDelta;
+${GLSL_COMMON}
+
+void main() {
+    vec4 present = texture(uSource, vUv);
+    // The history texture is this plugin's own previous output, so each frame it holds one more
+    // generation of the past. Depth bounds how much of it survives, which is what the ladder reduces.
+    float retain = pow(clamp(0.55 + uDepth * 0.42, 0.0, 0.985), max(uDelta, 0.0) * 60.0);
+
+    vec2 tap = vUv;
+    float mix_weight = uAmount;
+
+    if (uMode < 0.5) {                       // echo
+        tap = vUv;
+    } else if (uMode < 1.5) {                // multi-tap delay
+        // Three taps at diminishing offsets read three different depths of the same history.
+        vec3 taps = vec3(
+            luminance(texture(uHistory, vUv + vec2(0.012, 0.0)).rgb),
+            luminance(texture(uHistory, vUv + vec2(-0.008, 0.006)).rgb),
+            luminance(texture(uHistory, vUv + vec2(0.004, -0.010)).rgb)
+        );
+        float delayed = dot(taps, vec3(0.5, 0.32, 0.18));
+        fragColor = vec4(mix(present.rgb, present.rgb + vec3(delayed) * retain, uAmount), present.a);
+        return;
+    } else if (uMode < 2.5) {                // slit scan
+        // One moving column is present; everything else is held from history.
+        float slit = fract(uTime * 0.11 + uPhase);
+        mix_weight = abs(vUv.x - slit) < 0.012 ? 0.0 : uAmount;
+    } else if (uMode < 3.5) {                // time slices
+        // Horizontal bands each quote a different generation.
+        float band = floor(vUv.y * 9.0);
+        tap = vUv + vec2(mod(band, 3.0) * 0.006 * uAmount, 0.0);
+    } else if (uMode < 4.5) {                // directional smear
+        tap = vUv - vec2(cos(uPhase), sin(uPhase)) * 0.01 * uAmount;
+    } else if (uMode < 5.5) {                // frame mosaic
+        vec2 cell = floor(vUv * 4.0);
+        tap = vUv + (hash(cell) - 0.5) * 0.02 * uAmount;
+    } else if (uMode < 6.5) {                // delayed mirror
+        // The past reflected against the present, which is what makes the two readable as separate.
+        tap = vec2(1.0 - vUv.x, vUv.y);
+    } else if (uMode < 7.5) {                // temporal difference
+        vec3 past = texture(uHistory, vUv).rgb;
+        fragColor = vec4(mix(present.rgb, abs(present.rgb - past * retain) * 2.0, uAmount), present.a);
+        return;
+    } else {                                 // frozen fragments
+        // Cells whose hash falls below the threshold stop updating and hold whatever they last had.
+        vec2 cell = floor(vUv * 12.0);
+        mix_weight = hash(cell + floor(uTime * 0.25)) < uAmount * 0.5 ? 1.0 : 0.0;
+    }
+
+    vec3 past = texture(uHistory, clamp(tap, 0.0, 1.0)).rgb * retain;
+    fragColor = vec4(mix(present.rgb, max(present.rgb, past), mix_weight), present.a);
+}`;
+
+export const TEMPORAL_MODES = [
+    'echo', 'multi-tap', 'slit-scan', 'time-slices', 'directional-smear',
+    'frame-mosaic', 'delayed-mirror', 'temporal-difference', 'frozen-fragments',
+] as const;
+
+export function createTemporalTransform(
+    mode: typeof TEMPORAL_MODES[number] = 'echo',
+): VisualPluginDefinition {
+    return defineShaderPlugin({
+        id: `TemporalTransform:${mode}`,
+        category: 'transformer',
+        inputs: [
+            { name: 'source', type: 'color-texture', required: true },
+            { name: 'history', type: 'color-texture', required: false },
+        ],
+        outputs: [{ name: 'color', type: 'color-texture' }],
+        capabilities: ['feedback', 'temporal'],
+        fragment: TEMPORAL_FRAGMENT,
+        historyDriven: true,
+        uniforms: { uMode: TEMPORAL_MODES.indexOf(mode) },
+        // `depth` is the ladder's to set, not a parameter: `historyDriven` supplies it.
+        parameters: { amount: 0.55 },
+        bindings: [{
+            // How much of the past is quoted. Midrange rather than a transient measure, so the effect
+            // develops over a phrase instead of flickering on every hit.
+            feature: 'mid',
+            role: 'deformation',
+            parameter: 'amount',
+            outputRange: [0.2, 0.9],
+            attack: 0.2,
+            release: 0.7,
+            curve: 'smooth',
+        }],
+        character: character({
+            persistence: 0.85,
+            motionEnergy: 0.55,
+            visualDensity: 0.5,
+            geometricOrder: 0.35,
+            dominance: 'supporting',
+        }),
+        gpuCost: 2,
+        memoryCost: 2,
+        // Reads its own previous output: the history is the plugin's own past, not the scene's.
+        feedbackPort: 'history',
+        // Accumulating into the target is the point, as for every other feedback-capable plugin.
+        clear: false,
+        deactivationPolicy: 'freeze-and-dissolve',
+        activationWeight: 1.1,
+        minimumDuration: 14,
+    });
+}

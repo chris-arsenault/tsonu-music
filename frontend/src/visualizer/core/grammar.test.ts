@@ -186,9 +186,26 @@ describe('candidate filtering', () => {
     });
 
     test('a candidate exceeding a category maximum is rejected', () => {
-        const current = [plugin('t1', 'transformer'), plugin('t2', 'transformer')];
+        // Organic flow allows up to three transformers, so the fourth is the one that exceeds it.
+        // Adding the third used to be rejected too, but for an unrelated shortfall — the partial set
+        // had no visible source yet — which is not the candidate's fault and no longer counts.
+        const current = [
+            plugin('t1', 'transformer'),
+            plugin('t2', 'transformer'),
+            plugin('t3', 'transformer'),
+        ];
 
-        expect(wouldViolate(current, plugin('t3', 'transformer'), ORGANIC_FLOW)).toBe(true);
+        expect(wouldViolate(current.slice(0, 2), plugin('t3', 'transformer'), ORGANIC_FLOW)).toBe(false);
+        expect(wouldViolate(current, plugin('t4', 'transformer'), ORGANIC_FLOW)).toBe(true);
+    });
+
+    test('a shortfall the partial set has not filled yet is not blamed on the candidate', () => {
+        // A scene under construction is under-filled by definition. Rejecting every candidate until
+        // the shortfall is gone would prevent it from ever being filled.
+        const empty: VisualPluginDefinition[] = [];
+
+        expect(wouldViolate(empty, plugin('fld', 'field'), ORGANIC_FLOW)).toBe(false);
+        expect(wouldViolate(empty, plugin('post', 'postprocess'), ORGANIC_FLOW)).toBe(false);
     });
 });
 

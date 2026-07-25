@@ -195,6 +195,23 @@ export function applyReducedMotion(profile: QualityProfile): QualityProfile {
     };
 }
 
+/** History depth at the top of the ladder, so a plugin can express its own depth as a fraction. */
+export const FULL_HISTORY_DEPTH = 8;
+
+/**
+ * The ladder's permitted history depth as a fraction of full depth.
+ *
+ * A plugin keeping frames needs to know how much of its history it may still trust when the
+ * controller steps down, without hard-coding what the top of the ladder happens to allow.
+ */
+export function historyDepthFraction(historyDepth: number | undefined): number {
+    if (historyDepth === undefined) {
+        return 1;
+    }
+
+    return Math.max(0, Math.min(1, historyDepth / FULL_HISTORY_DEPTH));
+}
+
 /** Page hidden: nothing renders (spec section 21.3). */
 export function suspendedProfile(): QualityProfile {
     return { ...QUALITY_LADDER[QUALITY_LADDER.length - 1], suspended: true };

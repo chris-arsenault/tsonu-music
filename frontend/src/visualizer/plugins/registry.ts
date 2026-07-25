@@ -67,11 +67,13 @@ import {
     createEdgeContourTransform,
     createShockwaveTransform,
     createSymmetryTransform,
+    createTemporalTransform,
     createTilingTransform,
     DOMAIN_WARP_MODES,
     EDGE_CONTOUR_MODES,
     SHOCKWAVE_MODES,
     SYMMETRY_MODES,
+    TEMPORAL_MODES,
     TILING_MODES,
 } from './transformers/transforms';
 import {
@@ -160,6 +162,8 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
         ...TILING_MODES.map(createTilingTransform),
         ...EDGE_CONTOUR_MODES.map(createEdgeContourTransform),
         ...SHOCKWAVE_MODES.map(createShockwaveTransform),
+        // Spec section 24 secondary scope, and the first consumer of the ladder's history depth.
+        ...TEMPORAL_MODES.map(createTemporalTransform),
     ];
 }
 

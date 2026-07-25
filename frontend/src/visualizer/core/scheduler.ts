@@ -10,6 +10,7 @@ import {
     declaresCapability,
     grammarViolations,
     isVisibleSource,
+    producesMotion,
     wouldViolate,
     type SceneGrammar,
 } from './grammar';
@@ -366,6 +367,25 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         }
 
         chosen.push(picked);
+    }
+
+    // A family asking to be dragged needs something to be dragged by. The field category alone does
+    // not guarantee it: `ParticleEmitter` sits there and produces a spawn buffer, so a scene could
+    // satisfy its field count and still leave the compositor's motion bus with nothing to sum.
+    if (grammar.requireMotionSource && !chosen.some(producesMotion)) {
+        const candidates = eligible.filter((definition) =>
+            producesMotion(definition)
+            && !conflictsWith(chosen, definition)
+            && !wouldViolate(chosen, definition, grammar)
+            && inputsSatisfiable(chosen, definition, assetTypes));
+
+        const picked = rng.weighted(
+            candidates,
+            (definition) => interactionWeight(definition, chosen, context),
+        );
+        if (picked) {
+            chosen.push(picked);
+        }
     }
 
     // A scene requiring a visible source that has none is unusable, so try once to add one.

@@ -3,14 +3,19 @@ import {
     buildFirstViableScene,
     buildScene,
     contributingPluginIds,
+    materialBranchCount,
+    structuralViolations,
     variedThemeOrder,
     type SceneBuildContext,
 } from './scene-builder';
 import { profileFor, QUALITY_LADDER } from './performance';
+import { isMotionSource } from './persistence';
 import { peakConcentration } from './audio-mapping';
 import { allDefinitions } from '../plugins/registry';
 import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';
-import { assetResourceId } from './wiring';
+import { assetResourceId, wireScene } from './wiring';
+import { ORGANIC_FLOW, REDUCED_GRAMMAR } from './grammar';
+import type { PluginCategory, PortType, VisualPluginDefinition } from './plugin';
 
 const FULL_CATALOG = allDefinitions();
 
@@ -85,8 +90,13 @@ describe('scene building', () => {
                 ...Object.values(node.previous),
             ]),
         );
+        // A spatial field needs no consumer in the graph: the compositor sums every one of them into
+        // the motion field that drags the accumulation, so an unread vector field is contributing
+        // rather than orphaned. Simulation state still has to be read by a view.
         const orphanState = result.scene.graph.resources.filter((resource) =>
-            resource.type !== 'color-texture' && !consumed.has(resource.id));
+            resource.type !== 'color-texture'
+            && !isMotionSource(resource.type)
+            && !consumed.has(resource.id));
 
         expect(orphanState).toEqual([]);
     });
@@ -250,5 +260,81 @@ describe('theme fallback', () => {
         );
 
         expect(firstChoices.size).toBe(THEMES.length);
+    });
+});
+
+/**
+ * Category counts describe what a scene contains; these describe how it is joined.
+ *
+ * A scene could satisfy every count and still be a bag of parts: a field slot filled by a plugin that
+ * produces no field, or a compositor reading the same branch on both inputs.
+ */
+describe('structural predicates', () => {
+    const definition = (
+        id: string,
+        category: PluginCategory,
+        outputs: { name: string; type: PortType }[],
+    ): VisualPluginDefinition => ({
+        id,
+        version: 1,
+        category,
+        inputs: [],
+        outputs: outputs.map((port) => ({ ...port, required: false })),
+        capabilities: [],
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+        character: {
+            visualDensity: 0.5, motionEnergy: 0.5, geometricOrder: 0.5,
+            recognizability: 0.5, persistence: 0.5, brightness: 0.5, dominance: 'either',
+        },
+        activationRules: { activationWeight: 1 },
+        create: () => ({
+            initialize: () => undefined,
+            activate: () => undefined,
+            update: () => undefined,
+            render: () => [],
+            deactivate: () => undefined,
+            destroy: () => undefined,
+        }),
+    });
+
+    const colour = (id: string, category: PluginCategory = 'source') =>
+        definition(id, category, [{ name: 'color', type: 'color-texture' }]);
+
+    test('a post-processing stage transforms a branch rather than being one', () => {
+        const scene = wireScene([colour('a'), colour('post', 'postprocess')]);
+
+        expect(materialBranchCount(scene)).toBe(1);
+    });
+
+    test('two producers are two branches', () => {
+        expect(materialBranchCount(wireScene([colour('a'), colour('b')]))).toBe(2);
+    });
+
+    test('a scene below the branch minimum is rejected', () => {
+        const scene = wireScene([colour('a'), colour('post', 'postprocess')]);
+
+        expect(structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind))
+            .toEqual(['too-few-branches']);
+        expect(structuralViolations(scene, REDUCED_GRAMMAR)).toEqual([]);
+    });
+
+    test('a spatial field contributes even when nothing in the graph reads it', () => {
+        // The compositor sums every field into the motion bus, so judging contribution by colour paths
+        // alone would prune exactly the plugins that move the picture.
+        const scene = wireScene([
+            colour('src'),
+            definition('fld', 'field', [{ name: 'flow', type: 'vector-field' }]),
+        ]);
+
+        expect(contributingPluginIds(scene)).toContain('fld');
+    });
+
+    test('a field producing no spatial output is still pruned when nothing reads it', () => {
+        const scene = wireScene([
+            colour('src'),
+            definition('spawn', 'field', [{ name: 'spawn', type: 'particle-buffer' }]),
+        ]);
+
+        expect(contributingPluginIds(scene)).not.toContain('spawn');
     });
 });

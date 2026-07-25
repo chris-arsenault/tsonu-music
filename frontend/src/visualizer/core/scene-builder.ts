@@ -8,7 +8,13 @@
 
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
 import { compileGraph, type CompiledGraph } from './graph';
-import { grammarViolations, REDUCED_GRAMMAR } from './grammar';
+import {
+    grammarViolations,
+    REDUCED_GRAMMAR,
+    type GrammarViolation,
+    type SceneGrammar,
+} from './grammar';
+import { isMotionSource } from './persistence';
 import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
 import { createRng } from './random';
@@ -163,6 +169,20 @@ function buildSceneAttempt(
         wired = wireScene(plugins, context.assetResources ?? []);
     }
 
+    // How the scene is joined, which counts alone cannot express. Checked after the prune above, so a
+    // scene that only reaches two branches by keeping a disconnected one is rejected rather than
+    // counted.
+    const structural = structuralViolations(wired, effectiveTheme.grammar);
+    if (structural.length > 0) {
+        return {
+            ok: false,
+            failure: {
+                reason: 'grammar',
+                detail: structural.map((violation) => violation.detail).join('; '),
+            },
+        };
+    }
+
     const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
     if (!compiled.ok) {
         return { ok: false, failure: { reason: 'compile', detail: compiled.errors.join('; ') } };
@@ -185,10 +205,56 @@ function buildSceneAttempt(
 }
 
 /**
- * Plugin ids with a path to a terminal colour output.
+ * Structural checks the grammar can only make once the scene is wired.
+ *
+ * Category counts describe what a scene contains; these describe how it is joined. A compositor
+ * reading one branch twice satisfies every count and composes nothing, which is the difference
+ * between a scene that reads as one composition and a scene that merely has the right parts.
+ */
+export function structuralViolations(
+    scene: WiredScene,
+    grammar: SceneGrammar,
+): GrammarViolation[] {
+    const branches = materialBranchCount(scene);
+    if (branches < grammar.minimumMaterialBranches) {
+        return [{
+            kind: 'too-few-branches',
+            detail: `${branches} material branches below ${grammar.minimumMaterialBranches}`,
+        }];
+    }
+
+    return [];
+}
+
+/**
+ * Distinct colour producers that reach the screen, either terminally or through a compositor.
+ *
+ * Counted by producing instance rather than by edge, so a mixer wired to the same texture on both
+ * inputs counts once — which is exactly the case this exists to catch.
+ */
+export function materialBranchCount(scene: WiredScene): number {
+    const producers = new Set<string>();
+
+    for (const node of scene.nodes) {
+        const producesColour = node.definition.outputs.some((port) => port.type === 'color-texture');
+        // A post-processing stage transforms one branch rather than being one.
+        if (producesColour && node.definition.category !== 'postprocess') {
+            producers.add(node.instanceId);
+        }
+    }
+
+    return producers.size;
+}
+
+/**
+ * Plugin ids that reach the screen, either through a terminal colour output or through the motion bus.
  *
  * Feedback edges are dependencies but do not make an output intermediate: a feedback texture may be
  * both read next frame and presented now. Forward consumers do make an output intermediate.
+ *
+ * A spatial field is a contributor whether or not anything in the graph reads it, because the
+ * compositor sums every one of them into the motion field that drags the accumulation. Judging
+ * contribution by colour paths alone would prune exactly the fields that move the picture.
  */
 export function contributingPluginIds(scene: WiredScene): Set<string> {
     const forwardConsumed = new Set(
@@ -202,7 +268,9 @@ export function contributingPluginIds(scene: WiredScene): Set<string> {
         const hasTerminalColour = node.definition.outputs.some((port) =>
             port.type === 'color-texture'
             && !forwardConsumed.has(`${node.instanceId}.${port.name}`));
-        if (hasTerminalColour) {
+        const feedsMotion = node.definition.outputs.some((port) => isMotionSource(port.type));
+
+        if (hasTerminalColour || feedsMotion) {
             contributingInstances.add(node.instanceId);
         }
     }

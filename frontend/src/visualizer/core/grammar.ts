@@ -6,6 +6,7 @@
  * counts and structural limits so a scene reads as one composition.
  */
 
+import { isMotionSource } from './persistence';
 import type { PluginCategory, VisualPluginDefinition } from './plugin';
 
 export type CountRange = [number, number];
@@ -33,6 +34,22 @@ export interface SceneGrammar {
     maximumSymmetryTransforms: number;
 
     requireVisibleSource: boolean;
+    /**
+     * The scene must produce at least one spatial field.
+     *
+     * Category counts alone cannot express this: `fieldCount` is satisfied by any plugin in the field
+     * category, and `ParticleEmitter` sits there while producing a spawn buffer rather than a
+     * displacement. A scene that filled its field slot that way accumulated and decayed but was never
+     * dragged, because the compositor's motion bus had nothing to sum.
+     */
+    requireMotionSource: boolean;
+    /**
+     * Distinct material producers that must feed one compositor.
+     *
+     * Checked after wiring rather than here, since it is a question about edges. A scene with a
+     * compositor reading one branch twice is not composing anything.
+     */
+    minimumMaterialBranches: number;
 }
 
 /** GPU cost at or above which a plugin counts against the high-cost limit. */
@@ -56,7 +73,9 @@ export interface GrammarViolation {
         | 'too-many-feedback'
         | 'too-few-feedback'
         | 'too-many-symmetry'
-        | 'no-visible-source';
+        | 'no-visible-source'
+        | 'no-motion-source'
+        | 'too-few-branches';
     detail: string;
 }
 
@@ -158,7 +177,16 @@ export function grammarViolations(
         violations.push({ kind: 'no-visible-source', detail: 'no source produces visible material' });
     }
 
+    if (grammar.requireMotionSource && !definitions.some(producesMotion)) {
+        violations.push({ kind: 'no-motion-source', detail: 'no plugin produces a spatial field' });
+    }
+
     return violations;
+}
+
+/** Produces a field the compositor can drag the accumulated image through. */
+export function producesMotion(definition: VisualPluginDefinition): boolean {
+    return definition.outputs.some((port) => isMotionSource(port.type));
 }
 
 export function satisfiesGrammar(
@@ -190,8 +218,15 @@ export function wouldViolate(
 
     // Under-count violations are not the candidate's fault: a partially built scene is under-filled
     // by definition, and adding a plugin never causes that.
-    return violations.some((violation) =>
-        violation.kind !== 'category-under' && violation.kind !== 'too-few-feedback');
+    const shortfalls: GrammarViolation['kind'][] = [
+        'category-under',
+        'too-few-feedback',
+        'no-visible-source',
+        'no-motion-source',
+        'too-few-branches',
+    ];
+
+    return violations.some((violation) => !shortfalls.includes(violation.kind));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -211,6 +246,8 @@ export const ORGANIC_FLOW: SceneGrammar = {
     minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
+    requireMotionSource: true,
+    minimumMaterialBranches: 2,
 };
 
 export const GEOMETRIC_SIGNAL: SceneGrammar = {
@@ -227,6 +264,8 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     minimumFeedbackLoops: 0,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
+    requireMotionSource: false,
+    minimumMaterialBranches: 2,
 };
 
 export const COLLISION_ENERGY: SceneGrammar = {
@@ -242,6 +281,8 @@ export const COLLISION_ENERGY: SceneGrammar = {
     minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: false,
+    requireMotionSource: true,
+    minimumMaterialBranches: 2,
 };
 
 export const IMAGE_DREAM: SceneGrammar = {
@@ -257,6 +298,8 @@ export const IMAGE_DREAM: SceneGrammar = {
     minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
+    requireMotionSource: true,
+    minimumMaterialBranches: 2,
 };
 
 export const VISUAL_FAMILIES: Readonly<Record<string, SceneGrammar>> = {
@@ -280,4 +323,6 @@ export const REDUCED_GRAMMAR: SceneGrammar = {
     minimumFeedbackLoops: 0,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: true,
+    requireMotionSource: false,
+    minimumMaterialBranches: 1,
 };

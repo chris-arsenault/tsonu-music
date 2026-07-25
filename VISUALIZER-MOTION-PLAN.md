@@ -206,9 +206,34 @@ which M2 made a motion source.
 steering, physics surface, containment, two-mask set operations, and the motion bus — each asserted to
 wire and compile, plus that every mask field responds to audio.
 
-### M4 — Grammar and catalog depth
+### M4 — Grammar and catalog depth — **done**
 
-C5, then extension toward §24's secondary scope now that fields and events carry load.
+C5, plus one entry from §24's secondary scope.
+
+The grammar now constrains signal flow as well as counts. `requireMotionSource` closes the gap M2
+left: a family that names a spatial field must actually produce one, since the field category alone
+does not guarantee it. `minimumMaterialBranches` is checked after wiring, because whether a
+compositor reads one branch twice is a question about edges. Both are repaired in the scheduler the
+way `requireVisibleSource` already was. The three families that ask to be dragged went from about
+four scenes in five to all of them; `geometric-signal` deliberately stays undragged, since §15 gives
+it no field.
+
+`contributingPluginIds` also stopped pruning the plugins that move the picture. It judged
+contribution by paths to a terminal colour output, which was right before M2 and wrong after: a
+spatial field with no graph consumer is consumed by the compositor's motion bus.
+
+`TemporalTransform` is the catalog addition — all nine modes §19.8 lists, and the first consumer of
+`historyDepth`, a value the quality ladder has always computed and threaded through `FrameContext`
+that nothing read. The ladder's history rung now changes what a plugin does rather than reducing a
+number nobody consumed. The kernel's accumulation and this are complementary: accumulation smears,
+this quotes.
+
+The rest of §24's secondary scope is deliberately not attempted. Depth parallax, GLB parallax, and
+point cloud need asset types the pipeline does not carry — depth images and models. Boid swarm and
+spring mesh are simulator work that would compete for the single simulator slot most families allow,
+and belong with a look at how the particle stack occupies its categories. Fractal flame needs
+iterated point accumulation the current pass model does not express well. All remain in
+[backlog.md](./docs/backlog.md).
 
 ## Spec deltas
 

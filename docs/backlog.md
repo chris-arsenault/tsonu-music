@@ -40,13 +40,14 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 
 ## Visualizer scene structure
 
-- Constrain scene grammar by signal flow rather than category counts alone: every scene requires at
-  least one spatial field reaching a consumer, and at least two material branches meeting at a
-  compositor. This closes the case where `ParticleEmitter` fills a family's field slot with a spawn
-  buffer, leaving the scene accumulating but never dragged.
 - Verify on real hardware that the composite stage renders what `core/persistence.ts` computes. The
   recurrence is unit-tested against a grid in the Node environment; that the GPU path is wired to the
   same numbers is not observable there.
+- Normalize selection weight across a plugin family's variants, so a long mode list buys coverage
+  rather than influence. Activation weight is per variant, so a family's effect on selection is its
+  weight times how many modes it happens to have: `MaskRouter` at weight one across nine modes
+  outweighs `FlowFieldCompositor`'s deliberate five, and `LayerMixer` and `ColorTransform` are
+  distorted the same way.
 
 ## Visualizer analysis
 

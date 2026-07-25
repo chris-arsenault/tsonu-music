@@ -15,11 +15,12 @@ import { assetResourceId, wireScene, type AssetResource } from '../core/wiring';
 import { buildScene } from '../core/scene-builder';
 import { profileFor, QUALITY_LADDER } from '../core/performance';
 import { COLLISION_ENERGY, GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } from '../core/grammar';
-import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, ORGANIC_FLOW_THEME, THEMES } from './themes';
+import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, IMAGE_DREAM_THEME, ORGANIC_FLOW_THEME, THEMES } from './themes';
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
 import { isMotionSource } from '../core/persistence';
+import { TEMPORAL_MODES } from './transformers/transforms';
 import type { FrameContext } from '../core/plugin';
 
 const CATALOG = allDefinitions();
@@ -595,17 +596,29 @@ describe('scenes accumulate and move', () => {
         }
     });
 
-    test('most scenes are dragged as well as accumulated', () => {
-        // Not all: `ParticleEmitter` is categorised as a field but produces a spawn buffer rather than
-        // a spatial field, so it can fill a family's field slot without contributing motion. Left
-        // alone deliberately — recategorising it would disturb the particle chain — and closed
-        // properly by the structural grammar predicates in milestone four. A scene with no field
-        // still accumulates and decays; it just is not dragged.
-        const scenes = [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME].flatMap(scenesFor);
-        const withMotion = scenes.filter((scene) =>
-            scene.graph.resources.some((resource) => isMotionSource(resource.type)));
+    test('a family asking to be dragged always produces a field to be dragged by', () => {
+        // Category counts could not express this: `fieldCount` is satisfied by any plugin in the field
+        // category, and `ParticleEmitter` sits there producing a spawn buffer. About one scene in five
+        // filled its field slot that way and accumulated without ever being dragged.
+        for (const theme of [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME, IMAGE_DREAM_THEME]) {
+            const scenes = scenesFor(theme);
+            expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
 
-        expect(withMotion.length / scenes.length).toBeGreaterThan(0.75);
+            for (const scene of scenes) {
+                const motion = scene.graph.resources.filter((resource) => isMotionSource(resource.type));
+                expect(motion.length, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
+            }
+        }
+    });
+
+    test('a family built for clean geometry is not forced to be dragged', () => {
+        // Section 15 describes geometric signal as a waveform or spectrum source, parametric or SDF
+        // geometry, symmetry, and restrained feedback. It names no field, so its scenes accumulate and
+        // decay without being dragged. Requiring motion everywhere would erase the distinction.
+        const undragged = scenesFor(GEOMETRIC_SIGNAL_THEME).filter((scene) =>
+            !scene.graph.resources.some((resource) => isMotionSource(resource.type)));
+
+        expect(undragged.length).toBeGreaterThan(0);
     });
 
     test('every layer stack has something that means to persist', () => {
@@ -619,5 +632,67 @@ describe('scenes accumulate and move', () => {
                 expect(persistence, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
             }
         }
+    });
+});
+
+/**
+ * `TemporalTransform` (spec section 19.8, section 24 secondary scope).
+ *
+ * The first plugin to keep frames, and therefore the first consumer of `historyDepth` — a value the
+ * quality ladder has always computed and threaded through `FrameContext` that nothing read.
+ */
+describe('temporal transform', () => {
+    const temporal = (mode: typeof TEMPORAL_MODES[number]) =>
+        CATALOG.find((definition) => definition.id === `TemporalTransform:${mode}`)!;
+
+    /** Renders one pass at a given ladder profile and reports the depth uniform it emitted. */
+    function depthAt(historyDepth: number): number {
+        const definition = temporal('echo');
+        const instance = definition.create(createContext().context);
+        instance.initialize();
+        instance.activate({
+            clock: { trackId: 't', playbackTime: 0, duration: 1, state: 'playing', generation: 1 },
+            parameters: definition.parameters ?? {},
+        });
+        instance.update(frame({ historyDepth }).frame);
+
+        const passes = instance.render({
+            inputs: { source: 'in.source' },
+            outputs: { color: 'out.color' },
+            previous: { history: 'prev.history' },
+            renderWidth: 640,
+            renderHeight: 360,
+        });
+
+        return passes[0].uniforms!.uDepth as number;
+    }
+
+    test('every mode section 19.8 lists is registered', () => {
+        expect(TEMPORAL_MODES).toHaveLength(9);
+        for (const mode of TEMPORAL_MODES) {
+            expect(temporal(mode), mode).toBeDefined();
+        }
+    });
+
+    test('the quality ladder reduces how much history is kept', () => {
+        // The rung that drops history depth now changes what a plugin does, rather than reducing a
+        // number nothing consumed.
+        const full = QUALITY_LADDER[0].historyDepth;
+        const floor = QUALITY_LADDER[QUALITY_LADDER.length - 1].historyDepth;
+
+        expect(depthAt(full)).toBe(1);
+        expect(depthAt(floor)).toBeLessThan(depthAt(full));
+        expect(depthAt(floor)).toBeGreaterThan(0);
+    });
+
+    test('it reads its own past rather than the scene s', () => {
+        const passes = renderWithAllInputs(temporal('delayed-mirror'));
+
+        expect(passes[0].inputs?.uHistory).toBe('prev.history');
+        expect(passes[0].clear).toBe(false);
+    });
+
+    test('it leaves gracefully, since it holds frames', () => {
+        expect(temporal('slit-scan').deactivationPolicy).toBe('freeze-and-dissolve');
     });
 });

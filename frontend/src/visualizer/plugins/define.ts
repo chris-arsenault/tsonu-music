@@ -9,6 +9,7 @@
 import type { ParameterBinding } from '../core/bindings';
 import type { RenderPass, ResourceId } from '../core/passes';
 import { impactAge, strongestImpact } from '../core/impact';
+import { historyDepthFraction } from '../core/performance';
 import type {
     DeactivationPolicy,
     PluginCategory,
@@ -56,6 +57,13 @@ export interface SimpleShaderPlugin {
      * several declared the capability while rendering from static uniforms.
      */
     impactDriven?: boolean;
+    /**
+     * Feeds the quality ladder's permitted history depth into `uDepth`, as a fraction of full depth.
+     *
+     * The ladder has always computed `historyDepth` and threaded it through `FrameContext`; until a
+     * plugin actually kept frames it had nothing to constrain.
+     */
+    historyDriven?: boolean;
 }
 
 /**
@@ -108,6 +116,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             let elapsed = 0;
             let phase = 0;
             let spin = 0;
+            let depth = 1;
             let impact = { centre: [0.5, 0.5] as [number, number], radius: 0, energy: 0 };
 
             return {
@@ -135,6 +144,10 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                     // at one speed. Added to the seed phase rather than replacing it, so instances of
                     // the same plugin stay separated.
                     spin = frame.parameters.spin ?? 0;
+
+                    if (spec.historyDriven) {
+                        depth = historyDepthFraction(frame.historyDepth);
+                    }
 
                     if (!spec.impactDriven) {
                         return;
@@ -184,6 +197,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                             uTime: elapsed,
                             uPhase: phase + spin,
                             uSeed: context.seed,
+                            ...(spec.historyDriven ? { uDepth: depth } : {}),
                             ...(spec.uniforms ?? {}),
                             ...(spec.impactDriven
                                 ? {
