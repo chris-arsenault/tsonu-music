@@ -28,6 +28,7 @@ import { modulateParameters } from '../core/modulation';
 import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
 import {
+    advanceAccumulationSlot,
     blackFloorFor,
     frameSurvival,
     injectionFor,
@@ -135,6 +136,13 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
      * paused would present a buffer nothing had drawn into.
      */
     let accumulationPrimed = false;
+    /**
+     * Which accumulation slot currently holds the image.
+     *
+     * Tracked rather than derived from the frame counter, because the accumulation is written only on
+     * frames that advance while the counter increments on every one.
+     */
+    let accumulationSlot: 0 | 1 = 0;
 
     device.registerShader(MOTION_SUM_SHADER);
     device.registerShader(PERSISTENCE_SHADER);
@@ -413,17 +421,28 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
                 // A frozen clock advances nothing, so the accumulation holds exactly rather than
                 // screening the same frame into itself and brightening while paused.
-                const advancing = deltaSeconds > 0 || !accumulationPrimed;
-                const write: 0 | 1 = (frameParity % 2 === 0 ? 0 : 1);
-                const read: 0 | 1 = write === 0 ? 1 : 0;
+                if (deltaSeconds > 0 || !accumulationPrimed) {
+                    // The slot flips only when something is actually written to it. Deriving it from
+                    // the frame counter instead meant that under a frozen clock — a pause, or simply
+                    // an element that has not started — the write was skipped while the slot kept
+                    // alternating, so the screen swapped between the last two accumulations every
+                    // frame. That is a flicker at refresh rate.
+                    const write = advanceAccumulationSlot(accumulationSlot, true);
 
-                if (advancing) {
-                    advanceAccumulation(device, plan, frame, deltaSeconds, { write, read, hasMotion }, stats);
+                    advanceAccumulation(
+                        device,
+                        plan,
+                        frame,
+                        deltaSeconds,
+                        { write, read: accumulationSlot, hasMotion },
+                        stats,
+                    );
+
+                    accumulationSlot = write;
                     accumulationPrimed = true;
                 }
 
-                // Present the slot last written, which under a frozen clock is the previous frame's.
-                presentTarget(device, ACCUMULATE_KEYS[advancing ? write : read], plan, stats);
+                presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, stats);
             }
 
             stats.pendingShaders = device.pendingShaderCount();

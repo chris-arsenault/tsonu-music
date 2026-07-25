@@ -9,8 +9,10 @@
 
 import type { FeatureSnapshot } from '../core/features';
 import type { AnalysisCommand } from './analysis-worklet';
-// Bundled as its own graph so the worklet module is self-contained at `addModule` time.
-import workletUrl from './analysis-worklet.ts?worker&url';
+// Bundled by `vite-plugins/audio-worklet.ts` into a single import-free script, because an
+// `AudioWorkletGlobalScope` has no module graph and no `window`. Vite's worker pipeline satisfies
+// that only in a production build; in dev it serves an unbundled module that `addModule` rejects.
+import workletUrl from './analysis-worklet.ts?audio-worklet';
 
 /** Output latency estimate used when the browser does not report `outputLatency`. */
 const FALLBACK_OUTPUT_LATENCY_SECONDS = 0.02;

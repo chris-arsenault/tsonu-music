@@ -206,6 +206,21 @@ export function accumulate(
 }
 
 /**
+ * Which of the two accumulation slots holds the image after this frame.
+ *
+ * The slot flips only when something is written to it. Deriving it from the frame counter instead —
+ * which increments on every frame, including the ones a frozen clock skips — left the display
+ * swapping between the last two accumulations at refresh rate.
+ */
+export function advanceAccumulationSlot(current: 0 | 1, advancing: boolean): 0 | 1 {
+    if (!advancing) {
+        return current;
+    }
+
+    return current === 0 ? 1 : 0;
+}
+
+/**
  * Where the accumulation is read from, given the motion field at this point.
  *
  * The image is dragged *against* the field so material appears to travel along it: sampling from

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
     accumulate,
+    advanceAccumulationSlot,
     blackFloorFor,
     DEFAULT_THEME_PERSISTENCE,
     frameSurvival,
@@ -154,6 +155,33 @@ describe('accumulation', () => {
 
     test('a frozen clock removes nothing, so a held image does not fade', () => {
         expect(blackFloorFor(0)).toBe(0);
+    });
+});
+
+describe('accumulation slots', () => {
+    test('the slot flips when the accumulation advances', () => {
+        expect(advanceAccumulationSlot(0, true)).toBe(1);
+        expect(advanceAccumulationSlot(1, true)).toBe(0);
+    });
+
+    test('a frozen frame holds the slot, so the screen does not swap between two accumulations', () => {
+        // The flicker: the frame counter increments every frame, but the accumulation is written only
+        // on frames that advance. Taking the slot from the counter made a paused visualizer alternate
+        // between the last two images at refresh rate.
+        expect(advanceAccumulationSlot(1, false)).toBe(1);
+        expect(advanceAccumulationSlot(0, false)).toBe(0);
+    });
+
+    test('a run of frozen frames presents one image throughout', () => {
+        let slot: 0 | 1 = advanceAccumulationSlot(0, true);
+        const presented = new Set<number>();
+
+        for (let frame = 0; frame < 120; frame += 1) {
+            slot = advanceAccumulationSlot(slot, false);
+            presented.add(slot);
+        }
+
+        expect(presented.size).toBe(1);
     });
 });
 

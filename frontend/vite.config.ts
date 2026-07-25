@@ -1,18 +1,13 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { audioWorklet } from './vite-plugins/audio-worklet';
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [audioWorklet(), react()],
   server: {
     port: 3000,
     open: true,
-  },
-  // The visualizer's analysis processor is bundled through `?worker&url` and loaded with
-  // `audioWorklet.addModule`, which fetches a module script. Declaring the format explicitly keeps
-  // dev and build agreeing on module semantics.
-  worker: {
-    format: 'es',
   },
   build: {
     outDir: 'build',
