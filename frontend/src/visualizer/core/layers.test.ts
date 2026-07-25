@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
     advanceCrossfade,
     blendFactors,
+    blendForCharacter,
     composeLayers,
     createLayer,
     crossfadeWeight,
@@ -9,6 +10,7 @@ import {
     type Crossfade,
 } from './layers';
 import type { BlendMode } from './passes';
+import type { SelectionCharacter } from './plugin';
 
 const ALL_MODES: BlendMode[] = [
     'none',
@@ -225,5 +227,53 @@ describe('blend factors', () => {
     test('lighten and darken use min and max rather than factors', () => {
         expect(blendFactors('lighten').equation).toBe('max');
         expect(blendFactors('darken').equation).toBe('min');
+    });
+});
+
+/**
+ * Every layer above the base blended with `screen`, a lighten operator, so parallel branches
+ * accumulated toward white and read as superposition rather than interaction. Section 11 defines
+ * seven modes and makes the choice the compositor's.
+ */
+describe('blend selection', () => {
+    const character = (overrides: Partial<SelectionCharacter> = {}): SelectionCharacter => ({
+        visualDensity: 0.5,
+        motionEnergy: 0.5,
+        geometricOrder: 0.5,
+        recognizability: 0.2,
+        persistence: 0.4,
+        brightness: 0.5,
+        dominance: 'either',
+        ...overrides,
+    });
+
+    test('bright sparse material adds, because it is light being emitted', () => {
+        expect(blendForCharacter(character({ brightness: 0.85, visualDensity: 0.3 }))).toBe('add');
+    });
+
+    test('bright dense material screens', () => {
+        expect(blendForCharacter(character({ brightness: 0.75, visualDensity: 0.8 }))).toBe('screen');
+    });
+
+    test('dense dim material composites over, so it can occlude', () => {
+        expect(blendForCharacter(character({ brightness: 0.3, visualDensity: 0.8 }))).toBe('normal');
+    });
+
+    test('the catalog does not all reduce to one mode', () => {
+        const modes = new Set([
+            blendForCharacter(character({ brightness: 0.9, visualDensity: 0.2 })),
+            blendForCharacter(character({ brightness: 0.65, visualDensity: 0.7 })),
+            blendForCharacter(character({ brightness: 0.2, visualDensity: 0.9 })),
+        ]);
+
+        expect(modes.size).toBe(3);
+    });
+
+    test('multiply is never chosen at the top level, where it would collapse the frame', () => {
+        for (let brightness = 0; brightness <= 1; brightness += 0.1) {
+            for (let visualDensity = 0; visualDensity <= 1; visualDensity += 0.1) {
+                expect(blendForCharacter(character({ brightness, visualDensity }))).not.toBe('multiply');
+            }
+        }
     });
 });

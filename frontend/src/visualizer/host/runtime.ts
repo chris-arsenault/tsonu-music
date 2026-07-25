@@ -27,9 +27,27 @@ import { mergeUniforms, resolveParameters } from '../core/parameters';
 import { modulateParameters } from '../core/modulation';
 import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
+import { frameSurvival, isMotionSource, type PersistenceSettings } from '../core/persistence';
 import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
+import {
+    MOTION_SUM_SHADER,
+    MOTION_SUM_SHADER_ID,
+    PERSISTENCE_SHADER,
+    PERSISTENCE_SHADER_ID,
+} from './composite-shaders';
+
+/**
+ * Kernel-owned targets, outside the graph because they belong to the compositor rather than to any
+ * plugin. Named so `releaseUnused` can be told to keep them across scene changes.
+ */
+const COMPOSITE_KEY = 'kernel:composite';
+const MOTION_KEY = 'kernel:motion';
+const ACCUMULATE_KEYS = ['kernel:accumulate#0', 'kernel:accumulate#1'] as const;
+
+/** The motion field is a force, not an image; it needs no pixel detail. */
+const MOTION_SCALE = 0.5;
 
 export interface ActiveInstance {
     instanceId: string;
@@ -57,6 +75,13 @@ export interface RuntimeFrame {
     controls?: DiagnosticsControls;
     /** The active quality profile, so the ladder's plugin-level rungs take effect. */
     profile?: QualityProfile;
+    /**
+     * How strongly this scene accumulates and how far the accumulation is dragged, decided in
+     * `core/persistence.ts` from the theme, the layer stack, and the audio.
+     */
+    persistence: PersistenceSettings;
+    /** Discards the accumulation, for a seek or track change landing on unrelated material. */
+    clearAccumulation?: boolean;
     /**
      * Plugins that have left the scene but are still finishing their deactivation policy. They keep
      * updating and rendering into their old resources, which is what makes drain and dissolve visible
@@ -97,6 +122,14 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
     let frameParity = 0;
     // Kernel-level, so an impact published by one plugin is readable by every other.
     let impacts: ImpactBus = createImpactBus();
+    /**
+     * False until the accumulation has been written at least once. Without this a track opening
+     * paused would present a buffer nothing had drawn into.
+     */
+    let accumulationPrimed = false;
+
+    device.registerShader(MOTION_SUM_SHADER);
+    device.registerShader(PERSISTENCE_SHADER);
 
     function resolveTexture(plan: RenderPlan, resource: ResourceId | undefined, previous: boolean): WebGLTexture | undefined {
         if (!resource) {
@@ -125,6 +158,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         plan: RenderPlan,
         stats: RuntimeStats,
         parameters: Readonly<Record<string, number>>,
+        deltaSeconds: number,
     ): void {
         const program = device.useProgram(pass.shader);
         if (!program) {
@@ -161,6 +195,10 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         // its bindings for free and none can silently render at fixed values.
         device.setUniforms(program, {
             uResolution: [target?.width ?? plan.width, target?.height ?? plan.height],
+            // Supplied centrally so any shader integrating across frames — feedback decay, warp
+            // strength — can correct for the frame it actually got instead of assuming sixty a
+            // second. A frozen clock passes zero and those shaders hold.
+            uDelta: Math.max(0, deltaSeconds),
             ...mergeUniforms(pass.uniforms, parameters),
         });
 
@@ -224,7 +262,10 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Programs linked since the last frame become usable here rather than blocking at first use.
             device.advanceCompilation();
 
-            device.releaseUnused(liveKeys(plan));
+            // The kernel's own targets outlive any scene, so they are declared live alongside the
+            // plan's. Without this a scene change would delete the accumulation and every trail in it.
+            const kernelKeys = new Set<string>([COMPOSITE_KEY, MOTION_KEY, ...ACCUMULATE_KEYS]);
+            device.releaseUnused(new Set([...liveKeys(plan), ...kernelKeys]));
             for (const target of plan.targets) {
                 device.acquireTarget(target.key, target.width, target.height);
                 stats.targetsAllocated += 1;
@@ -305,7 +346,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 });
 
                 for (const pass of passes) {
-                    executePass(pass, node, plan, stats, renderedParameters);
+                    executePass(pass, node, plan, stats, renderedParameters, deltaSeconds);
                 }
             }
 
@@ -344,7 +385,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderWidth: plan.width,
                     renderHeight: plan.height,
                 })) {
-                    executePass(pass, active.node, plan, stats, renderedParameters);
+                    executePass(pass, active.node, plan, stats, renderedParameters, deltaSeconds);
                 }
             }
 
@@ -354,7 +395,33 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             if (inspected && plan.writeKeys[inspected]) {
                 presentSingle(device, plan, inspected, presentShaderId, stats);
             } else {
-                present(device, plan, frame, presentShaderId, stats);
+                if (frame.clearAccumulation) {
+                    accumulationPrimed = false;
+                }
+
+                composite(device, plan, frame, presentShaderId, stats);
+                const hasMotion = sumMotion(device, graph, plan, stats);
+
+                // A frozen clock advances nothing, so the accumulation holds exactly rather than
+                // screening the same frame into itself and brightening while paused.
+                const advancing = deltaSeconds > 0 || !accumulationPrimed;
+                const write: 0 | 1 = (frameParity % 2 === 0 ? 0 : 1);
+                const read: 0 | 1 = write === 0 ? 1 : 0;
+
+                if (advancing) {
+                    advanceAccumulation(device, plan, frame, deltaSeconds, { write, read, hasMotion }, stats);
+                    accumulationPrimed = true;
+                }
+
+                // Present the slot last written, which under a frozen clock is the previous frame's.
+                presentTarget(
+                    device,
+                    ACCUMULATE_KEYS[advancing ? write : read],
+                    plan,
+                    frame,
+                    presentShaderId,
+                    stats,
+                );
             }
 
             stats.pendingShaders = device.pendingShaderCount();
@@ -363,6 +430,12 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
         reinitialize() {
             device.invalidate();
+            // The kernel's shaders and its accumulation went with the context, so both are rebuilt
+            // here rather than leaving the composite stage pointing at programs that no longer exist.
+            device.registerShader(MOTION_SUM_SHADER);
+            device.registerShader(PERSISTENCE_SHADER);
+            accumulationPrimed = false;
+
             for (const active of instances) {
                 void active.instance.initialize();
             }
@@ -409,8 +482,14 @@ function presentSingle(
     stats.passesExecuted += 1;
 }
 
-/** Composites the layer stack onto the canvas. */
-function present(
+/**
+ * Composites the layer stack into the kernel's composite target.
+ *
+ * Previously this drew straight to the canvas, which left nowhere for section 11's feedback injection
+ * to happen and made the composed image unavailable to anything. It now produces a texture, and the
+ * accumulation stage is what reaches the screen.
+ */
+function composite(
     device: Device,
     plan: RenderPlan,
     frame: RuntimeFrame,
@@ -419,12 +498,12 @@ function present(
 ): void {
     const composition = composeLayers(frame.layers, frame.crossfades);
     const program = device.useProgram(presentShaderId);
+    const target = device.acquireTarget(COMPOSITE_KEY, plan.width, plan.height);
+
     if (!program) {
         stats.skippedPasses += 1;
         return;
     }
-
-    device.beginPass(null, 'none', true);
 
     const steps = composition.steps.length > 0
         ? composition.steps
@@ -432,6 +511,10 @@ function present(
         : plan.presentKey
             ? [{ layer: { id: 'graph', color: plan.presentKey } as VisualLayer, opacity: 1, blendMode: 'none' as const }]
             : [];
+
+    // Cleared even with no steps, so a scene that produces nothing this frame reads as black rather
+    // than as whatever the pool last left in the texture.
+    device.beginPass(target, 'none', true);
 
     steps.forEach((step, index) => {
         const resource = step.layer.color;
@@ -441,13 +524,13 @@ function present(
 
         const key = plan.writeKeys[resource] ?? resource;
         const size = plan.sizes[resource] ?? { width: plan.width, height: plan.height };
-        const target = device.acquireTarget(key, size.width, size.height);
+        const source = device.acquireTarget(key, size.width, size.height);
 
-        device.beginPass(null, index === 0 ? 'none' : step.blendMode, index === 0);
-        device.bindTexture(program, 'uSource', target.texture, 0);
+        device.beginPass(target, index === 0 ? 'none' : step.blendMode, index === 0);
+        device.bindTexture(program, 'uSource', source.texture, 0);
         device.setUniforms(program, {
             uOpacity: step.opacity,
-            uResolution: [device.canvas.width, device.canvas.height],
+            uResolution: [plan.width, plan.height],
             uTime: frame.clock.playbackTime,
             uEnergy: frame.features.continuous.rms,
             uBass: frame.features.continuous.bass,
@@ -459,4 +542,140 @@ function present(
         device.drawFullscreen();
         stats.passesExecuted += 1;
     });
+}
+
+/**
+ * Sums every field the scene produced into one motion field.
+ *
+ * Contributions add rather than overwrite, so two fields compound into a single coherent drag instead
+ * of one winning. This is what makes several layers contribute to one sense of flow, and it is why
+ * fields no longer have to be consumed by a particle system to be worth generating.
+ *
+ * Returns false when the scene produced no field at all, which leaves the drag out of the
+ * accumulation entirely rather than gathering through a stale texture.
+ */
+function sumMotion(
+    device: Device,
+    graph: CompiledGraph,
+    plan: RenderPlan,
+    stats: RuntimeStats,
+): boolean {
+    const sources = graph.resources.filter((resource) => isMotionSource(resource.type));
+    const width = Math.max(1, Math.round(plan.width * MOTION_SCALE));
+    const height = Math.max(1, Math.round(plan.height * MOTION_SCALE));
+    const target = device.acquireTarget(MOTION_KEY, width, height);
+
+    if (sources.length === 0) {
+        return false;
+    }
+
+    const program = device.useProgram(MOTION_SUM_SHADER_ID);
+    if (!program) {
+        stats.skippedPasses += 1;
+        return false;
+    }
+
+    // Divided by the contributor count, so adding a second field redistributes the drag rather than
+    // doubling it and tearing the image apart.
+    const weight = 1 / sources.length;
+    let drawn = 0;
+
+    for (const resource of sources) {
+        const key = plan.writeKeys[resource.id];
+        if (!key) {
+            continue;
+        }
+
+        const size = plan.sizes[resource.id] ?? { width, height };
+        const source = device.acquireTarget(key, size.width, size.height);
+
+        device.beginPass(target, drawn === 0 ? 'none' : 'add', drawn === 0);
+        device.bindTexture(program, 'uSource', source.texture, 0);
+        device.setUniforms(program, { uResolution: [width, height], uWeight: weight });
+        device.drawFullscreen();
+
+        drawn += 1;
+        stats.passesExecuted += 1;
+    }
+
+    return drawn > 0;
+}
+
+/**
+ * Drags the accumulation through the motion field, decays it, and screens the new composite on top.
+ *
+ * The one pass that gives the subsystem a memory. Everything upstream of it regenerates from nothing
+ * each frame, which is exactly why the result read as a still picture with small local animation.
+ */
+function advanceAccumulation(
+    device: Device,
+    plan: RenderPlan,
+    frame: RuntimeFrame,
+    deltaSeconds: number,
+    slots: { write: 0 | 1; read: 0 | 1; hasMotion: boolean },
+    stats: RuntimeStats,
+): void {
+    const program = device.useProgram(PERSISTENCE_SHADER_ID);
+    if (!program) {
+        stats.skippedPasses += 1;
+        return;
+    }
+
+    const write = device.acquireTarget(ACCUMULATE_KEYS[slots.write], plan.width, plan.height);
+    const read = device.acquireTarget(ACCUMULATE_KEYS[slots.read], plan.width, plan.height);
+    const compositeTarget = device.acquireTarget(COMPOSITE_KEY, plan.width, plan.height);
+    const motion = device.acquireTarget(
+        MOTION_KEY,
+        Math.max(1, Math.round(plan.width * MOTION_SCALE)),
+        Math.max(1, Math.round(plan.height * MOTION_SCALE)),
+    );
+
+    device.beginPass(write, 'none', true);
+    device.bindTexture(program, 'uComposite', compositeTarget.texture, 0);
+    device.bindTexture(program, 'uHistory', read.texture, 1);
+    device.bindTexture(program, 'uMotion', motion.texture, 2);
+    device.setUniforms(program, {
+        uResolution: [plan.width, plan.height],
+        uSurvival: frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds),
+        uMotionScale: frame.persistence.motionScale,
+        uDelta: Math.max(0, deltaSeconds),
+        uHasMotion: slots.hasMotion,
+    });
+    device.drawFullscreen();
+    stats.passesExecuted += 1;
+}
+
+/** Draws a kernel target to the canvas without further grading. */
+function presentTarget(
+    device: Device,
+    key: string,
+    plan: RenderPlan,
+    frame: RuntimeFrame,
+    presentShaderId: string,
+    stats: RuntimeStats,
+): void {
+    const program = device.useProgram(presentShaderId);
+    if (!program) {
+        stats.skippedPasses += 1;
+        return;
+    }
+
+    const target = device.acquireTarget(key, plan.width, plan.height);
+
+    device.beginPass(null, 'none', true);
+    device.bindTexture(program, 'uSource', target.texture, 0);
+    device.setUniforms(program, {
+        uOpacity: 1,
+        uResolution: [device.canvas.width, device.canvas.height],
+        uTime: frame.clock.playbackTime,
+        uEnergy: frame.features.continuous.rms,
+        uBass: frame.features.continuous.bass,
+        uCentroid: frame.features.continuous.spectralCentroid,
+        uLayerPhase: 0,
+        // Grading already happened per layer on the way into the composite. Applying it again to the
+        // accumulation would re-tint trails every frame until they lost their colour entirely.
+        uChromatic: 0,
+    });
+    device.drawFullscreen();
+    stats.passesExecuted += 1;
 }

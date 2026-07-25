@@ -129,7 +129,7 @@ post-hoc salvage pass.
 
 ## Milestones
 
-### M1 — Signal chain
+### M1 — Signal chain — **done**
 
 D6, D7, D8, C3, C4. Confined to `core/`, no contract break, fully testable in the Node environment.
 The existing catalog becomes measurably more musical with no other change, which is why this goes
@@ -154,15 +154,30 @@ first.
 binding integrates and holds under a frozen clock; an `impulse` binding fires and decays; role
 distribution never assigns a feature outside its role's family.
 
-### M2 — Motion and persistence
+### M2 — Motion and persistence — **done**
 
-C1, C2, D1, D2, D9, D10. Touches `host/runtime.ts`, `host/renderer.ts`, `core/layers.ts`,
-`core/graph.ts`, `core/grammar.ts`. Plugin definitions gain an optional output port; none are
-rewritten. This is the milestone that changes what is on screen.
+C1, C2, D1, D2, D9, D10. Recorded in
+[ADR-0007](./docs/adr/0007-visualizer-kernel-persistence.md) and
+[ADR-0008](./docs/adr/0008-visualizer-motion-field-bus.md).
 
-*Verifiable:* the D10 headless harness renders N frames against synthetic audio and asserts nonzero
-mean temporal delta, no convergence to a fixed point, and correlation between temporal delta and the
-audio envelope.
+Delivered as designed, with three deviations worth stating:
+
+- **No plugin gained a `motion-field` output.** Summing happens in a kernel pass over the graph's
+  existing resources, so every `vector-field` and `collision-field` a scene already produces became a
+  motion contributor with no plugin edit and no graph rule change. The declared port type is reserved
+  for a plugin that wants to emit displacement and nothing else.
+- **`multiply` is not selectable at the top level.** Against a dark base it collapses the frame to
+  black. Section 19.9 already offers it inside `LayerMixer` behind a mix factor, which is where it is
+  safe. Top-level layers choose between `add`, `screen`, and `normal` from declared character.
+- **D10 tests the recurrence, not the GPU.** Headless WebGL2 with float render targets is not
+  available to the Node suite, so `core/persistence.ts` holds the arithmetic and is run against a
+  small grid; the shader mirrors it. That the GPU path is wired to the same numbers is a real-device
+  check, recorded in [backlog.md](./docs/backlog.md) beside the three criteria already there.
+
+One gap moved to M4: `ParticleEmitter` is categorised as a field but produces a spawn buffer rather
+than a spatial field, so it can fill a family's field slot and leave a scene accumulating but never
+dragged — about one scene in five. Recategorising it would disturb the particle chain, so it is
+closed by C5's structural predicates instead.
 
 ### M3 — Mask dimensions
 

@@ -26,6 +26,11 @@ export interface QualityProfile {
     reducedGrammar: boolean;
     /** Nothing renders at all. The bottom of the ladder. */
     suspended: boolean;
+    /**
+     * The listener asked for reduced motion. Optional because it is an accessibility preference
+     * rather than a rung: no ladder entry sets it, and it is applied over whichever one is active.
+     */
+    reducedMotion?: boolean;
 }
 
 /**
@@ -180,7 +185,14 @@ export function advancePerformance(
  * (spec section 21.3). Motion is what the preference is about, so history and secondary effects stay.
  */
 export function applyReducedMotion(profile: QualityProfile): QualityProfile {
-    return { ...profile, particleScale: Math.min(profile.particleScale, 0.25), historyDepth: 1 };
+    return {
+        ...profile,
+        particleScale: Math.min(profile.particleScale, 0.25),
+        historyDepth: 1,
+        // Declared rather than left implicit in the two numbers above, so the compositor can hold the
+        // accumulation still instead of dragging it across the frame.
+        reducedMotion: true,
+    };
 }
 
 /** Page hidden: nothing renders (spec section 21.3). */

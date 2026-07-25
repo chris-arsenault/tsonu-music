@@ -7,7 +7,12 @@
  */
 
 import type { CompiledGraph } from '../core/graph';
-import { createLayer, type VisualLayer } from '../core/layers';
+import { blendForCharacter, composeLayers, createLayer, type VisualLayer } from '../core/layers';
+import {
+    persistenceSettings,
+    DEFAULT_THEME_PERSISTENCE,
+    type PersistenceSettings,
+} from '../core/persistence';
 import {
     advanceRetirement,
     beginRetirement,
@@ -88,6 +93,8 @@ export interface Renderer {
     materialBranchCount(): number;
     /** Audio-bound parameters also receiving concurrent slow modulation. */
     activeModulatorCount(): number;
+    /** How strongly the composite accumulates and how far it is dragged, as of the last frame. */
+    persistence(): PersistenceSettings;
     resize(): void;
     dispose(): void;
 }
@@ -191,6 +198,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     runtime.setGraph(scene.graph, instances);
 
     let lostHandled = false;
+    /** Last frame's composite settings, for the diagnostics overlay. */
+    let lastPersistence: PersistenceSettings = { survivalPerSecond: 0, motionScale: 0 };
     // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
     let lastClock: PlaybackClock = {
         trackId: null,
@@ -399,6 +408,17 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     }
                 }
 
+                const composedLayers = [...layers, ...retiringLayers()];
+                lastPersistence = persistenceSettings({
+                    themePersistence:
+                        scene.theme.targetCharacter?.persistence ?? DEFAULT_THEME_PERSISTENCE,
+                    layerWeights: composeLayers(composedLayers).feedbackContributors
+                        .map((contributor) => contributor.weight),
+                    bass: frame.features.continuous.bass,
+                    rms: frame.features.continuous.rms,
+                    reducedMotion: frame.profile.reducedMotion,
+                });
+
                 return runtime.renderFrame({
                     clock: frame.clock,
                     features: frame.features,
@@ -406,7 +426,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     qualityScale: frame.profile.renderScale,
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
-                    layers: [...layers, ...retiringLayers()],
+                    layers: composedLayers,
+                    // Section 11 gives every layer a feedback participation weight and makes injection
+                    // the compositor's duty. The weights were computed and consumed by nothing; this is
+                    // where they finally decide how strongly the scene accumulates.
+                    persistence: lastPersistence,
+                    // A seek or a new track lands on unrelated material; keeping the old image in the
+                    // accumulation would drag the previous passage across the new one.
+                    clearAccumulation: frame.clearTransients,
                     clearTransients: frame.clearTransients,
                     controls: frame.controls,
                     profile: frame.profile,
@@ -453,6 +480,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     (total, entry) => total + entry.bindings.length,
                     0,
                 );
+            },
+
+            persistence() {
+                return lastPersistence;
             },
 
             mutate(profile, playbackTime) {
@@ -689,8 +720,12 @@ function buildLayers(graph: CompiledGraph): VisualLayer[] {
 
             layers.push(createLayer(node.instanceId, resource, {
                 order: index,
-                // Additive above the base, so parallel branches accumulate rather than occluding.
-                blendMode: layers.length === 0 ? 'normal' : 'screen',
+                // Chosen from what the plugin says it produces. Every layer above the base used to
+                // blend with `screen`, which is a lighten operator: parallel branches accumulated
+                // toward white and read as superposition rather than as interaction.
+                blendMode: layers.length === 0
+                    ? 'normal'
+                    : blendForCharacter(node.definition.character),
                 feedbackParticipation: node.definition.character.persistence,
             }));
         }

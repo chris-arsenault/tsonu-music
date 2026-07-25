@@ -21,6 +21,15 @@ export interface SceneGrammar {
     maximumDominantPlugins: number;
     maximumHighCostPlugins: number;
     maximumFeedbackLoops: number;
+    /**
+     * Feedback stages the family requires.
+     *
+     * Only a ceiling existed, so a scene could legally contain none — and with roughly a hundred and
+     * fifty plugins to choose from, most did. Section 15 names a feedback stage in three of the four
+     * families; the kernel's own accumulation is the floor beneath all of them, and this is what puts
+     * the plugin-level stage those three describe into the scene.
+     */
+    minimumFeedbackLoops: number;
     maximumSymmetryTransforms: number;
 
     requireVisibleSource: boolean;
@@ -45,6 +54,7 @@ export interface GrammarViolation {
         | 'too-many-dominant'
         | 'too-many-high-cost'
         | 'too-many-feedback'
+        | 'too-few-feedback'
         | 'too-many-symmetry'
         | 'no-visible-source';
     detail: string;
@@ -129,6 +139,12 @@ export function grammarViolations(
             detail: `${feedback} feedback loops exceed ${grammar.maximumFeedbackLoops}`,
         });
     }
+    if (feedback < grammar.minimumFeedbackLoops) {
+        violations.push({
+            kind: 'too-few-feedback',
+            detail: `${feedback} feedback loops below ${grammar.minimumFeedbackLoops}`,
+        });
+    }
 
     const symmetry = definitions.filter((definition) => declaresCapability(definition, 'symmetry')).length;
     if (symmetry > grammar.maximumSymmetryTransforms) {
@@ -174,7 +190,8 @@ export function wouldViolate(
 
     // Under-count violations are not the candidate's fault: a partially built scene is under-filled
     // by definition, and adding a plugin never causes that.
-    return violations.some((violation) => violation.kind !== 'category-under');
+    return violations.some((violation) =>
+        violation.kind !== 'category-under' && violation.kind !== 'too-few-feedback');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -191,6 +208,7 @@ export const ORGANIC_FLOW: SceneGrammar = {
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
+    minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
 };
@@ -206,6 +224,7 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
+    minimumFeedbackLoops: 0,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
 };
@@ -220,6 +239,7 @@ export const COLLISION_ENERGY: SceneGrammar = {
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 2,
     maximumFeedbackLoops: 1,
+    minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: false,
 };
@@ -234,6 +254,7 @@ export const IMAGE_DREAM: SceneGrammar = {
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
+    minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
 };
@@ -256,6 +277,7 @@ export const REDUCED_GRAMMAR: SceneGrammar = {
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 0,
     maximumFeedbackLoops: 1,
+    minimumFeedbackLoops: 0,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: true,
 };

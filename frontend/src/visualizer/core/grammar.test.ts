@@ -43,12 +43,15 @@ function plugin(
     };
 }
 
-/** A scene that satisfies organic flow with two visible branches and an explicit compositor. */
+/**
+ * A scene that satisfies organic flow: two visible branches, an explicit compositor, and the feedback
+ * stage section 15 names for the family.
+ */
 const WELL_FORMED: VisualPluginDefinition[] = [
     plugin('src-a', 'source'),
     plugin('src-b', 'source'),
     plugin('fld', 'field', { outputs: [{ name: 'flow', type: 'vector-field', required: false }] }),
-    plugin('trn', 'transformer'),
+    plugin('trn', 'transformer', { capabilities: ['feedback'] }),
     plugin('mix', 'compositor'),
     plugin('post', 'postprocess'),
 ];

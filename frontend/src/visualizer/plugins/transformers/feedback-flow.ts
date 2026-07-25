@@ -51,6 +51,10 @@ uniform float uStrength;
 uniform float uDecay;
 uniform float uRotation;
 uniform vec2 uDrift;
+uniform float uDelta;
+
+/** Frames a second the decay and strength constants are tuned against. */
+const float REFERENCE_RATE = 60.0;
 
 vec2 warp(vec2 uv, float mode, float strength) {
     vec2 centered = uv - 0.5;
@@ -84,8 +88,12 @@ vec2 warp(vec2 uv, float mode, float strength) {
 }
 
 void main() {
-    vec2 sampleUv = warp(vUv, uMode, uStrength);
-    vec4 history = texture(uHistory, sampleUv) * uDecay;
+    // Both constants describe what one frame does, so both are corrected for the frame this actually
+    // is. Without it the same scene smeared and drifted at different rates on different hardware.
+    float frames = max(uDelta, 0.0) * REFERENCE_RATE;
+
+    vec2 sampleUv = warp(vUv, uMode, uStrength * frames);
+    vec4 history = texture(uHistory, sampleUv) * pow(uDecay, frames);
     vec4 incoming = texture(uSource, vUv);
 
     // Screen-style combination, so trails accumulate without clipping to white immediately.

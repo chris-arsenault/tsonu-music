@@ -19,6 +19,7 @@ import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, ORGANIC_FLOW_THEME, THE
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
+import { isMotionSource } from '../core/persistence';
 import type { FrameContext } from '../core/plugin';
 
 const CATALOG = allDefinitions();
@@ -537,5 +538,86 @@ describe('spec section 25 example compositions', () => {
         const masked = examples.find((entry) => entry.name === 'Rorschach Without Particles')!;
 
         expect(masked.plugins.some((id) => id.startsWith('Particle'))).toBe(false);
+    });
+});
+
+/**
+ * Assembled scenes had no memory of the previous frame.
+ *
+ * The grammar capped feedback loops without requiring any, so with roughly a hundred and fifty
+ * plugins to draw from, random selection produced a persistence stage only occasionally — and every
+ * other scene regenerated itself from nothing each frame. Asserted across many seeds because the
+ * defect was probabilistic and a single passing seed proves nothing.
+ */
+describe('scenes accumulate and move', () => {
+    const base = {
+        available: CATALOG,
+        capabilities: ['float-textures', 'webgl2'],
+        history: {},
+        playbackTime: 0,
+    };
+
+    const SEEDS = Array.from({ length: 24 }, (_, index) => `motion-${index}`);
+
+    const scenesFor = (theme: typeof THEMES[number]) => SEEDS
+        .map((seed) => buildScene(seed, theme, { ...base, assets: [] }, profileFor(0)))
+        .flatMap((result) => (result.ok ? [result.scene] : []));
+
+    test('a family that names a feedback stage always gets one', () => {
+        for (const theme of [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME]) {
+            const scenes = scenesFor(theme);
+            expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
+
+            for (const scene of scenes) {
+                const feedback = scene.plugins.filter((definition) =>
+                    definition.capabilities.includes('feedback'));
+
+                expect(feedback.length, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
+            }
+        }
+    });
+
+    test('every spatial field a scene contains reaches the motion bus', () => {
+        // A field used to be worth generating only if a particle system consumed it, which is why
+        // assembly kept producing orphans. Every spatial field now drags the accumulated image, so
+        // none of them can be present in a scene without the motion sum finding it.
+        for (const theme of THEMES) {
+            for (const scene of scenesFor(theme)) {
+                const spatial = scene.plugins.flatMap((definition) =>
+                    definition.outputs.filter((port) => isMotionSource(port.type)));
+                if (spatial.length === 0) {
+                    continue;
+                }
+
+                const exposed = scene.graph.resources.filter((resource) => isMotionSource(resource.type));
+                expect(exposed.length, `${theme.id}/${scene.entropy}`).toBe(spatial.length);
+            }
+        }
+    });
+
+    test('most scenes are dragged as well as accumulated', () => {
+        // Not all: `ParticleEmitter` is categorised as a field but produces a spawn buffer rather than
+        // a spatial field, so it can fill a family's field slot without contributing motion. Left
+        // alone deliberately — recategorising it would disturb the particle chain — and closed
+        // properly by the structural grammar predicates in milestone four. A scene with no field
+        // still accumulates and decays; it just is not dragged.
+        const scenes = [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME].flatMap(scenesFor);
+        const withMotion = scenes.filter((scene) =>
+            scene.graph.resources.some((resource) => isMotionSource(resource.type)));
+
+        expect(withMotion.length / scenes.length).toBeGreaterThan(0.75);
+    });
+
+    test('every layer stack has something that means to persist', () => {
+        for (const theme of THEMES) {
+            for (const scene of scenesFor(theme)) {
+                const persistence = scene.plugins.reduce(
+                    (highest, definition) => Math.max(highest, definition.character.persistence),
+                    0,
+                );
+
+                expect(persistence, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
+            }
+        }
     });
 });

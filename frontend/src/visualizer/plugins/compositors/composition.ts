@@ -92,11 +92,14 @@ uniform vec2 uResolution;
 uniform float uMode;
 uniform float uAmount;
 uniform float uDecay;
+uniform float uDelta;
 ${GLSL_COMMON}
 
 void main() {
     vec4 incoming = texture(uSource, vUv);
-    vec4 history = texture(uHistory, vUv) * uDecay;
+    // Per-frame decay corrected to the frame this is, so trails last the same wall-clock time
+    // whatever rate the display runs at.
+    vec4 history = texture(uHistory, vUv) * pow(uDecay, max(uDelta, 0.0) * 60.0);
     float weight = uAmount;
 
     if (uMode < 0.5) {                       // continuous

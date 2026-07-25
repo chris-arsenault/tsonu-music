@@ -93,6 +93,10 @@ export interface KernelReadout {
         materialBranchCount: number;
         /** Independently phased, audio-bound parameters moving this frame. */
         activeModulatorCount: number;
+        /** Fraction of the accumulated image surviving one second. */
+        survivalPerSecond: number;
+        /** UV per second the accumulation is dragged through the scene's motion field. */
+        motionScale: number;
     };
     gpu?: {
         floatRenderTargets: boolean;
@@ -384,6 +388,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         layerCount: renderer.layerCount(),
                         materialBranchCount: renderer.materialBranchCount(),
                         activeModulatorCount: renderer.activeModulatorCount(),
+                        survivalPerSecond: renderer.persistence().survivalPerSecond,
+                        motionScale: renderer.persistence().motionScale,
                     }
                     : undefined,
                 gpu: renderer

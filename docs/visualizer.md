@@ -102,11 +102,36 @@ execution order for the active graph; scene selection itself is fresh and non-re
 Asset textures bind as graph resources separately from edges, since an asset has no execution order.
 A derived texture always wins over the raw asset it came from.
 
+## Composition and persistence
+
+The compositor owns a stage the graph does not reach. Layers composite into an offscreen target
+rather than onto the canvas, blending by a mode chosen from each plugin's declared character:
+bright sparse material adds, bright material screens, dense material composites over so it can
+occlude.
+
+Every spatial field the scene produced — procedural, audio-driven, or mask-derived — is then summed
+into one motion field, additively and weighted by the contributor count, so several fields compound
+into one drag rather than one winning.
+
+The kernel owns an accumulation buffer. Each frame it is gathered through that motion field,
+decayed, and screened with the new composite; the accumulation is what reaches the screen. How
+strongly a scene accumulates comes from its theme's persistence character and its layers'
+feedback participation, floored so no scene is completely static and capped so none becomes a smear.
+Survival is expressed per second, so trail length is a duration rather than a frame count. A frozen
+clock holds the accumulation exactly; a seek or track change clears it.
+
+`FeedbackFlowTransform`, `FeedbackInjector`, and `ParticleTrailInjector` shape this loop rather than
+being the only thing that creates one. See
+[ADR-0007](./adr/0007-visualizer-kernel-persistence.md) and
+[ADR-0008](./adr/0008-visualizer-motion-field-bus.md).
+
 ## Scenes
 
 The scheduler assembles scenes from scene grammar and plugin character rather than compatibility
 alone. A theme states the character it wants; category counts, dominant-generator caps, and feedback
-and symmetry limits are enforced during assembly. Full scenes require multiple material producers and
+and symmetry limits are enforced during assembly. The three families the specification describes with
+an explicit feedback stage declare a feedback minimum as well as a maximum, and the scheduler repairs
+a shortfall directly rather than leaving it to a retry. Full scenes require multiple material producers and
 one or two explicit compositors. Candidate selection checks that a plugin's required inputs are
 producible by what is already chosen, and candidates with orphan fields or simulations are discarded.
 

@@ -206,12 +206,14 @@ uniform sampler2D uHistory;
 uniform vec2 uResolution;
 uniform float uDecay;
 uniform float uAmount;
+uniform float uDelta;
 ${GLSL_COMMON}
 
 void main() {
     // Particle motion accumulates into a dedicated trail texture rather than the main feedback buffer,
-    // so trails can persist at a different rate from the rest of the scene.
-    vec4 history = texture(uHistory, vUv) * uDecay;
+    // so trails can persist at a different rate from the rest of the scene. Decay is per frame and
+    // corrected to the frame this is, so trail length is a duration rather than a frame count.
+    vec4 history = texture(uHistory, vUv) * pow(uDecay, max(uDelta, 0.0) * 60.0);
     vec4 incoming = texture(uSource, vUv) * uAmount;
 
     fragColor = max(history, incoming);

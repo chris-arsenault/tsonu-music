@@ -7,6 +7,7 @@
 
 import { clamp01 } from './bindings';
 import {
+    declaresCapability,
     grammarViolations,
     isVisibleSource,
     wouldViolate,
@@ -327,6 +328,29 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
 
             chosen.push(picked);
         }
+    }
+
+    // A family that names a feedback stage should have one. Repaired here rather than left to a
+    // retry, because a feedback plugin is a small share of a large catalog and random selection
+    // missed it far more often than not — which is why most assembled scenes had no persistence.
+    const feedbackShortfall = grammar.minimumFeedbackLoops
+        - chosen.filter((definition) => declaresCapability(definition, 'feedback')).length;
+    for (let missing = 0; missing < feedbackShortfall; missing += 1) {
+        const candidates = eligible.filter((definition) =>
+            declaresCapability(definition, 'feedback')
+            && !conflictsWith(chosen, definition)
+            && !wouldViolate(chosen, definition, grammar)
+            && inputsSatisfiable(chosen, definition));
+
+        const picked = rng.weighted(
+            candidates,
+            (definition) => interactionWeight(definition, chosen, context),
+        );
+        if (!picked) {
+            break;
+        }
+
+        chosen.push(picked);
     }
 
     // A scene requiring a visible source that has none is unusable, so try once to add one.

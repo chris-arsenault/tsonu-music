@@ -73,6 +73,11 @@ export default function DiagnosticsPanel({
                     <Row label="layers" value={String(readout.scene?.layerCount ?? 0)} />
                     <Row label="branches" value={String(readout.scene?.materialBranchCount ?? 0)} />
                     <Row label="modulators" value={String(readout.scene?.activeModulatorCount ?? 0)} />
+                    <Row
+                        label="persistence"
+                        value={`${(readout.scene?.survivalPerSecond ?? 0).toFixed(3)}/s`}
+                    />
+                    <Row label="drag" value={`${(readout.scene?.motionScale ?? 0).toFixed(3)} uv/s`} />
                     <Row label="mutation" value={readout.scene?.lastMutation ?? 'none'} />
                     <Row label="targets" value={String(readout.render?.targetsAllocated ?? 0)} />
                     <Row label="downgrades" value={String(readout.performance?.downgrades ?? 0)} />

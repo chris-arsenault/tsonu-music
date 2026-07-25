@@ -7,6 +7,7 @@
 
 import { clamp01 } from './bindings';
 import type { BlendMode, ResourceId } from './passes';
+import type { SelectionCharacter } from './plugin';
 
 export interface VisualLayer {
     id: string;
@@ -43,6 +44,36 @@ export interface Composition {
     steps: CompositionStep[];
     /** Layers contributing to feedback, with their weights. */
     feedbackContributors: { id: string; color: ResourceId; weight: number }[];
+}
+
+/**
+ * How a branch meets the ones beneath it, from what the plugin says it produces.
+ *
+ * Every layer above the base blended with `screen`, which is a lighten operator: parallel branches
+ * accumulated toward white and read as flat superposition rather than as interaction. Section 11
+ * defines seven modes and the choice belongs to the compositor, so it is made here from the
+ * character the plugin already declares.
+ *
+ * `multiply` is deliberately absent. Against a dark base it collapses the frame to black, and the
+ * safe place for it is `LayerMixer`, where section 19.9 already offers it behind a mix factor.
+ */
+export function blendForCharacter(character: SelectionCharacter): BlendMode {
+    // Bright, sparse material is light being emitted: sparks, glints, glow. It should add.
+    if (character.brightness >= 0.7 && character.visualDensity <= 0.4) {
+        return 'add';
+    }
+
+    if (character.brightness >= 0.6) {
+        return 'screen';
+    }
+
+    // Dense material is a surface, not a light. Compositing it over what is beneath lets it occlude,
+    // which is the interaction screen blending could never produce.
+    if (character.visualDensity >= 0.55) {
+        return 'normal';
+    }
+
+    return 'screen';
 }
 
 export function createLayer(id: string, color: ResourceId, overrides: Partial<VisualLayer> = {}): VisualLayer {
