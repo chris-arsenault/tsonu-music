@@ -52,6 +52,11 @@ export default function VisualizerPanel() {
         }
     }, []);
 
+    const openVisualizer = useCallback(() => {
+        toggle(true);
+        setExpanded(true);
+    }, [toggle]);
+
     useEffect(() => {
         if (!expanded) {
             return undefined;
@@ -110,17 +115,15 @@ export default function VisualizerPanel() {
                     <span className="sr-only">Enable visualizer</span>
                 </label>
 
-                {enabled ? (
-                    <button
-                        type="button"
-                        className="bottom-player__visualizer-thumb"
-                        onClick={() => setExpanded(true)}
-                        aria-label="Expand visualizer"
-                        title="Expand visualizer"
-                    >
-                        <img src={player.artworkSrc} alt="" />
-                    </button>
-                ) : null}
+                <button
+                    type="button"
+                    className="bottom-player__visualizer-thumb"
+                    onClick={openVisualizer}
+                    aria-label="Open visualizer"
+                    title="Open visualizer"
+                >
+                    <img src={player.artworkSrc} alt="" />
+                </button>
             </div>
 
             {expanded ? (
