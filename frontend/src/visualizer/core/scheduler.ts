@@ -2,8 +2,7 @@
  * Activation scheduler (spec sections 14, 16, 17).
  *
  * Assembles scenes from grammar plus character rather than picking whatever is compatible, then
- * evolves them by incremental mutation. A scene is fully determined by its seed and the registry, so
- * the same seed rebuilds the same scene.
+ * evolves them by incremental mutation. The host supplies fresh entropy for every new scene.
  */
 
 import { clamp01 } from './bindings';
@@ -211,6 +210,27 @@ export function selectionWeight(
     return Math.max(0, definition.activationRules.activationWeight) * Math.max(0, preference) * fit * fit;
 }
 
+/**
+ * Raises the weight of plugins that explicitly cooperate with material already in the graph.
+ *
+ * `prefersWith` used to be inert metadata. That made a particle renderer no more likely after a
+ * particle simulator, and a simulation view no more likely after its state producer. Pair affinity is
+ * deliberately a weight rather than a hard rule, so fresh scenes still vary.
+ */
+export function interactionWeight(
+    definition: VisualPluginDefinition,
+    chosen: readonly VisualPluginDefinition[],
+    context: SchedulerContext,
+): number {
+    const chosenIds = new Set(chosen.map((entry) => entry.id));
+    const forwardPreference = definition.activationRules.prefersWith
+        ?.some((id) => chosenIds.has(id)) ?? false;
+    const reversePreference = chosen.some((entry) =>
+        entry.activationRules.prefersWith?.includes(definition.id));
+
+    return selectionWeight(definition, context) * (forwardPreference || reversePreference ? 4 : 1);
+}
+
 /* -------------------------------------------------------------------------- */
 /* Scene assembly                                                             */
 /* -------------------------------------------------------------------------- */
@@ -264,12 +284,12 @@ const CATEGORY_RANGES: Record<PluginCategory, keyof SceneGrammar | undefined> = 
     field: 'fieldCount',
     simulator: 'simulatorCount',
     transformer: 'transformerCount',
-    compositor: undefined,
+    compositor: 'compositorCount',
     postprocess: 'postprocessCount',
 };
 
 /**
- * Builds a scene for a seed.
+ * Builds a scene from one fresh entropy token.
  *
  * Fills each category to a count drawn from its grammar range, choosing within a category by weight.
  * A candidate that would break a structural limit is skipped rather than accepted and repaired, so the
@@ -297,7 +317,10 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
                 && !wouldViolate(chosen, definition, grammar)
                 && inputsSatisfiable(chosen, definition));
 
-            const picked = rng.weighted(candidates, (definition) => selectionWeight(definition, context));
+            const picked = rng.weighted(
+                candidates,
+                (definition) => interactionWeight(definition, chosen, context),
+            );
             if (!picked) {
                 break;
             }
@@ -312,7 +335,10 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
             isVisibleSource(definition)
             && !conflictsWith(chosen, definition)
             && inputsSatisfiable(chosen, definition));
-        const picked = rng.weighted(visible, (definition) => selectionWeight(definition, context));
+        const picked = rng.weighted(
+            visible,
+            (definition) => interactionWeight(definition, chosen, context),
+        );
         if (picked) {
             chosen.push(picked);
         }
@@ -426,8 +452,9 @@ export function pickReplacement(
 /* -------------------------------------------------------------------------- */
 
 export const DEFAULT_MUTATION_POLICY: MutationPolicy = {
-    intervalSeconds: 24,
-    // Scene mutation is rare by design: it discards accumulated feedback and simulator state.
-    weights: { parameter: 8, plugin: 4, branch: 2, scene: 1 },
-    minimumPluginAgeSeconds: 12,
+    intervalSeconds: 14,
+    // Continuous modulation supplies the constant motion; these slower structural changes reshape the
+    // relationships without repeatedly discarding the whole composition.
+    weights: { parameter: 8, plugin: 3, branch: 2, scene: 0.5 },
+    minimumPluginAgeSeconds: 10,
 };

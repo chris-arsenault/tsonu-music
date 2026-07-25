@@ -77,7 +77,6 @@ export interface KernelReadout {
         profile: QualityProfile;
     };
     scene?: {
-        seed: string;
         themeId: string;
         pluginIds: string[];
         instanceIds: string[];
@@ -90,6 +89,10 @@ export interface KernelReadout {
         lastMutation: string;
         /** Layers the compositor is blending this frame. */
         layerCount: number;
+        /** Visible branches interacting before final presentation. */
+        materialBranchCount: number;
+        /** Independently phased, audio-bound parameters moving this frame. */
+        activeModulatorCount: number;
     };
     gpu?: {
         floatRenderTargets: boolean;
@@ -103,10 +106,8 @@ export interface KernelReadout {
 /** Controls the overlay drives. Read every frame, so a change takes effect immediately. */
 export interface KernelControlHandle {
     setControls(controls: DiagnosticsControls): void;
-    /** Rebuilds from an explicit seed, so a reported scene can be reproduced. */
-    reproduceSeed(seed: string): boolean;
-    /** Rebuilds with the current track's seed, discarding an override. */
-    rebuildCurrent(): boolean;
+    /** Discards the current composition and selects a fresh random scene. */
+    newScene(): boolean;
 }
 
 export interface KernelOptions {
@@ -181,8 +182,6 @@ export function startKernel(options: KernelOptions): KernelHandle {
 
     if (options.canvas) {
         const result = createRenderer(options.canvas, {
-            trackId,
-            generation: clock.generation,
             profile: currentProfile(),
         });
 
@@ -235,7 +234,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
         }
 
         renderer.setAssets(availableAssetIds(usable));
-        renderer.rebuild(clock.trackId, clock.generation, currentProfile());
+        renderer.rebuildCurrent(currentProfile());
     })();
 
     void acquireTap(element)
@@ -314,11 +313,15 @@ export function startKernel(options: KernelOptions): KernelHandle {
             // rebuilds too, since the scene has to be assembled within the new budget. Freezing
             // mutations suppresses both, so a scene can be studied without shifting underneath.
             const grammarChanged = profileFor(previousLevel).reducedGrammar !== profile.reducedGrammar;
-            const shouldRebuild = clock.generation !== lastRebuiltGeneration || grammarChanged;
+            const trackChanged = clock.generation !== lastRebuiltGeneration;
+            const shouldRebuild = trackChanged || grammarChanged;
 
             if (shouldRebuild && !controls.freezeMutations) {
                 lastRebuiltGeneration = clock.generation;
-                if (renderer.rebuild(clock.trackId, clock.generation, profile)) {
+                const rebuilt = trackChanged
+                    ? renderer.newScene(profile)
+                    : renderer.rebuildCurrent(profile);
+                if (rebuilt) {
                     activationHistory = renderer.activeInstanceIds().reduce(
                         (history, instanceId) => recordActivation(history, instanceId),
                         activationHistory,
@@ -369,7 +372,6 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 },
                 scene: renderer
                     ? {
-                        seed: renderer.seed(),
                         themeId: renderer.themeId(),
                         pluginIds: renderer.activePluginIds(),
                         instanceIds: renderer.activeInstanceIds(),
@@ -380,6 +382,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         estimatedTextureBytes: renderer.estimatedTextureBytes(),
                         lastMutation,
                         layerCount: renderer.layerCount(),
+                        materialBranchCount: renderer.materialBranchCount(),
+                        activeModulatorCount: renderer.activeModulatorCount(),
                     }
                     : undefined,
                 gpu: renderer
@@ -402,12 +406,17 @@ export function startKernel(options: KernelOptions): KernelHandle {
             controls = next;
         },
 
-        reproduceSeed(seed) {
-            return renderer?.rebuildFromSeed(seed, currentProfile()) ?? false;
-        },
-
-        rebuildCurrent() {
-            return renderer?.rebuild(clock.trackId, clock.generation, currentProfile()) ?? false;
+        newScene() {
+            const rebuilt = renderer?.newScene(currentProfile()) ?? false;
+            if (rebuilt && renderer) {
+                activationHistory = renderer.activeInstanceIds().reduce<readonly string[]>(
+                    (history, instanceId) => recordActivation(history, instanceId),
+                    [],
+                );
+                lastMutation = 'scene';
+                mutation = createMutationState();
+            }
+            return rebuilt;
         },
 
         setTrack(nextTrackId, durationSeconds) {

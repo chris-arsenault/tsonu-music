@@ -43,11 +43,13 @@ function plugin(
     };
 }
 
-/** A scene that satisfies organic flow: one source, one field, one transformer, one postprocess. */
+/** A scene that satisfies organic flow with two visible branches and an explicit compositor. */
 const WELL_FORMED: VisualPluginDefinition[] = [
-    plugin('src', 'source'),
+    plugin('src-a', 'source'),
+    plugin('src-b', 'source'),
     plugin('fld', 'field', { outputs: [{ name: 'flow', type: 'vector-field', required: false }] }),
     plugin('trn', 'transformer'),
+    plugin('mix', 'compositor'),
     plugin('post', 'postprocess'),
 ];
 
@@ -56,7 +58,7 @@ describe('category counting', () => {
         const counts = countByCategory(WELL_FORMED);
 
         expect(counts).toEqual({
-            source: 1, field: 1, simulator: 0, transformer: 1, compositor: 0, postprocess: 1,
+            source: 2, field: 1, simulator: 0, transformer: 1, compositor: 1, postprocess: 1,
         });
     });
 
@@ -78,7 +80,12 @@ describe('grammar checks', () => {
     });
 
     test('too many in a category is reported as over', () => {
-        const crowded = [...WELL_FORMED, plugin('t2', 'transformer'), plugin('t3', 'transformer')];
+        const crowded = [
+            ...WELL_FORMED,
+            plugin('t2', 'transformer'),
+            plugin('t3', 'transformer'),
+            plugin('t4', 'transformer'),
+        ];
         const violations = grammarViolations(crowded, ORGANIC_FLOW);
 
         expect(violations.some((entry) => entry.kind === 'category-over')).toBe(true);
@@ -194,7 +201,8 @@ describe('visual families', () => {
 
     test('every family has coherent ranges and at least one postprocess', () => {
         const ranges: (keyof SceneGrammar)[] = [
-            'sourceCount', 'fieldCount', 'simulatorCount', 'transformerCount', 'postprocessCount',
+            'sourceCount', 'fieldCount', 'simulatorCount', 'transformerCount',
+            'compositorCount', 'postprocessCount',
         ];
 
         for (const [name, grammar] of Object.entries(VISUAL_FAMILIES)) {
@@ -205,6 +213,7 @@ describe('visual families', () => {
             }
 
             expect(grammar.postprocessCount[0], `${name} needs tone mapping`).toBeGreaterThanOrEqual(1);
+            expect(grammar.compositorCount[0], `${name} needs interacting branches`).toBeGreaterThanOrEqual(1);
             expect(grammar.maximumDominantPlugins, `${name} dominant cap`).toBeLessThanOrEqual(1);
         }
     });

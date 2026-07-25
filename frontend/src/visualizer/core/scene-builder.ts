@@ -1,14 +1,14 @@
 /**
  * Scene construction: assemble, distribute reactivity, wire, compile.
  *
- * One place that turns a seed plus a theme into something the runtime can execute, so the host does not
- * have to know the order these steps go in. Pure, so the whole pipeline is testable end to end without
- * a GL context.
+ * One place that turns per-scene entropy plus a theme into something the runtime can execute, so the
+ * host does not have to know the order these steps go in. Pure, so the whole pipeline is testable end
+ * to end without a GL context.
  */
 
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
 import { compileGraph, type CompiledGraph } from './graph';
-import { REDUCED_GRAMMAR } from './grammar';
+import { grammarViolations, REDUCED_GRAMMAR } from './grammar';
 import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
 import { createRng } from './random';
@@ -16,7 +16,7 @@ import { assembleScene, type SchedulerContext, type VisualTheme } from './schedu
 import { wireScene, type AssetResource, type WiredScene } from './wiring';
 
 export interface BuiltScene {
-    seed: string;
+    entropy: string;
     theme: VisualTheme;
     plugins: VisualPluginDefinition[];
     wired: WiredScene;
@@ -63,7 +63,7 @@ export type SceneBuildResult =
     | { ok: false; failure: SceneBuildFailure };
 
 /**
- * Builds a scene for a seed.
+ * Builds a scene from one host-supplied entropy token.
  *
  * The quality profile is applied as scheduler constraints rather than after the fact: at a reduced
  * level the grammar itself gets cheaper and expensive plugins become ineligible, so a struggling device
@@ -75,8 +75,34 @@ export interface SceneBuildContext
     assetResources?: readonly AssetResource[];
 }
 
+const MAX_BUILD_ATTEMPTS = 32;
+
 export function buildScene(
-    seed: string,
+    entropy: string,
+    theme: VisualTheme,
+    context: SceneBuildContext,
+    profile: QualityProfile,
+): SceneBuildResult {
+    let lastFailure: SceneBuildFailure = { reason: 'grammar', detail: 'no viable composition' };
+
+    // Category selection is intentionally exploratory. Some selections are individually legal but
+    // cannot form a connected multi-branch graph (for example, a field with no consumer or a mixer
+    // with only one colour producer). Try further candidates instead of accepting an orphan or
+    // flattening the scene to repair it.
+    for (let attempt = 0; attempt < MAX_BUILD_ATTEMPTS; attempt += 1) {
+        const candidateEntropy = `${entropy}:candidate:${attempt}`;
+        const result = buildSceneAttempt(candidateEntropy, theme, context, profile);
+        if (result.ok) {
+            return result;
+        }
+        lastFailure = result.failure;
+    }
+
+    return { ok: false, failure: lastFailure };
+}
+
+function buildSceneAttempt(
+    entropy: string,
     theme: VisualTheme,
     context: SceneBuildContext,
     profile: QualityProfile,
@@ -92,7 +118,7 @@ export function buildScene(
         allowDominant: profile.expensivePrimary,
     };
 
-    const assembled = assembleScene(seed, schedulerContext);
+    const assembled = assembleScene(entropy, schedulerContext);
     if (assembled.violations.length > 0) {
         return {
             ok: false,
@@ -103,7 +129,8 @@ export function buildScene(
         };
     }
 
-    const wired = wireScene(assembled.plugins, context.assetResources ?? []);
+    let plugins = assembled.plugins;
+    let wired = wireScene(plugins, context.assetResources ?? []);
     if (wired.unsatisfied.length > 0) {
         return {
             ok: false,
@@ -116,6 +143,26 @@ export function buildScene(
         };
     }
 
+    // Category counts alone are not enough: an optional field can be selected without anything ever
+    // reading it. Keep only plugins that contribute to a terminal colour layer, then re-check the
+    // grammar so an allegedly full scene cannot spend passes on disconnected decoration.
+    const contributing = contributingPluginIds(wired);
+    if (contributing.size < wired.nodes.length) {
+        plugins = plugins.filter((definition) => contributing.has(definition.id));
+        const violations = grammarViolations(plugins, effectiveTheme.grammar);
+        if (violations.length > 0) {
+            return {
+                ok: false,
+                failure: {
+                    reason: 'grammar',
+                    detail: `connected graph: ${violations.map((violation) => violation.detail).join('; ')}`,
+                },
+            };
+        }
+
+        wired = wireScene(plugins, context.assetResources ?? []);
+    }
+
     const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
     if (!compiled.ok) {
         return { ok: false, failure: { reason: 'compile', detail: compiled.errors.join('; ') } };
@@ -124,17 +171,61 @@ export function buildScene(
     return {
         ok: true,
         scene: {
-            seed,
+            entropy,
             theme: effectiveTheme,
-            plugins: assembled.plugins,
+            plugins,
             wired,
             graph: compiled.graph,
-            bindings: distributeReactivity(assembled.plugins, createRng(`${seed}:bindings`)),
+            bindings: distributeReactivity(plugins, createRng(`${entropy}:bindings`)),
             // The theme's colour policy reaches the plugins that map colour, so a theme asking for the
             // album palette at full strength actually gets it.
             parameterOverrides: colourOverrides(effectiveTheme.colorPolicy),
         },
     };
+}
+
+/**
+ * Plugin ids with a path to a terminal colour output.
+ *
+ * Feedback edges are dependencies but do not make an output intermediate: a feedback texture may be
+ * both read next frame and presented now. Forward consumers do make an output intermediate.
+ */
+export function contributingPluginIds(scene: WiredScene): Set<string> {
+    const forwardConsumed = new Set(
+        scene.edges
+            .filter((edge) => !edge.feedback)
+            .map((edge) => `${edge.from.instanceId}.${edge.from.port}`),
+    );
+    const contributingInstances = new Set<string>();
+
+    for (const node of scene.nodes) {
+        const hasTerminalColour = node.definition.outputs.some((port) =>
+            port.type === 'color-texture'
+            && !forwardConsumed.has(`${node.instanceId}.${port.name}`));
+        if (hasTerminalColour) {
+            contributingInstances.add(node.instanceId);
+        }
+    }
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const edge of scene.edges) {
+            if (
+                contributingInstances.has(edge.to.instanceId)
+                && !contributingInstances.has(edge.from.instanceId)
+            ) {
+                contributingInstances.add(edge.from.instanceId);
+                changed = true;
+            }
+        }
+    }
+
+    return new Set(
+        scene.nodes
+            .filter((node) => contributingInstances.has(node.instanceId))
+            .map((node) => node.definition.id),
+    );
 }
 
 /**
@@ -145,7 +236,7 @@ export function buildScene(
  * being filled in.
  */
 export function buildFirstViableScene(
-    seed: string,
+    entropy: string,
     themes: readonly VisualTheme[],
     context: SceneBuildContext,
     profile: QualityProfile,
@@ -153,7 +244,7 @@ export function buildFirstViableScene(
     let lastFailure: SceneBuildFailure = { reason: 'grammar', detail: 'no themes supplied' };
 
     for (const theme of themes) {
-        const result = buildScene(seed, theme, context, profile);
+        const result = buildScene(entropy, theme, context, profile);
         if (result.ok) {
             return result;
         }
@@ -162,4 +253,17 @@ export function buildFirstViableScene(
     }
 
     return { ok: false, failure: lastFailure };
+}
+
+/**
+ * Varies family priority for each freshly generated scene.
+ *
+ * Fallback still needs an order, but a static one made the first viable family monopolize every track.
+ * The entropy originates from a new browser UUID, so this is not a track-to-theme mapping.
+ */
+export function variedThemeOrder(
+    entropy: string,
+    themes: readonly VisualTheme[],
+): VisualTheme[] {
+    return createRng(`${entropy}:themes`).shuffle(themes);
 }

@@ -17,7 +17,6 @@ describe('diagnostics controls', () => {
         expect(controls.freezeSimulation).toBe(false);
         expect(controls.disabledPlugins).toEqual([]);
         expect(controls.inspectResource).toBeUndefined();
-        expect(controls.overrideSeed).toBeUndefined();
     });
 
     test('freezing simulation passes zero delta, exactly as a frozen clock does', () => {

@@ -62,8 +62,8 @@ Visual time comes from the playback clock, a state machine over media events.
 Simulators, feedback, mutation timers, and beat phase advance only while audio is playing. Every
 other state passes zero delta, which holds them in place while retaining the current frame. Pause,
 stall, and seek freeze; seek and track change additionally clear queued events, drop short-term
-analysis history, and invalidate tempo. A track change increments a generation counter and reseeds
-the scene.
+analysis history, and invalidate tempo. A track change increments a generation counter and selects a
+new scene from fresh entropy.
 
 ## Rendering
 
@@ -77,8 +77,8 @@ cooperation.
 
 The render graph validates connections by port type, rejects over-subscribed ports and unsatisfied
 required inputs, and requires that a cycle declare its closing edge as feedback. A declared feedback
-edge reads the previous frame through alternating ping-pong slots. Compilation is deterministic for a
-given scene.
+edge reads the previous frame through alternating ping-pong slots. Compilation keeps a stable
+execution order for the active graph; scene selection itself is fresh and non-repeatable.
 
 Asset textures bind as graph resources separately from edges, since an asset has no execution order.
 A derived texture always wins over the raw asset it came from.
@@ -87,17 +87,29 @@ A derived texture always wins over the raw asset it came from.
 
 The scheduler assembles scenes from scene grammar and plugin character rather than compatibility
 alone. A theme states the character it wants; category counts, dominant-generator caps, and feedback
-and symmetry limits are enforced during assembly. Candidate selection checks that a plugin's required
-inputs are producible by what is already chosen.
+and symmetry limits are enforced during assembly. Full scenes require multiple material producers and
+one or two explicit compositors. Candidate selection checks that a plugin's required inputs are
+producible by what is already chosen, and candidates with orphan fields or simulations are discarded.
 
-Wiring connects each required input to the freshest compatible output, chaining transformers, and
-closes a feedback-capable transformer onto its own previous frame.
+Wiring connects each required input to the freshest compatible output, but reserves distinct colour
+producers for a mixer's two inputs. A flow-field compositor traces through force textures, warps
+visible material, and derives chromatic ribbons from the same samples. Collision fields additionally
+carry boundary proximity so particles reflect from mask-derived geometry.
 
-Scenes evolve by mutation at parameter, plugin, branch, and scene granularity. Scene mutation is the
-rarest, since it discards accumulated feedback and simulator state. Stateful plugins declare a
+Every audio-bound parameter also receives independent, playback-clocked slow modulation. Several
+layers therefore breathe, fold, and drift concurrently while their immediate response remains
+distributed across different audio features. Structural mutation operates at parameter, plugin,
+branch, and scene granularity. Branch mutation rebuilds within the current family while retaining
+compatible feedback and simulator state; scene mutation is rare. Stateful plugins declare a
 deactivation policy so they leave gracefully rather than vanishing.
 
-All randomness is seeded from the track and generation, so a scene is reproducible.
+Each new scene varies visual-family priority before fallback, so the first viable family cannot
+monopolize every track. At presentation, monochrome geometry and simulation textures receive a
+time-varying audio-sensitive palette; already-saturated source material such as album art keeps its
+own colour.
+
+Every modal opening, track change, explicit **New scene**, and full scene mutation selects from fresh
+entropy. Tracks do not map to repeatable scenes, and diagnostics do not expose a reproduction control.
 
 ## Assets
 

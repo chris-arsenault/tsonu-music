@@ -146,6 +146,7 @@ uniform float uPhase;
 uniform float uMode;
 uniform float uMorph;
 uniform float uRepeat;
+uniform float uEnergy;
 ${GLSL_COMMON}
 
 float circle(vec2 p, float r) { return length(p) - r; }
@@ -170,6 +171,8 @@ float smoothUnion(float a, float b, float k) {
 void main() {
     vec2 p = (vUv - 0.5) * 2.0;
     p.x *= uResolution.x / max(uResolution.y, 1.0);
+    float pulse = 1.0 + 0.06 * sin(uTime * 0.8 + uPhase) + 0.12 * uEnergy;
+    p = rotate(p / pulse, uTime * 0.035 + uEnergy * 0.08);
 
     if (uRepeat > 1.5) {
         // Domain repetition: one shape becomes a lattice without extra geometry.
@@ -209,7 +212,9 @@ void main() {
     );
 
     // Colour, mask, distance, and gradient in one output, as section 19.2 describes.
-    fragColor = vec4(vec3(fill), fill) + vec4(0.0, gradient, 0.0) * 0.0 + vec4(0.0);
+    float palettePhase = 0.5 + 0.5 * sin(uPhase + uTime * 0.12 + uEnergy * 2.0);
+    vec3 colour = mix(vec3(0.12, 0.22, 0.58), vec3(0.95, 0.56, 0.16), palettePhase);
+    fragColor = vec4(colour * fill, fill) + vec4(0.0, gradient, 0.0) * 0.0 + vec4(0.0);
 }`;
 
 export const PROCEDURAL_TEXTURE_MODES = [
@@ -292,16 +297,26 @@ export function createSdfShapeSource(
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['procedural', 'sdf'],
         fragment: SDF_SHAPE_FRAGMENT,
-        uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1 },
-        parameters: { morph: 0.5, repeat: 1 },
-        bindings: [{
-            feature: 'lowMid',
-            parameter: 'morph',
-            outputRange: [0, 1],
-            attack: 0.25,
-            release: 0.7,
-            curve: 'smooth',
-        }],
+        uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1, uEnergy: 0.35 },
+        parameters: { morph: 0.5, repeat: 1, energy: 0.35 },
+        bindings: [
+            {
+                feature: 'lowMid',
+                parameter: 'morph',
+                outputRange: [0, 1],
+                attack: 0.25,
+                release: 0.7,
+                curve: 'smooth',
+            },
+            {
+                feature: 'rms',
+                parameter: 'energy',
+                outputRange: [0.1, 1],
+                attack: 0.08,
+                release: 0.45,
+                curve: 'sqrt',
+            },
+        ],
         character: character({ geometricOrder: 0.9, visualDensity: 0.4, motionEnergy: 0.25 }),
         activationWeight: 1,
         minimumDuration: 10,

@@ -567,20 +567,6 @@ describe('section 26: the visualizer remains functional when plugins or the rend
     });
 });
 
-describe('section 26: reproducibility', () => {
-    test('a scene is fully determined by its seed', () => {
-        const assets = availableAssetIds([ART, MASK]);
-        const first = buildScene('fixed', ORGANIC_FLOW_THEME, { ...BUILD_CONTEXT, assets }, profileFor(0));
-        const second = buildScene('fixed', ORGANIC_FLOW_THEME, { ...BUILD_CONTEXT, assets }, profileFor(0));
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
-
-        expect(first.scene.plugins.map((p) => p.id)).toEqual(second.scene.plugins.map((p) => p.id));
-        expect(first.scene.graph.order.map((n) => n.instanceId))
-            .toEqual(second.scene.graph.order.map((n) => n.instanceId));
-        expect(first.scene.bindings).toEqual(second.scene.bindings);
-    });
-});
-
 /*
  * Three section 26 criteria are not asserted here, because they need a real GPU or a listener:
  * a 3D source outputting colour and depth, perceived beat synchronisation within about one frame, and

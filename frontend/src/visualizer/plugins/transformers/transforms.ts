@@ -79,7 +79,8 @@ void main() {
     float angle = atan(p.y, p.x);
 
     if (uMode < 0.5) {                       // polar
-        p = vec2(angle / 6.2831853 + 0.5, radius) - 0.5;
+        float ripple = sin(radius * 18.0 - uTime * 0.7) * uAmount * 0.04;
+        p = vec2(angle / 6.2831853 + 0.5 + ripple, radius * (1.0 + uAmount * 0.12)) - 0.5;
     } else if (uMode < 1.5) {                // log-polar tunnel
         p = vec2(angle / 6.2831853, log(max(radius, 0.001)) * 0.25 + uTime * 0.1) - 0.5;
     } else if (uMode < 2.5) {                // twirl

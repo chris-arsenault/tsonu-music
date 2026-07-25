@@ -1,9 +1,9 @@
 /**
- * Deterministic seeded randomness.
+ * Per-scene randomness.
  *
- * Every scheduler choice draws from here so a scene reproduces exactly from its seed. `Math.random`
- * must never be used in the visualizer: a scene that cannot be reproduced cannot be debugged from a
- * bug report or reconstructed by the diagnostics overlay.
+ * A fresh entropy token is created whenever the product asks for a new scene. The scheduler then uses
+ * one stable stream while assembling that scene so its own choices remain internally coherent; tracks
+ * are deliberately not mapped to repeatable scenes.
  */
 
 export interface Rng {
@@ -113,7 +113,20 @@ export function createRng(seed: string): Rng {
     return rng;
 }
 
-/** Scene seed for a track and generation, so replaying a track gives the same scene. */
-export function sceneSeed(trackId: string | null, generation: number): string {
-    return `${trackId ?? 'none'}#${generation}`;
+let fallbackEntropyCounter = 0;
+
+/**
+ * Fresh entropy for a scene selection.
+ *
+ * Browsers provide `crypto.randomUUID`; the fallback is intentionally time-varying as well. The
+ * optional source keeps the contract testable without making production scene selection repeatable.
+ */
+export function freshSceneEntropy(randomUuid?: () => string): string {
+    const source = randomUuid ?? globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
+    if (source) {
+        return `scene:${source()}`;
+    }
+
+    fallbackEntropyCounter += 1;
+    return `scene:${Date.now().toString(36)}:${fallbackEntropyCounter.toString(36)}`;
 }

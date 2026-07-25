@@ -7,7 +7,6 @@
  */
 
 import type { ReactNode } from 'react';
-import { useState } from 'react';
 import {
     formatBytes,
     togglePluginDisabled,
@@ -39,8 +38,6 @@ export default function DiagnosticsPanel({
     handle,
     onClose,
 }: DiagnosticsPanelProps) {
-    const [seedInput, setSeedInput] = useState('');
-
     return (
         <aside className="viz-diagnostics" aria-label="Visualizer diagnostics">
             <header className="viz-diagnostics__header">
@@ -74,6 +71,8 @@ export default function DiagnosticsPanel({
                     <Row label="suppressed" value={String(readout.render?.suppressedPlugins ?? 0)} />
                     <Row label="compiling" value={String(readout.render?.pendingShaders ?? 0)} />
                     <Row label="layers" value={String(readout.scene?.layerCount ?? 0)} />
+                    <Row label="branches" value={String(readout.scene?.materialBranchCount ?? 0)} />
+                    <Row label="modulators" value={String(readout.scene?.activeModulatorCount ?? 0)} />
                     <Row label="mutation" value={readout.scene?.lastMutation ?? 'none'} />
                     <Row label="targets" value={String(readout.render?.targetsAllocated ?? 0)} />
                     <Row label="downgrades" value={String(readout.performance?.downgrades ?? 0)} />
@@ -90,7 +89,6 @@ export default function DiagnosticsPanel({
 
                 <Section title="Scene">
                     <Row label="theme" value={readout.scene?.themeId ?? '—'} />
-                    <Row label="seed" value={readout.scene?.seed ?? '—'} />
                     <Row label="assets" value={String(readout.scene?.assets.length ?? 0)} />
                     <Row label="tier" value={describeTier(selectTier(faults))} />
                 </Section>
@@ -196,23 +194,17 @@ export default function DiagnosticsPanel({
                 </label>
 
                 <div className="viz-debug__control">
-                    <input
-                        type="text"
-                        value={seedInput}
-                        placeholder={readout.scene?.seed ?? 'seed'}
-                        onChange={(event) => setSeedInput(event.currentTarget.value)}
-                        aria-label="Scene seed"
-                    />
                     <button
                         type="button"
-                        onClick={() => handle?.reproduceSeed(seedInput || (readout.scene?.seed ?? ''))}
+                        title="Discard this composition and generate a fresh random scene"
+                        onClick={() => handle?.newScene()}
                     >
-                        Reproduce
-                    </button>
-                    <button type="button" onClick={() => handle?.rebuildCurrent()}>
                         New scene
                     </button>
                 </div>
+                <p className="viz-debug__control-help">
+                    Discards the current composition and generates a fresh random scene.
+                </p>
             </div>
         </aside>
     );

@@ -5,7 +5,8 @@ shapes. The visualizer converts a mask into a signed distance field, gradient fi
 shares that derivation across every consumer in a scene.
 
 Masks are same-origin so mask textures raise no cross-origin tainting question, and the library is
-versioned with the code that reads it, so a scene reproduced from a seed resolves the same masks. See
+versioned with the code that reads it, so collision and containment behavior remains stable across
+deployments even though scene selection itself is not repeatable. See
 [ADR-0005](./adr/0005-visualizer-mask-assets.md).
 
 `manifest.json` is the index. An empty `masks` array is valid: mask-driven plugins declare

@@ -150,7 +150,7 @@ describe('graph compilation', () => {
         expect(result.graph.pingPong).toEqual([]);
     });
 
-    test('compilation is deterministic for the same scene', () => {
+    test('compilation keeps a stable execution order for the active graph', () => {
         const first = compileGraph(chain, chainEdges);
         const second = compileGraph(chain, chainEdges);
         if (!first.ok || !second.ok) throw new Error('expected compilation to succeed');

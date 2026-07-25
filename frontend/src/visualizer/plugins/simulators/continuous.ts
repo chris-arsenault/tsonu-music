@@ -171,11 +171,11 @@ export function createReactionDiffusionSimulator(): VisualPluginDefinition {
         id: 'ReactionDiffusionSimulator',
         category: 'simulator',
         inputs: [
-            { name: 'history', type: 'color-texture', required: false },
+            { name: 'history', type: 'reaction-diffusion-state', required: false },
             // Optional: mask or album luminance seeds the pattern, but it self-seeds without one.
             { name: 'seed', type: 'mask-texture', required: false },
         ],
-        outputs: [{ name: 'field', type: 'color-texture' }],
+        outputs: [{ name: 'field', type: 'reaction-diffusion-state' }],
         capabilities: ['reaction-diffusion', 'feedback'],
         fragment: REACTION_DIFFUSION_FRAGMENT,
         uniforms: { uFeed: 0.037, uKill: 0.06, uImpulse: 0.6, uDelta: 1 / 60 },
@@ -212,7 +212,7 @@ export function createReactionDiffusionView(): VisualPluginDefinition {
     return defineShaderPlugin({
         id: 'ReactionDiffusionView',
         category: 'transformer',
-        inputs: [{ name: 'source', type: 'color-texture', required: true }],
+        inputs: [{ name: 'source', type: 'reaction-diffusion-state', required: true }],
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['reaction-diffusion-view'],
         fragment: REACTION_VIEW_FRAGMENT,
@@ -231,10 +231,10 @@ export function createWaveFieldSimulator(): VisualPluginDefinition {
         id: 'WaveFieldSimulator',
         category: 'simulator',
         inputs: [
-            { name: 'history', type: 'color-texture', required: false },
+            { name: 'history', type: 'wave-field-state', required: false },
             { name: 'impulse', type: 'vector-field', required: true },
         ],
-        outputs: [{ name: 'field', type: 'color-texture' }],
+        outputs: [{ name: 'field', type: 'wave-field-state' }],
         capabilities: ['wave-field', 'feedback', 'impact-consumer'],
         fragment: WAVE_FIELD_FRAGMENT,
         uniforms: { uDamping: 0.015, uSpeed: 0.4, uOnset: 0.5, uDelta: 1 / 60 },
@@ -269,7 +269,7 @@ export function createWaveFieldView(): VisualPluginDefinition {
     return defineShaderPlugin({
         id: 'WaveFieldView',
         category: 'transformer',
-        inputs: [{ name: 'source', type: 'color-texture', required: true }],
+        inputs: [{ name: 'source', type: 'wave-field-state', required: true }],
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['wave-field-view'],
         fragment: WAVE_VIEW_FRAGMENT,

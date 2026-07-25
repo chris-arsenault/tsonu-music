@@ -232,6 +232,79 @@ void main() {
     fragColor = vec4(source.rgb + glow * uAmount, source.a);
 }`;
 
+/**
+ * Couples visible material to a spatial force field.
+ *
+ * Several earlier plugins could generate sophisticated fields, but nothing was guaranteed to show
+ * them: they were often orphaned or used only to push a sparse particle set. This pass integrates the
+ * field through image space, uses it to warp the source, and derives coloured flow lines from the same
+ * samples. The source, force, colour, and audio-bound parameters therefore evolve as one system.
+ */
+const FLOW_FIELD_COMPOSITOR_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uAmount;
+uniform float uHue;
+uniform float uBreath;
+${GLSL_COMMON}
+
+vec3 flowPalette(float phase) {
+    return 0.52 + 0.48 * cos(6.2831853 * (phase + vec3(0.00, 0.31, 0.67)));
+}
+
+void main() {
+    vec2 p = vUv;
+    vec2 accumulated = vec2(0.0);
+    float curvature = 0.0;
+    float previousAngle = 0.0;
+
+    // Trace through the field rather than sampling it once. Local changes compound into folds and
+    // eddies, which is the chaotic interaction missing from a one-direction displacement.
+    for (int step = 0; step < 9; step += 1) {
+        vec2 force = texture(uField, clamp(p, 0.0, 1.0)).xy;
+        float forceLength = length(force);
+        vec2 direction = forceLength > 0.0001 ? force / forceLength : vec2(0.0);
+        float angle = atan(direction.y, direction.x);
+        if (step > 0) {
+            curvature += abs(sin(angle - previousAngle));
+        }
+        previousAngle = angle;
+        accumulated += direction * min(forceLength, 2.5);
+        p = fract(p - direction * (0.007 + 0.002 * float(step)) * uAmount);
+    }
+
+    vec4 source = texture(uSource, p);
+    float flow = length(accumulated) / 9.0;
+    float ribbons = 0.5 + 0.5 * sin(
+        dot(vUv + accumulated * 0.018, vec2(73.0, 51.0))
+        + curvature * 2.6
+        - uTime * (0.45 + uBreath * 0.35)
+        + uPhase
+    );
+    ribbons = pow(ribbons, 5.0);
+
+    float pulse = 0.82 + 0.18 * sin(uTime * 0.7 + uPhase) + uBreath * 0.28;
+    float paletteIndex = fract(
+        uHue
+        + luminance(source.rgb) * 0.38
+        + flow * 0.22
+        + curvature * 0.08
+        + uTime * 0.018
+    );
+    vec3 palette = flowPalette(paletteIndex);
+    vec3 colouredSource = mix(source.rgb, palette * (0.35 + luminance(source.rgb)), 0.68);
+    vec3 colour = colouredSource * pulse + palette * ribbons * (0.28 + flow * 0.35);
+
+    fragColor = vec4(colour, max(source.a, clamp(ribbons + flow * 0.2, 0.0, 1.0)));
+}`;
+
 export const LAYER_MIXER_MODES = [
     'normal', 'add', 'screen', 'multiply', 'difference', 'lighten', 'darken', 'contrast',
 ] as const;
@@ -252,6 +325,66 @@ export const GLOW_MODES = [
     'soft-bloom', 'directional-streak', 'radial-scatter', 'edge-glow', 'anamorphic',
 ] as const;
 
+export function createFlowFieldCompositor(): VisualPluginDefinition {
+    return defineShaderPlugin({
+        id: 'FlowFieldCompositor',
+        category: 'compositor',
+        inputs: [
+            { name: 'source', type: 'color-texture', required: true },
+            { name: 'field', type: 'vector-field', required: true },
+        ],
+        outputs: [{ name: 'color', type: 'color-texture' }],
+        capabilities: ['field-composition', 'chromatic-output', 'layer-mixing'],
+        fragment: FLOW_FIELD_COMPOSITOR_FRAGMENT,
+        uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5 },
+        parameters: { amount: 1, hue: 0.2, breath: 0.5 },
+        bindings: [
+            {
+                feature: 'bass',
+                parameter: 'amount',
+                outputRange: [0.45, 2.1],
+                attack: 0.12,
+                release: 0.7,
+                curve: 'smooth',
+            },
+            {
+                feature: 'spectralCentroid',
+                parameter: 'hue',
+                outputRange: [0, 1],
+                attack: 0.35,
+                release: 1.1,
+                curve: 'linear',
+            },
+            {
+                feature: 'rms',
+                parameter: 'breath',
+                outputRange: [0.1, 1],
+                attack: 0.08,
+                release: 0.55,
+                curve: 'sqrt',
+            },
+        ],
+        character: character({
+            visualDensity: 0.72,
+            motionEnergy: 0.78,
+            geometricOrder: 0.32,
+            persistence: 0.45,
+            brightness: 0.72,
+            dominance: 'supporting',
+        }),
+        gpuCost: 2,
+        activationWeight: 5,
+        minimumDuration: 14,
+        prefersWith: [
+            'ProceduralVectorField:curl',
+            'ProceduralVectorField:spiral',
+            'ProceduralVectorField:turbulence',
+            'ProceduralVectorField:domain-warp',
+            'MaskBoundaryField',
+        ],
+    });
+}
+
 export function createLayerMixer(
     mode: typeof LAYER_MIXER_MODES[number] = 'screen',
 ): VisualPluginDefinition {
@@ -268,7 +401,7 @@ export function createLayerMixer(
         uniforms: { uMode: LAYER_MIXER_MODES.indexOf(mode), uMix: 1 },
         parameters: { mix: 1 },
         character: character({ visualDensity: 0.5, geometricOrder: 0.5, dominance: 'supporting' }),
-        activationWeight: 1,
+        activationWeight: 3,
     });
 }
 

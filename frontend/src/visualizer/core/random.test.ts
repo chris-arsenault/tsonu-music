@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { createRng, hashSeed, sceneSeed } from './random';
+import { createRng, freshSceneEntropy, hashSeed } from './random';
 
 describe('seed hashing', () => {
     test('is stable for the same input', () => {
@@ -11,20 +11,17 @@ describe('seed hashing', () => {
         expect(hashSeed('track_1#0')).not.toBe(hashSeed('track_1#1'));
     });
 
-    test('scene seeds separate tracks and generations', () => {
-        expect(sceneSeed('track_a', 0)).not.toBe(sceneSeed('track_b', 0));
-        expect(sceneSeed('track_a', 0)).not.toBe(sceneSeed('track_a', 1));
-        // Replaying the same track at the same generation reproduces the scene.
-        expect(sceneSeed('track_a', 2)).toBe(sceneSeed('track_a', 2));
-    });
+    test('fresh scene entropy comes from a new UUID rather than track identity', () => {
+        const values = ['first', 'second'];
+        const source = () => values.shift()!;
 
-    test('a missing track still yields a usable seed', () => {
-        expect(sceneSeed(null, 0)).toBe('none#0');
+        expect(freshSceneEntropy(source)).toBe('scene:first');
+        expect(freshSceneEntropy(source)).toBe('scene:second');
     });
 });
 
 describe('generator', () => {
-    test('is fully deterministic for a seed', () => {
+    test('holds a stable sequence within one internal entropy stream', () => {
         const first = Array.from({ length: 20 }, () => createRng('fixed').next());
         const second = Array.from({ length: 20 }, () => createRng('fixed').next());
 
@@ -169,13 +166,13 @@ describe('derived helpers', () => {
         expect(shuffled.slice().sort((a, b) => a - b)).toEqual(original);
     });
 
-    test('shuffle is deterministic for a seed', () => {
+    test('shuffle stays stable during one candidate build', () => {
         const items = [1, 2, 3, 4, 5, 6, 7, 8];
 
         expect(createRng('same').shuffle(items)).toEqual(createRng('same').shuffle(items));
     });
 
-    test('forked streams are independent and reproducible', () => {
+    test('forked streams are independent and internally stable', () => {
         const parent = createRng('parent');
         const left = parent.fork('left');
         const right = parent.fork('right');

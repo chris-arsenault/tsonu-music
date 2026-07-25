@@ -1,29 +1,34 @@
 import { describe, expect, test } from 'vitest';
-import { buildFirstViableScene, buildScene } from './scene-builder';
+import {
+    buildFirstViableScene,
+    buildScene,
+    contributingPluginIds,
+    variedThemeOrder,
+    type SceneBuildContext,
+} from './scene-builder';
 import { profileFor, QUALITY_LADDER } from './performance';
 import { peakConcentration } from './audio-mapping';
-import { m1Definitions } from '../plugins/registry';
-import { GEOMETRIC_SIGNAL_THEME, IMAGE_DREAM_THEME, THEMES } from '../plugins/themes';
-import { sceneSeed } from './random';
-import type { SchedulerContext } from './scheduler';
+import { allDefinitions } from '../plugins/registry';
+import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';
+import { assetResourceId } from './wiring';
 
-const CATALOG = m1Definitions();
+const FULL_CATALOG = allDefinitions();
 
-function context(overrides: Partial<SchedulerContext> = {}) {
+function context(overrides: Partial<SceneBuildContext> = {}): SceneBuildContext {
     return {
-        available: CATALOG,
+        available: FULL_CATALOG,
         assets: [],
         capabilities: [],
         history: {},
         playbackTime: 0,
         ...overrides,
-    } as Omit<SchedulerContext, 'theme' | 'allowHighCost' | 'allowDominant'>;
+    };
 }
 
 const FULL = profileFor(0);
 
 describe('scene building', () => {
-    test('builds a compilable scene from the M1 catalog', () => {
+    test('builds a compilable connected scene from the full catalog', () => {
         const result = buildScene('seed-1', GEOMETRIC_SIGNAL_THEME, context(), FULL);
 
         expect(result.ok, result.ok ? '' : result.failure.detail).toBe(true);
@@ -31,18 +36,6 @@ describe('scene building', () => {
 
         expect(result.scene.graph.order.length).toBeGreaterThan(0);
         expect(result.scene.graph.present).toBeDefined();
-    });
-
-    test('the same seed rebuilds the identical scene', () => {
-        const first = buildScene('reproduce', GEOMETRIC_SIGNAL_THEME, context(), FULL);
-        const second = buildScene('reproduce', GEOMETRIC_SIGNAL_THEME, context(), FULL);
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
-
-        expect(first.scene.plugins.map((entry) => entry.id))
-            .toEqual(second.scene.plugins.map((entry) => entry.id));
-        expect(first.scene.graph.order.map((entry) => entry.instanceId))
-            .toEqual(second.scene.graph.order.map((entry) => entry.instanceId));
-        expect(first.scene.bindings).toEqual(second.scene.bindings);
     });
 
     test('different seeds give different scenes with the same theme', () => {
@@ -58,12 +51,44 @@ describe('scene building', () => {
         expect(shapes.size).toBeGreaterThan(1);
     });
 
-    test('a track change produces a new scene seed and so a new scene', () => {
-        const first = buildScene(sceneSeed('track_a', 1), GEOMETRIC_SIGNAL_THEME, context(), FULL);
-        const second = buildScene(sceneSeed('track_b', 2), GEOMETRIC_SIGNAL_THEME, context(), FULL);
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
+    test('the reported polygon seed has no orphan field or mismatched simulation view', () => {
+        const result = buildScene(
+            'reported-static-silhouette',
+            GEOMETRIC_SIGNAL_THEME,
+            context({
+                available: FULL_CATALOG,
+                assets: ['album-art', 'album-art:current', 'mask', 'mask:inkblot'],
+                capabilities: ['float-textures', 'webgl2'],
+                assetResources: [
+                    { resource: assetResourceId('album-art:current'), type: 'color-texture' },
+                    { resource: assetResourceId('mask:inkblot'), type: 'mask-texture' },
+                ],
+            }),
+            FULL,
+        );
 
-        expect(first.scene.seed).not.toBe(second.scene.seed);
+        expect(result.ok, result.ok ? '' : result.failure.detail).toBe(true);
+        if (!result.ok) return;
+
+        const ids = result.scene.plugins.map((entry) => entry.id);
+        expect(ids).not.toContain('ProceduralVectorField:attract');
+        if (ids.includes('WaveFieldView')) {
+            expect(ids).toContain('WaveFieldSimulator');
+        }
+        if (ids.includes('ReactionDiffusionView')) {
+            expect(ids).toContain('ReactionDiffusionSimulator');
+        }
+
+        const consumed = new Set(
+            result.scene.graph.order.flatMap((node) => [
+                ...Object.values(node.inputs),
+                ...Object.values(node.previous),
+            ]),
+        );
+        const orphanState = result.scene.graph.resources.filter((resource) =>
+            resource.type !== 'color-texture' && !consumed.has(resource.id));
+
+        expect(orphanState).toEqual([]);
     });
 
     test('distributes reactivity rather than leaving every plugin on one feature', () => {
@@ -99,6 +124,37 @@ describe('scene building', () => {
         }
     });
 
+    test('every visual family builds a connected composition with explicit interaction', () => {
+        const richContext = context({
+            assets: ['album-art', 'album-art:current', 'mask', 'mask:inkblot'],
+            capabilities: ['float-textures', 'webgl2'],
+            assetResources: [
+                { resource: assetResourceId('album-art:current'), type: 'color-texture' },
+                { resource: assetResourceId('mask:inkblot'), type: 'mask-texture' },
+            ],
+        });
+
+        for (const theme of THEMES) {
+            const result = buildScene(`complex-${theme.id}`, theme, richContext, FULL);
+
+            expect(result.ok, result.ok ? '' : `${theme.id}: ${result.failure.detail}`).toBe(true);
+            if (!result.ok) continue;
+
+            expect(
+                result.scene.plugins.filter((entry) =>
+                    entry.category !== 'postprocess'
+                    && entry.outputs.some((port) => port.type === 'color-texture')).length,
+                `${theme.id} visible material branches`,
+            ).toBeGreaterThanOrEqual(2);
+            expect(
+                result.scene.plugins.some((entry) => entry.category === 'compositor'),
+                `${theme.id} compositor`,
+            ).toBe(true);
+            expect(contributingPluginIds(result.scene.wired).size, `${theme.id} connected nodes`)
+                .toBe(result.scene.wired.nodes.length);
+        }
+    });
+
     test('a feedback plugin in the scene yields a ping-pong resource', () => {
         for (const seed of ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']) {
             const result = buildScene(seed, GEOMETRIC_SIGNAL_THEME, context(), FULL);
@@ -120,15 +176,6 @@ describe('scene building', () => {
         expect(result.failure.reason).toBe('grammar');
     });
 
-    test('a theme the catalog cannot satisfy fails rather than producing a broken scene', () => {
-        // Image dream wants album-art sources, which the M1 catalog does not have enough of.
-        const result = buildScene('dream', IMAGE_DREAM_THEME, context(), FULL);
-
-        if (!result.ok) {
-            expect(['grammar', 'unsatisfied-inputs', 'compile']).toContain(result.failure.reason);
-            expect(result.failure.detail.length).toBeGreaterThan(0);
-        }
-    });
 });
 
 describe('quality-constrained building', () => {
@@ -196,13 +243,12 @@ describe('theme fallback', () => {
         expect(result.failure.detail).toMatch(/no themes/);
     });
 
-    test('fallback is deterministic', () => {
-        const first = buildFirstViableScene('stable', THEMES, context(), FULL);
-        const second = buildFirstViableScene('stable', THEMES, context(), FULL);
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
+    test('fresh scene entropy varies which visual family gets first chance', () => {
+        const firstChoices = new Set(
+            Array.from({ length: 24 }, (_, index) =>
+                variedThemeOrder(`fresh-${index}`, THEMES)[0]?.id),
+        );
 
-        expect(first.scene.theme.id).toBe(second.scene.theme.id);
-        expect(first.scene.plugins.map((entry) => entry.id))
-            .toEqual(second.scene.plugins.map((entry) => entry.id));
+        expect(firstChoices.size).toBe(THEMES.length);
     });
 });

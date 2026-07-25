@@ -3,8 +3,8 @@
  *
  * The overlay's data shape and its control state, kept pure so what the overlay claims can be tested
  * without a browser. The controls exist because most section 26 acceptance criteria are only checkable
- * with them: reproducing a scene from its seed, disabling one plugin, freezing mutation while audio
- * continues, inspecting an intermediate target.
+ * with them: disabling one plugin, freezing mutation while audio continues, and inspecting an
+ * intermediate target.
  */
 
 export interface DiagnosticsControls {
@@ -19,8 +19,6 @@ export interface DiagnosticsControls {
     disabledPlugins: readonly string[];
     /** Intermediate resource displayed instead of the composed output. */
     inspectResource?: string;
-    /** Seed to rebuild from, overriding the track-derived one. */
-    overrideSeed?: string;
 }
 
 export function createDiagnosticsControls(): DiagnosticsControls {
@@ -74,7 +72,6 @@ export interface DiagnosticsSnapshot {
         beatPhase: number;
     };
     scene: {
-        seed: string;
         themeId: string;
         pluginIds: readonly string[];
         /** Every graph edge as `from -> to`, for reading the structure at a glance. */

@@ -271,7 +271,7 @@ export function createMaskBoundaryField(): VisualPluginDefinition {
         version: 1,
         category: 'field',
         inputs: [{ name: 'field', type: 'distance-field', required: true }],
-        outputs: [{ name: 'deflection', type: 'vector-field', required: false }],
+        outputs: [{ name: 'deflection', type: 'collision-field', required: false }],
         capabilities: ['mask-derivation', 'collision'],
         cost: { gpu: 1, cpu: 0, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
         character: {

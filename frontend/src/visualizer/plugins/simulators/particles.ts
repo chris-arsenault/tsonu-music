@@ -30,11 +30,15 @@ out vec4 fragColor;
 
 uniform sampler2D uState;
 uniform sampler2D uForce;
+uniform sampler2D uBoundary;
+uniform sampler2D uSpawn;
 uniform vec2 uResolution;
 uniform float uDelta;
 uniform float uDrag;
 uniform float uLifetime;
 uniform float uSeed;
+uniform bool uHasBoundary;
+uniform bool uHasSpawn;
 ${GLSL_COMMON}
 
 void main() {
@@ -45,7 +49,10 @@ void main() {
     // An uninitialized texel starts as a seeded position rather than at the origin, so the first frame
     // does not show every particle stacked in one place.
     if (position == vec2(0.0) && velocity == vec2(0.0)) {
-        position = vec2(hash(vUv + uSeed), hash(vUv + uSeed + 3.7)) * 2.0 - 1.0;
+        vec4 spawn = uHasSpawn ? texture(uSpawn, vUv) : vec4(0.0);
+        position = uHasSpawn && spawn.a > 0.0
+            ? spawn.xy
+            : vec2(hash(vUv + uSeed), hash(vUv + uSeed + 3.7)) * 2.0 - 1.0;
         velocity = vec2(hash(vUv + 7.1) - 0.5, hash(vUv + 11.3) - 0.5) * 0.1;
     }
 
@@ -55,6 +62,20 @@ void main() {
 
     velocity += force * uDelta;
     velocity *= (1.0 - uDrag * uDelta);
+
+    // Collision fields carry boundary proximity in blue and an outward normal in red/green. Reflect
+    // particles that are moving into the mask edge, then push them clear so they do not jitter inside
+    // the boundary on the following frame.
+    if (uHasBoundary) {
+        vec4 boundary = texture(uBoundary, clamp(forceUv, 0.0, 1.0));
+        float proximity = boundary.b;
+        vec2 normal = length(boundary.rg) > 0.0001 ? normalize(boundary.rg) : vec2(0.0);
+        if (proximity > 0.04 && dot(velocity, normal) < 0.0) {
+            velocity = reflect(velocity, normal) * mix(0.72, 0.94, proximity);
+            velocity += normal * proximity * 0.35;
+        }
+    }
+
     position += velocity * uDelta;
 
     // Wraps rather than clamps, so a field pushing outward does not pile particles on the edge.
@@ -216,6 +237,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
         category: 'simulator',
         inputs: [
             { name: 'force', type: 'vector-field', required: true },
+            { name: 'boundary', type: 'collision-field', required: false },
+            { name: 'spawn', type: 'particle-buffer', required: false },
             { name: 'history', type: 'particle-buffer', required: false },
         ],
         outputs: [{ name: 'state', type: 'particle-buffer', required: false }],
@@ -267,6 +290,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
                     if (!force) {
                         return [];
                     }
+                    const boundary = render.inputs.boundary;
+                    const spawn = render.inputs.spawn;
 
                     return [{
                         kind: 'fullscreen',
@@ -274,6 +299,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
                         inputs: {
                             uForce: force,
                             uState: render.previous.history ?? render.outputs.state,
+                            ...(boundary ? { uBoundary: boundary } : {}),
+                            ...(spawn ? { uSpawn: spawn } : {}),
                         },
                         output: render.outputs.state,
                         blend: 'none',
@@ -283,6 +310,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
                             uDrag: 0.4,
                             uLifetime: 4,
                             uSeed: context.seed,
+                            uHasBoundary: boundary !== undefined,
+                            uHasSpawn: spawn !== undefined,
                         },
                     }];
                 },

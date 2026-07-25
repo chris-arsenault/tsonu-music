@@ -289,15 +289,6 @@ describe('scenes with and without assets', () => {
         expect(withoutDirectArt.length).toBeGreaterThan(0);
     });
 
-    test('assets being present is deterministic too', () => {
-        const assets = availableAssetIds([MASK_ASSET, ART_ASSET]);
-        const first = buildScene('both', ORGANIC_FLOW_THEME, { ...base, assets }, profileFor(0));
-        const second = buildScene('both', ORGANIC_FLOW_THEME, { ...base, assets }, profileFor(0));
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
-
-        expect(first.scene.plugins.map((entry) => entry.id))
-            .toEqual(second.scene.plugins.map((entry) => entry.id));
-    });
 });
 
 function find(id: string): VisualPluginDefinition {

@@ -17,7 +17,7 @@ import { COLLISION_ENERGY, GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } fr
 import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, ORGANIC_FLOW_THEME, THEMES } from './themes';
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
-import { availableAssetIds, maskAssetFrom, albumArtAssetFrom } from '../core/assets';
+import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
 import type { FrameContext } from '../core/plugin';
 
 const CATALOG = allDefinitions();
@@ -186,6 +186,35 @@ describe('catalog integrity', () => {
             const passes = renderWithAllInputs(definition);
             expect(passes[0]?.clear, `${definition.id} accumulates`).not.toBe(true);
         }
+    });
+
+    test('continuous simulation views require their own state type', () => {
+        const definition = (id: string) => CATALOG.find((entry) => entry.id === id)!;
+
+        expect(definition('ReactionDiffusionSimulator').outputs[0].type).toBe('reaction-diffusion-state');
+        expect(definition('ReactionDiffusionView').inputs[0].type).toBe('reaction-diffusion-state');
+        expect(definition('WaveFieldSimulator').outputs[0].type).toBe('wave-field-state');
+        expect(definition('WaveFieldView').inputs[0].type).toBe('wave-field-state');
+    });
+
+    test('the flow compositor couples visible material to a spatial field', () => {
+        const flow = CATALOG.find((entry) => entry.id === 'FlowFieldCompositor')!;
+        const passes = renderWithAllInputs(flow);
+
+        expect(flow.category).toBe('compositor');
+        expect(flow.capabilities).toEqual(expect.arrayContaining([
+            'field-composition',
+            'chromatic-output',
+            'layer-mixing',
+        ]));
+        expect(flow.inputs.map((port) => [port.name, port.type])).toEqual([
+            ['source', 'color-texture'],
+            ['field', 'vector-field'],
+        ]);
+        expect(passes[0].inputs).toEqual({
+            uSource: 'in.source',
+            uField: 'in.field',
+        });
     });
 
     test('stateful plugins declare a graceful deactivation policy', () => {
@@ -395,20 +424,6 @@ describe('scene assembly across the full catalog', () => {
         expect(result.ok, result.ok ? '' : result.failure.detail).toBe(true);
     });
 
-    test('scenes remain reproducible with the full catalog', () => {
-        const assets = availableAssetIds([
-            maskAssetFrom({ id: 'inkblot', file: 'inkblot.png', interpretation: 'luminance' }),
-            albumArtAssetFrom('/art.jpg'),
-        ]);
-
-        const first = buildScene('repro', ORGANIC_FLOW_THEME, { ...base, assets }, profileFor(0));
-        const second = buildScene('repro', ORGANIC_FLOW_THEME, { ...base, assets }, profileFor(0));
-        if (!first.ok || !second.ok) throw new Error('expected both builds to succeed');
-
-        expect(first.scene.plugins.map((p) => p.id)).toEqual(second.scene.plugins.map((p) => p.id));
-        expect(first.scene.graph.order.map((n) => n.instanceId))
-            .toEqual(second.scene.graph.order.map((n) => n.instanceId));
-    });
 });
 
 describe('spec section 25 example compositions', () => {

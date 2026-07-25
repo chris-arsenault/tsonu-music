@@ -60,8 +60,8 @@ export function createLayer(id: string, color: ResourceId, overrides: Partial<Vi
 /**
  * Resolves the draw order and effective opacities.
  *
- * Layers sort by `order`, ties broken by id so composition is deterministic for a given scene rather
- * than dependent on activation sequence. The lowest layer is forced to `normal` blending: blending a
+ * Layers sort by `order`, ties broken by id so the active composition is stable rather than dependent
+ * on activation sequence. The lowest layer is forced to `normal` blending: blending a
  * bottom layer against an uninitialized target produces whatever the pool last left there.
  */
 export function composeLayers(

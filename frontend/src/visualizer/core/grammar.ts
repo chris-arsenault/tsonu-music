@@ -15,6 +15,7 @@ export interface SceneGrammar {
     fieldCount: CountRange;
     simulatorCount: CountRange;
     transformerCount: CountRange;
+    compositorCount: CountRange;
     postprocessCount: CountRange;
 
     maximumDominantPlugins: number;
@@ -33,8 +34,8 @@ export const CATEGORY_RANGE_KEYS: Record<PluginCategory, keyof SceneGrammar | un
     field: 'fieldCount',
     simulator: 'simulatorCount',
     transformer: 'transformerCount',
+    compositor: 'compositorCount',
     postprocess: 'postprocessCount',
-    compositor: undefined,
 };
 
 export interface GrammarViolation {
@@ -181,10 +182,11 @@ export function wouldViolate(
 /* -------------------------------------------------------------------------- */
 
 export const ORGANIC_FLOW: SceneGrammar = {
-    sourceCount: [1, 2],
+    sourceCount: [2, 3],
     fieldCount: [1, 2],
     simulatorCount: [0, 1],
-    transformerCount: [1, 2],
+    transformerCount: [1, 3],
+    compositorCount: [1, 2],
     postprocessCount: [1, 2],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
@@ -194,11 +196,12 @@ export const ORGANIC_FLOW: SceneGrammar = {
 };
 
 export const GEOMETRIC_SIGNAL: SceneGrammar = {
-    sourceCount: [1, 2],
+    sourceCount: [2, 3],
     fieldCount: [0, 1],
     // No dense simulator: the family is about clean geometry.
     simulatorCount: [0, 0],
-    transformerCount: [1, 3],
+    transformerCount: [2, 3],
+    compositorCount: [1, 2],
     postprocessCount: [1, 2],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
@@ -208,10 +211,11 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
 };
 
 export const COLLISION_ENERGY: SceneGrammar = {
-    sourceCount: [0, 1],
-    fieldCount: [1, 2],
+    sourceCount: [1, 2],
+    fieldCount: [1, 3],
     simulatorCount: [1, 1],
     transformerCount: [1, 2],
+    compositorCount: [1, 2],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 2,
@@ -221,10 +225,11 @@ export const COLLISION_ENERGY: SceneGrammar = {
 };
 
 export const IMAGE_DREAM: SceneGrammar = {
-    sourceCount: [1, 3],
-    fieldCount: [0, 2],
+    sourceCount: [2, 3],
+    fieldCount: [1, 3],
     simulatorCount: [0, 1],
-    transformerCount: [1, 3],
+    transformerCount: [2, 3],
+    compositorCount: [1, 2],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
@@ -246,6 +251,7 @@ export const REDUCED_GRAMMAR: SceneGrammar = {
     fieldCount: [0, 1],
     simulatorCount: [0, 0],
     transformerCount: [0, 1],
+    compositorCount: [0, 1],
     postprocessCount: [1, 1],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 0,

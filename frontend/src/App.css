@@ -2276,3 +2276,9 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
 .viz-debug__control button:hover {
     border-color: var(--line-strong);
 }
+
+.viz-debug__control-help {
+    margin: -0.1rem 0 0.6rem;
+    color: var(--muted);
+    font-size: 0.64rem;
+}

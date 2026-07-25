@@ -78,6 +78,7 @@ import {
     COLOR_TRANSFORM_MODES,
     createColorTransform,
     createFeedbackInjector,
+    createFlowFieldCompositor,
     createGlowAndScatter,
     createLayerMixer,
     createMaskRouter,
@@ -165,6 +166,7 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
 /** Compositors and colour (spec section 19.9). */
 export function compositorDefinitions(): VisualPluginDefinition[] {
     return [
+        createFlowFieldCompositor(),
         ...LAYER_MIXER_MODES.map(createLayerMixer),
         ...MASK_ROUTER_MODES.map(createMaskRouter),
         ...FEEDBACK_INJECTOR_MODES.map(createFeedbackInjector),

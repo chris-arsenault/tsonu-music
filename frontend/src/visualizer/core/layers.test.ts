@@ -32,7 +32,7 @@ describe('layer composition', () => {
         expect(composition.steps.map((step) => step.layer.id)).toEqual(['bottom', 'middle', 'top']);
     });
 
-    test('breaks order ties by id so composition is deterministic', () => {
+    test('breaks order ties by id so the active composition is stable', () => {
         const forward = composeLayers([
             createLayer('zebra', 'z.color'),
             createLayer('alpha', 'a.color'),

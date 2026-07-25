@@ -24,6 +24,7 @@ import {
     type ImpactBus,
 } from '../core/impact';
 import { mergeUniforms, resolveParameters } from '../core/parameters';
+import { modulateParameters } from '../core/modulation';
 import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
 import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
@@ -32,6 +33,8 @@ import type { Device, RenderTarget } from './device';
 
 export interface ActiveInstance {
     instanceId: string;
+    /** Random identity for this instance within its current scene. */
+    seed: number;
     instance: VisualPluginInstance;
     node: CompiledNode;
     parameters: Record<string, number>;
@@ -267,15 +270,23 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     frame.features,
                     deltaSeconds,
                 );
+                const renderedParameters = modulateParameters(
+                    active.parameters,
+                    bindings,
+                    frame.clock.playbackTime,
+                    frame.features.continuous.beatPhase,
+                    frame.features.continuous.beatConfidence,
+                    active.seed,
+                );
 
                 active.instance.update({
                     clock: frame.clock,
                     features: frame.features,
                     deltaSeconds,
-                    seed: hashSeed(active.instanceId),
+                    seed: active.seed,
                     renderWidth: plan.width,
                     renderHeight: plan.height,
-                    parameters: active.parameters,
+                    parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
                     particleScale: frame.profile?.particleScale,
                     historyDepth: frame.profile?.historyDepth,
@@ -294,21 +305,30 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 });
 
                 for (const pass of passes) {
-                    executePass(pass, node, plan, stats, active.parameters);
+                    executePass(pass, node, plan, stats, renderedParameters);
                 }
             }
 
             // Retiring plugins render after the live graph, into the resources they already owned.
             for (const entry of retiring) {
                 const active = entry.active;
+                const bindings = active.bindings ?? active.node.definition.defaultBindings ?? [];
+                const renderedParameters = modulateParameters(
+                    active.parameters,
+                    bindings,
+                    frame.clock.playbackTime,
+                    frame.features.continuous.beatPhase,
+                    frame.features.continuous.beatConfidence,
+                    active.seed,
+                );
                 active.instance.update({
                     clock: frame.clock,
                     features: frame.features,
                     deltaSeconds,
-                    seed: hashSeed(active.instanceId),
+                    seed: active.seed,
                     renderWidth: plan.width,
                     renderHeight: plan.height,
-                    parameters: active.parameters,
+                    parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
                     // A draining plugin keeps simulating but stops emitting new material.
                     particleScale: entry.emitting ? frame.profile?.particleScale : 0,
@@ -324,7 +344,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderWidth: plan.width,
                     renderHeight: plan.height,
                 })) {
-                    executePass(pass, active.node, plan, stats, active.parameters);
+                    executePass(pass, active.node, plan, stats, renderedParameters);
                 }
             }
 
@@ -381,6 +401,9 @@ function presentSingle(
     device.setUniforms(program, {
         uOpacity: 1,
         uResolution: [device.canvas.width, device.canvas.height],
+        // Resource inspection is diagnostic: show the raw field or texture without presentation
+        // grading so its channels remain meaningful.
+        uChromatic: 0,
     });
     device.drawFullscreen();
     stats.passesExecuted += 1;
@@ -425,21 +448,15 @@ function present(
         device.setUniforms(program, {
             uOpacity: step.opacity,
             uResolution: [device.canvas.width, device.canvas.height],
+            uTime: frame.clock.playbackTime,
+            uEnergy: frame.features.continuous.rms,
+            uBass: frame.features.continuous.bass,
+            uCentroid: frame.features.continuous.spectralCentroid,
+            // Golden-ratio spacing keeps simultaneously presented branches chromatically distinct.
+            uLayerPhase: (index * 0.61803398875) % 1,
+            uChromatic: 1,
         });
         device.drawFullscreen();
         stats.passesExecuted += 1;
     });
 }
-
-/** Stable per-instance seed so a scene reproduces from its id set. */
-function hashSeed(instanceId: string): number {
-    let hash = 2166136261;
-    for (let index = 0; index < instanceId.length; index += 1) {
-        hash ^= instanceId.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-    }
-
-    return (hash >>> 0) / 4294967295;
-}
-
-export { hashSeed };

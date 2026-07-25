@@ -217,7 +217,7 @@ function accelerationFor(mode: CascadeMode, projectile: Projectile): [number, nu
     }
 }
 
-/** Seeds a stream for the mode. Deterministic in the seed, so a scene reproduces. */
+/** Initializes a projectile stream from this fresh scene instance's random identity. */
 export function seedCascade(mode: CascadeMode, seed: number, count: number): Projectile[] {
     const projectiles: Projectile[] = [];
 

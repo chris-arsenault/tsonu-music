@@ -14,6 +14,6 @@ Contents:
 - **Render graph** — port typing, connection validation, topological compilation, feedback-cycle
   legality, and intermediate-resource lifetime analysis.
 - **Scheduler** — scene grammar constraints, character-based scene assembly, activation rules and
-  cooldowns, the mutation model, deactivation policies, and seeded deterministic selection.
+  cooldowns, the mutation model, deactivation policies, and fresh random scene selection.
 - **Performance** — the quality profile and downgrade ladder as a function of frame-time statistics,
   buffer health, and the current profile.

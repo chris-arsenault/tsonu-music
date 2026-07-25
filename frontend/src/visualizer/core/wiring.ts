@@ -85,11 +85,18 @@ export function wireScene(
     const producers = new Map<string, { instanceId: string; port: string }[]>();
 
     for (const node of nodes) {
+        // A two-input compositor needs two branches. Without reserving the first producer, both
+        // `source` and `overlay` resolve to the same newest texture and the mixer becomes a no-op.
+        const usedProducerResources = new Map<PluginPort['type'], Set<string>>();
+
         for (const port of node.definition.inputs) {
-            const source = findProducer(producers, port);
+            const excluded = usedProducerResources.get(port.type) ?? new Set<string>();
+            const source = findProducer(producers, port, excluded);
 
             if (source) {
                 edges.push({ from: source, to: { instanceId: node.instanceId, port: port.name } });
+                excluded.add(`${source.instanceId}.${source.port}`);
+                usedProducerResources.set(port.type, excluded);
                 continue;
             }
 
@@ -219,16 +226,29 @@ function satisfiedBy(
 function findProducer(
     producers: Map<string, { instanceId: string; port: string }[]>,
     port: PluginPort,
+    excluded: ReadonlySet<string> = new Set(),
 ): { instanceId: string; port: string } | undefined {
     const exact = producers.get(port.type);
     if (exact && exact.length > 0) {
-        return exact[exact.length - 1];
+        for (let index = exact.length - 1; index >= 0; index -= 1) {
+            const candidate = exact[index];
+            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)) {
+                return candidate;
+            }
+        }
     }
 
     // Fall back to any type the port accepts, such as a distance field feeding a mask input.
     for (const [type, candidates] of producers) {
-        if (candidates.length > 0 && portsCompatible(type as PluginPort['type'], port.type)) {
-            return candidates[candidates.length - 1];
+        if (!portsCompatible(type as PluginPort['type'], port.type)) {
+            continue;
+        }
+
+        for (let index = candidates.length - 1; index >= 0; index -= 1) {
+            const candidate = candidates[index];
+            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)) {
+                return candidate;
+            }
         }
     }
 

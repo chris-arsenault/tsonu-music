@@ -2,8 +2,8 @@
  * Themes (spec section 16).
  *
  * A theme is constraints and weighted preferences, not a fixed pipeline: it says what kind of scene it
- * wants and lets the scheduler assemble one. Two runs of the same theme with different seeds give
- * different scenes with the same character.
+ * wants and lets the scheduler assemble one. Fresh scene entropy gives each activation a different
+ * composition with the same broad character.
  */
 
 import {
@@ -38,8 +38,9 @@ export const ORGANIC_FLOW_THEME: VisualTheme = {
         persistence: 0.8,
         brightness: 0.45,
     },
-    // Slower mutation: the family is about accumulation, which a frequent swap would keep resetting.
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 32 },
+    // Slower structural mutation: the family is about accumulation, while continuous parameter motion
+    // still keeps every layer breathing between swaps.
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 18 },
     colorPolicy: { source: 'album-palette', strength: 0.8 },
 };
 
@@ -53,7 +54,7 @@ export const COLLISION_ENERGY_THEME: VisualTheme = {
         brightness: 0.75,
         persistence: 0.3,
     },
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 18 },
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 10 },
     colorPolicy: { source: 'complementary', strength: 0.6 },
 };
 
@@ -67,7 +68,7 @@ export const IMAGE_DREAM_THEME: VisualTheme = {
         geometricOrder: 0.4,
         brightness: 0.5,
     },
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 28 },
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 16 },
     colorPolicy: { source: 'album-palette', strength: 0.9 },
 };
 
@@ -106,6 +107,9 @@ export function satisfiableThemes(
             return false;
         }
         if (theme.grammar.transformerCount[0] > 0 && !availableCategories.has('transformer')) {
+            return false;
+        }
+        if (theme.grammar.compositorCount[0] > 0 && !availableCategories.has('compositor')) {
             return false;
         }
 

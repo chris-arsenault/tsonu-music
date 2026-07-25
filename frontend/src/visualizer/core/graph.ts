@@ -62,6 +62,9 @@ export type CompileResult =
  */
 const COMPATIBLE_INPUTS: Partial<Record<PortType, readonly PortType[]>> = {
     'mask-texture': ['distance-field'],
+    // A collision field carries a vector in rg plus boundary proximity in b. Consumers that only need
+    // a vector can use it, while collision-aware consumers can require the richer type explicitly.
+    'vector-field': ['collision-field'],
     'color-texture': [],
 };
 
@@ -265,7 +268,7 @@ function topologicalOrder(
         dependents.get(edge.from.instanceId)?.push(edge.to.instanceId);
     }
 
-    // Seeded in declaration order so compilation is deterministic for a given scene.
+    // Starts in declaration order so the active graph keeps a stable execution order.
     const ready = nodes.filter((node) => indegree.get(node.instanceId) === 0).map((node) => node.instanceId);
     const order: GraphNode[] = [];
     const byInstance = new Map(nodes.map((node) => [node.instanceId, node]));

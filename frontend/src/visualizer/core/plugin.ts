@@ -25,6 +25,9 @@ export type PortType =
     | 'mask-texture'
     | 'distance-field'
     | 'vector-field'
+    | 'collision-field'
+    | 'reaction-diffusion-state'
+    | 'wave-field-state'
     | 'depth-texture'
     | 'motion-field'
     | 'particle-buffer'
@@ -89,7 +92,7 @@ export interface FrameContext {
     features: AudioFeatureBus;
     /** Zero while the clock is frozen, so a plugin that integrates it stops advancing. */
     deltaSeconds: number;
-    /** Deterministic per-instance value derived from the scene seed. */
+    /** Random per-instance value derived from the active scene's entropy. */
     seed: number;
     renderWidth: number;
     renderHeight: number;

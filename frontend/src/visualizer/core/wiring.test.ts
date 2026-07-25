@@ -72,6 +72,22 @@ describe('scene wiring', () => {
         expect(intoSecond?.from.instanceId).toBe(instanceIdFor(transform, 1));
     });
 
+    test('a two-input compositor receives two distinct colour branches', () => {
+        const secondSource = plugin('src-b', 'source');
+        const mixer = plugin('mix', 'compositor', [
+            { name: 'source', type: 'color-texture', required: true },
+            { name: 'overlay', type: 'color-texture', required: true },
+        ]);
+        const wired = wireScene([source, secondSource, mixer]);
+        const inputs = wired.edges
+            .filter((edge) => edge.to.instanceId.startsWith('mix'))
+            .map((edge) => `${edge.from.instanceId}.${edge.from.port}`);
+
+        expect(wired.unsatisfied).toEqual([]);
+        expect(inputs).toHaveLength(2);
+        expect(new Set(inputs).size).toBe(2);
+    });
+
     test('presents the last colour output in the chain', () => {
         const wired = wireScene([source, transform, post]);
 
@@ -115,6 +131,27 @@ describe('scene wiring', () => {
 
         expect(wired.unsatisfied).toEqual([]);
         expect(wired.edges).toHaveLength(1);
+    });
+
+    test('a collision field supplies both generic force and boundary semantics', () => {
+        const boundary = plugin(
+            'boundary',
+            'field',
+            [],
+            [{ name: 'deflection', type: 'collision-field', required: false }],
+        );
+        const particles = plugin('particles', 'simulator', [
+            { name: 'force', type: 'vector-field', required: true },
+            { name: 'boundary', type: 'collision-field', required: false },
+        ]);
+        const wired = wireScene([boundary, particles]);
+        const inputs = wired.edges.filter((edge) => edge.to.instanceId.startsWith('particles'));
+
+        expect(wired.unsatisfied).toEqual([]);
+        expect(inputs.map((edge) => edge.to.port).sort()).toEqual(['boundary', 'force']);
+        expect(new Set(inputs.map((edge) => edge.from.instanceId))).toEqual(
+            new Set([instanceIdFor(boundary, 0)]),
+        );
     });
 
     test('an empty scene wires to nothing rather than failing', () => {
@@ -214,7 +251,7 @@ describe('reactivity distribution', () => {
             .toContain(distributed[0].bindings[0].feature);
     });
 
-    test('is deterministic for a seed', () => {
+    test('stays stable within one scene build', () => {
         const plugins = [withBindings('a', 'source'), withBindings('b', 'field')];
 
         expect(distributeReactivity(plugins, createRng('same')))

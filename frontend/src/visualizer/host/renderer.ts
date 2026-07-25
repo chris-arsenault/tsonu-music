@@ -20,10 +20,10 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
 import type { DiagnosticsControls } from '../core/diagnostics';
-import { buildFirstViableScene } from '../core/scene-builder';
+import { buildFirstViableScene, buildScene, variedThemeOrder } from '../core/scene-builder';
 import { compileGraph } from '../core/graph';
 import { distributeReactivity } from '../core/audio-mapping';
-import { createRng, type Rng } from '../core/random';
+import { createRng, freshSceneEntropy, type Rng } from '../core/random';
 import {
     decideMutation,
     type ActivePluginRecord,
@@ -33,7 +33,6 @@ import {
 } from '../core/scheduler';
 import { wireScene } from '../core/wiring';
 import { assetResourceId, type AssetResource } from '../core/wiring';
-import { sceneSeed } from '../core/random';
 import { createM1Registry } from '../plugins/registry';
 import { satisfiableThemes } from '../plugins/themes';
 import { PRESENT_SHADER, PRESENT_SHADER_ID } from '../plugins/postprocess/tone-mapper';
@@ -54,8 +53,10 @@ export interface Renderer {
     renderFrame(frame: RendererFrame): RuntimeStats;
     /** Compile errors and shader failures, for the diagnostics overlay. */
     problems(): string[];
-    /** Rebuilds the scene for a new seed, on track change or scene mutation. */
-    rebuild(trackId: string | null, generation: number, profile: QualityProfile): boolean;
+    /** Rebuilds the current scene against changed assets or quality constraints. */
+    rebuildCurrent(profile: QualityProfile): boolean;
+    /** Discards the current scene and selects a fresh random one. */
+    newScene(profile: QualityProfile): boolean;
     /** Replaces the resolvable asset set. Takes effect on the next rebuild. */
     setAssets(ids: readonly string[]): void;
     /** Uploads a loaded asset image so the graph can bind it. */
@@ -73,9 +74,6 @@ export interface Renderer {
     renderSize(): { width: number; height: number };
     estimatedTextureBytes(): number;
     themeId(): string;
-    seed(): string;
-    /** Rebuilds from an explicit seed, so a reported scene can be reproduced exactly. */
-    rebuildFromSeed(seed: string, profile: QualityProfile): boolean;
     /**
      * Applies one mutation (spec section 17). Returns what actually happened, which may be less than
      * asked for when no replacement is available.
@@ -86,6 +84,10 @@ export interface Renderer {
     mutationPolicy(): MutationPolicy;
     /** Layers the compositor is blending, for the diagnostics overlay. */
     layerCount(): number;
+    /** Visible material producers participating before final post-processing. */
+    materialBranchCount(): number;
+    /** Audio-bound parameters also receiving concurrent slow modulation. */
+    activeModulatorCount(): number;
     resize(): void;
     dispose(): void;
 }
@@ -100,8 +102,6 @@ export type RendererResult =
     | { ok: false; failure: RendererFailure; detail?: string };
 
 export interface RendererOptions {
-    trackId: string | null;
-    generation: number;
     profile: QualityProfile;
     /**
      * Asset ids currently resolvable, for plugins declaring `requiredAssets`. An empty list is normal
@@ -129,10 +129,13 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let assetIds: readonly string[] = options.assets ?? [];
     let assetResources: readonly AssetResource[] = [];
 
-    function buildFromSeed(seed: string, profile: QualityProfile) {
+    function buildFromEntropy(entropy: string, profile: QualityProfile) {
+        // A fixed fallback order made the first viable family win every track. Shuffle from the fresh
+        // scene entropy so geometric, organic, collision, and image families all get a chance.
+        const themeOrder = variedThemeOrder(entropy, themes);
         return buildFirstViableScene(
-            seed,
-            themes,
+            entropy,
+            themeOrder,
             {
                 available: registry.all(),
                 assets: assetIds,
@@ -145,11 +148,28 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         );
     }
 
-    function build(trackId: string | null, generation: number, profile: QualityProfile) {
-        return buildFromSeed(sceneSeed(trackId, generation), profile);
+    function buildFresh(profile: QualityProfile) {
+        return buildFromEntropy(freshSceneEntropy(), profile);
     }
 
-    const initial = build(options.trackId, options.generation, options.profile);
+    function buildFreshBranch(profile: QualityProfile) {
+        const entropy = freshSceneEntropy();
+        return buildScene(
+            entropy,
+            scene.theme,
+            {
+                available: registry.all(),
+                assets: assetIds,
+                assetResources,
+                capabilities: deviceCapabilities,
+                history: {},
+                playbackTime: lastClock.playbackTime,
+            },
+            profile,
+        );
+    }
+
+    const initial = buildFresh(options.profile);
     if (!initial.ok) {
         device.dispose();
         return { ok: false, failure: 'invalid-scene', detail: initial.failure.detail };
@@ -159,18 +179,25 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     device.registerShader(PRESENT_SHADER);
 
     let scene = initial.scene;
-    let instances = instantiate(device, scene.graph, scene.bindings, [], scene.parameterOverrides).instances;
+    let instances = instantiate(
+        device,
+        scene.graph,
+        scene.bindings,
+        [],
+        scene.parameterOverrides,
+        scene.entropy,
+    ).instances;
     let layers = buildLayers(scene.graph);
     runtime.setGraph(scene.graph, instances);
 
     let lostHandled = false;
     // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
     let lastClock: PlaybackClock = {
-        trackId: options.trackId,
+        trackId: null,
         playbackTime: 0,
         duration: 0,
         state: 'idle',
-        generation: options.generation,
+        generation: 0,
     };
 
     function sizeCanvas(): void {
@@ -277,19 +304,31 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     });
 
     /** Swaps in a newly built scene, keeping the current one if the build failed. */
-    const applyBuild = (result: ReturnType<typeof buildFromSeed>): boolean => {
+    const applyBuild = (
+        result: ReturnType<typeof buildFromEntropy>,
+        preserveInstances = true,
+    ): boolean => {
         if (!result.ok) {
             // A failed rebuild is not a reason to stop rendering what already works.
             console.warn('[visualizer] scene rebuild failed', result.failure.detail);
             return false;
         }
 
+        const previousInstances = instances;
         scene = result.scene;
-        // Reuses instances whose plugin is unchanged, so a mutation preserves unrelated state. Only the
-        // instances actually leaving the scene are retired.
-        const rebuilt = instantiate(activeDevice, scene.graph, scene.bindings, instances, scene.parameterOverrides);
+        // Incremental rebuilds reuse unchanged instances. A genuinely new scene recreates all of them,
+        // even when random selection happens to choose some of the same plugin ids.
+        const rebuilt = instantiate(
+            activeDevice,
+            scene.graph,
+            scene.bindings,
+            preserveInstances ? previousInstances : [],
+            scene.parameterOverrides,
+            scene.entropy,
+        );
+        const departingInstances = preserveInstances ? rebuilt.retired : previousInstances;
 
-        for (const departing of rebuilt.retired) {
+        for (const departing of departingInstances) {
             const policy = departing.node.definition.deactivationPolicy ?? 'immediate';
             departing.instance.deactivate({ policy, clock: lastClock });
 
@@ -311,8 +350,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 activatedAt.set(entry.instanceId, lastClock.playbackTime);
             }
         }
-        for (const departing of rebuilt.retired) {
+        for (const departing of departingInstances) {
             activatedAt.delete(departing.instanceId);
+        }
+        if (!preserveInstances) {
+            mutationCount = 0;
         }
 
         layers = buildLayers(scene.graph);
@@ -380,12 +422,12 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 return device.shaderErrors().map((error) => `${error.id}: ${error.message}`);
             },
 
-            rebuild(trackId, generation, profile) {
-                return applyBuild(build(trackId, generation, profile));
+            rebuildCurrent(profile) {
+                return applyBuild(buildFromEntropy(scene.entropy, profile));
             },
 
-            rebuildFromSeed(seed, profile) {
-                return applyBuild(buildFromSeed(seed, profile));
+            newScene(profile) {
+                return applyBuild(buildFresh(profile), false);
             },
 
             activeRecords() {
@@ -400,11 +442,23 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 return layers.length;
             },
 
+            materialBranchCount() {
+                return scene.plugins.filter((definition) =>
+                    definition.category !== 'postprocess'
+                    && definition.outputs.some((port) => port.type === 'color-texture')).length;
+            },
+
+            activeModulatorCount() {
+                return scene.bindings.reduce(
+                    (total, entry) => total + entry.bindings.length,
+                    0,
+                );
+            },
+
             mutate(profile, playbackTime) {
                 const policy = scene.theme.mutationPolicy;
-                // Forked from the seed and the mutation counter, so a scene's evolution is as
-                // reproducible as its assembly.
-                const rng = createRng(`${scene.seed}:mutation:${mutationCount}`);
+                // Stable only for this active scene, so incremental choices remain coherent.
+                const rng = createRng(`${scene.entropy}:mutation:${mutationCount}`);
                 mutationCount += 1;
 
                 const decision = decideMutation(rng, records(), schedulerContext(playbackTime, profile), policy);
@@ -412,12 +466,19 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 switch (decision.kind) {
                     case 'scene':
                         // Rare by design: this is the one that discards accumulated state.
-                        return applyBuild(buildFromSeed(`${scene.seed}:scene:${mutationCount}`, profile))
+                        return applyBuild(buildFresh(profile), false)
                             ? 'scene'
                             : 'none';
 
-                    case 'plugin':
-                    case 'branch': {
+                    case 'branch':
+                        // Rebuild inside the current family and retain any instances the new branch
+                        // still uses. This changes several connected nodes while preserving compatible
+                        // feedback and simulation state elsewhere.
+                        return applyBuild(buildFreshBranch(profile))
+                            ? 'branch'
+                            : 'none';
+
+                    case 'plugin': {
                         if (!decision.targetInstanceId || !decision.replacement) {
                             return 'none';
                         }
@@ -499,10 +560,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 return scene.theme.id;
             },
 
-            seed() {
-                return scene.seed;
-            },
-
             resize() {
                 sizeCanvas();
             },
@@ -528,6 +585,7 @@ function instantiate(
     bindings: readonly DistributedBinding[],
     previous: readonly ActiveInstance[] = [],
     overrides: Record<string, Record<string, number>> = {},
+    sceneEntropy = '',
 ): { instances: ActiveInstance[]; retired: ActiveInstance[] } {
     const reusable = new Map(previous.map((entry) => [entry.instanceId, entry]));
     const kept = new Set<string>();
@@ -547,7 +605,14 @@ function instantiate(
             };
         }
 
-        return createInstance(device, node, definition, bindings, overrides[definition.id]);
+        return createInstance(
+            device,
+            node,
+            definition,
+            bindings,
+            overrides[definition.id],
+            sceneEntropy,
+        );
     });
 
     return {
@@ -562,11 +627,13 @@ function createInstance(
     definition: CompiledGraph['order'][number]['definition'],
     bindings: readonly DistributedBinding[],
     overrides: Record<string, number> = {},
+    sceneEntropy = '',
 ): ActiveInstance {
     {
+        const instanceSeed = seedFor(`${sceneEntropy}:${node.instanceId}`);
         const instance = definition.create({
             instanceId: node.instanceId,
-            seed: seedFor(node.instanceId),
+            seed: instanceSeed,
             registerShader: (source) => device.registerShader(source),
         });
 
@@ -578,6 +645,7 @@ function createInstance(
 
         return {
             instanceId: node.instanceId,
+            seed: instanceSeed,
             instance,
             node,
             parameters: { ...(definition.parameters ?? {}), ...overrides },

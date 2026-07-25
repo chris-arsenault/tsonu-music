@@ -60,6 +60,9 @@ export function targetKey(resource: ResourceId, slot?: 0 | 1): string {
  */
 export const RESOURCE_SIZING: Partial<Record<PortType, { scale?: number; fixed?: number }>> = {
     'vector-field': { scale: 0.5 },
+    'collision-field': { scale: 0.5 },
+    'reaction-diffusion-state': { scale: 0.5 },
+    'wave-field-state': { scale: 0.5 },
     'motion-field': { scale: 0.5 },
     'distance-field': { scale: 0.5 },
     'particle-buffer': { fixed: 128 },

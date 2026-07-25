@@ -70,7 +70,7 @@ export function createToneMapper(): VisualPluginDefinition {
                 },
 
                 activate() {
-                    // Nothing to seed: output conversion is deterministic.
+                    // Nothing to initialize: output conversion is stateless.
                 },
 
                 update() {
@@ -124,8 +124,49 @@ out vec4 fragColor;
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uOpacity;
+uniform float uTime;
+uniform float uEnergy;
+uniform float uBass;
+uniform float uCentroid;
+uniform float uLayerPhase;
+uniform float uChromatic;
+
+float luminance(vec3 color) {
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 breathingPalette(float phase) {
+    return 0.5 + 0.5 * cos(6.2831853 * (phase + vec3(0.00, 0.34, 0.68)));
+}
+
 void main() {
     vec4 source = texture(uSource, vUv);
-    fragColor = vec4(source.rgb, source.a) * uOpacity;
+    vec3 color = source.rgb;
+    float high = max(color.r, max(color.g, color.b));
+    float low = min(color.r, min(color.g, color.b));
+    float saturation = high - low;
+    float light = luminance(color);
+
+    // Geometry and simulation views often carry useful structure as monochrome intensity. Give that
+    // material a living palette at the composition boundary, while preserving already-coloured album
+    // art and source shaders. Each layer receives a different phase so parallel branches do not pulse
+    // as one flat sheet.
+    float palettePhase = fract(
+        light * 0.42
+        + uCentroid * 0.24
+        + uBass * 0.08
+        + uTime * (0.012 + uEnergy * 0.01)
+        + uLayerPhase
+    );
+    vec3 palette = breathingPalette(palettePhase);
+    float monochrome = (1.0 - smoothstep(0.035, 0.20, saturation)) * uChromatic;
+    color = mix(color, palette * light * 1.35, monochrome * 0.92);
+
+    float breath = 0.88
+        + 0.10 * sin(uTime * (0.55 + uBass * 0.4) + uLayerPhase * 6.2831853)
+        + uEnergy * 0.18;
+    color *= mix(1.0, breath, uChromatic);
+
+    fragColor = vec4(color, source.a) * uOpacity;
 }`,
 };

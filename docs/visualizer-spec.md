@@ -224,7 +224,7 @@ When the active track changes:
 * Clear analysis history from the previous track
 * Cancel pending feature events
 * Resolve track-specific assets
-* Generate a new deterministic scene seed
+* Generate fresh random scene entropy
 * Transition or replace incompatible visual branches
 * Preserve compatible global visual state where aesthetically appropriate
 
@@ -471,6 +471,9 @@ type PortType =
   | "mask-texture"
   | "distance-field"
   | "vector-field"
+  | "collision-field"
+  | "reaction-diffusion-state"
+  | "wave-field-state"
   | "depth-texture"
   | "motion-field"
   | "particle-buffer"
@@ -776,7 +779,7 @@ Inputs include:
 * Recent plugin history
 * Plugin compatibility
 * Performance budget
-* Deterministic random seed
+* Fresh random scene entropy
 * User preferences
 
 ```ts
@@ -807,6 +810,7 @@ interface SceneGrammar {
   fieldCount: [number, number];
   simulatorCount: [number, number];
   transformerCount: [number, number];
+  compositorCount: [number, number];
   postprocessCount: [number, number];
 
   maximumDominantPlugins: number;
@@ -860,7 +864,6 @@ Example visual families:
 ```ts
 interface VisualState {
   id: string;
-  seed: string;
 
   plugins: ActivePlugin[];
   edges: RenderGraphEdge[];
@@ -902,6 +905,11 @@ interface VisualTheme {
 ---
 
 # 17. Mutation Model
+
+Bound parameters evolve continuously and concurrently from two inputs: the live audio feature
+assigned to that binding and a slower playback-clocked modulation with its own phase. The latter is
+bounded by the binding's declared range and freezes whenever playback freezes. Discrete mutation is
+for structural evolution, not the only source of motion.
 
 ## Parameter Mutation
 
@@ -1855,6 +1863,14 @@ Cost: low–medium
 
 ## 19.9 Compositors and Color
 
+### `FlowFieldCompositor`
+
+Consumes visible colour and a vector or collision field. It traces several samples through the field,
+warps the visible branch, and derives breathing chromatic ribbons from curvature and force magnitude.
+This is the standard coupling point for masks, force fields, and visible material.
+
+Cost: medium
+
 ### `LayerMixer`
 
 Modes:
@@ -2093,7 +2109,6 @@ Development diagnostics should expose:
 * Active plugins
 * Current graph
 * Plugin activation history
-* Scene seed
 * Assigned assets
 * Render resolution
 * Frame time
@@ -2110,7 +2125,7 @@ Debug controls should support:
 * Disable individual plugins
 * Inspect graph outputs
 * Replace an active plugin manually
-* Reproduce a scene from seed
+* Generate a fresh random scene
 * Display masks, fields, depth, and motion textures
 
 ---
@@ -2173,6 +2188,7 @@ Debug controls should support:
 
 ### Composition
 
+* `FlowFieldCompositor`
 * `LayerMixer`
 * `MaskRouter`
 * `FeedbackInjector`

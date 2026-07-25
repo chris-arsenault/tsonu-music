@@ -43,14 +43,15 @@ tiling behavior.
   shapes that motivate the feature. Rejected as a replacement; the SDF shape source covers the
   procedural case in parallel.
 - **Generate masks by hand in an image editor** — no illuminator change needed. Loses batch
-  consistency of style and palette across the library and the embedded provenance metadata that
-  makes a mask reproducible. Rejected.
+  consistency of style and palette across the library and the embedded provenance metadata used to
+  audit how a mask was made. Rejected.
 
 ## Consequences
 
 Masks are same-origin, so mask textures raise no cross-origin tainting question at all, and the
-mask library is versioned with the code that consumes it — a scene reproduced from a seed resolves
-the same masks. Adding a mask is a commit, with no runtime publish step.
+mask library is versioned with the code that consumes it. Collision and containment behavior
+therefore does not silently change when a scene happens to select a given mask. Adding a mask is a
+commit, with no runtime publish step.
 
 Binary assets enter the repository and the frontend bundle, so the library's size is a build-size
 concern, and extending it requires a deploy rather than an upload. Illuminator gains a type whose
