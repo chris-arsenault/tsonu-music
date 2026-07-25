@@ -1,5 +1,5 @@
 import { AlertCircle, Info, LoaderCircle, Pause, Play, SkipBack, SkipForward } from 'lucide-react';
-import { useEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from 'react';
+import { lazy, Suspense, useEffect, useState, type CSSProperties, type FocusEvent, type KeyboardEvent } from 'react';
 import {
     formatQualityLabel,
     formatTime,
@@ -9,6 +9,9 @@ import { getTrackTitleLabel, TrackTitle } from './TrackTitle';
 import { handleInternalLink, releasePath, trackPath } from './routes';
 import { AiAssistedBadge } from './AiAssistedBadge';
 import { releaseTrackNoteItems, TrackNotesList } from './TrackNotes';
+
+// Lazy so the visualizer stays out of the player's own bundle.
+const VisualizerPanel = lazy(() => import('../visualizer/ui/VisualizerPanel'));
 
 export default function StickyPlayer() {
     const player = useMusicPlayer();
@@ -166,6 +169,10 @@ export default function StickyPlayer() {
                     />
                     <span>{formatTime(seekMax)}</span>
                 </div>
+
+                <Suspense fallback={null}>
+                    <VisualizerPanel />
+                </Suspense>
 
                 <label className="bottom-player__quality">
                     <span>Quality</span>
