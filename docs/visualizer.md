@@ -119,5 +119,8 @@ Rendering stops when the page is hidden.
 ## Verification
 
 `make ci` runs the visualizer's unit tests in the Node environment. `acceptance.test.ts` asserts the
-specification's section 26 criteria, with three marked skipped where they need a real GPU or a
-listener; those reasons are recorded in the test itself.
+specification's section 26 criteria, one test per criterion.
+
+Three criteria are outside its reach, needing a real GPU or a listener: a 3D source outputting colour
+and depth, perceived beat synchronisation, and shaders producing the intended image. They are tracked
+in [backlog.md](./backlog.md).

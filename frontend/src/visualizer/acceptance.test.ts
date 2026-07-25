@@ -581,23 +581,13 @@ describe('section 26: reproducibility', () => {
     });
 });
 
-/**
- * Criteria that cannot be asserted here, recorded rather than omitted.
+/*
+ * Three section 26 criteria are not asserted here, because they need a real GPU or a listener:
+ * a 3D source outputting colour and depth, perceived beat synchronisation within about one frame, and
+ * shaders producing the intended image. They are tracked in docs/backlog.md — as a depth-parallax
+ * source, a GLB parallax source, and headless-browser tests with a real GL context.
  *
- * All three need a real GPU or a listener. The architecture is arranged so that what can be verified
- * without one is, which is why the pure core carries every decision rule (ADR-0003); these are the
- * residue that genuinely cannot be.
+ * Deliberately prose rather than skipped tests. An empty `test.skip` asserts nothing and can never
+ * fail, so it adds a passing-looking entry to the count while carrying no more information than this
+ * comment.
  */
-describe('section 26: criteria requiring a browser', () => {
-    test.skip('a simple 3D scene outputs colour and depth into the compositor', () => {
-        // Secondary scope: GLB and depth-parallax sources are in docs/backlog.md, not this milestone.
-    });
-
-    test.skip('perceived beat synchronisation is within about one rendered frame', () => {
-        // Needs a listener. The latency compensation it depends on is covered in features.test.ts.
-    });
-
-    test.skip('shaders compile and produce the intended image on a real GPU', () => {
-        // Needs a GL context. Headless-browser coverage is recorded in docs/backlog.md.
-    });
-});

@@ -53,8 +53,11 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
   [ADR-0004](./adr/0004-visualizer-playback-supremacy.md).
 - Add a WebGPU backend for the simulator plugins, keeping WebGL2 as the fallback. See
   [ADR-0002](./adr/0002-visualizer-webgl2-floor.md).
-- Add headless-browser tests with a real GL context to cover shader output and resource lifetime.
+- Add headless-browser tests with a real GL context to cover shader output and resource lifetime,
+  which is the remaining section 26 criterion that automated tests cannot reach.
   See [ADR-0003](./adr/0003-visualizer-pure-core-thin-shell.md).
+- Measure perceived beat synchronisation against played audio and tune onset sensitivity, beat
+  confidence thresholds, and envelope defaults from what is heard.
 - Serve the mask library from the media CDN with a publish path once it outgrows the frontend
   bundle. See [ADR-0005](./adr/0005-visualizer-mask-assets.md).
 - Add a MilkDrop and projectM compatibility adapter over the plugin contract.
