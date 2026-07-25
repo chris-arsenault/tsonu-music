@@ -7,6 +7,7 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMusicPlayer } from '../../music/MusicPlayerContext';
 import { collectFaults, describeFault, describeTier, selectTier, tierNeedsGpu } from '../core/fallback';
 import { createDiagnosticsControls, type DiagnosticsControls } from '../core/diagnostics';
@@ -101,6 +102,90 @@ export default function VisualizerPanel() {
 
     useFallbackWaveform(showFallbackCanvas ? fallbackCanvas : null, readout?.bus.waveform);
 
+    const modal = expanded ? (
+        <div
+            className="visualizer-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Visualizer"
+            onClick={(event) => {
+                if (event.target === event.currentTarget) {
+                    setExpanded(false);
+                }
+            }}
+        >
+            <div className="visualizer-modal__frame">
+                {unavailableMessage ? null : tierNeedsGpu(tier) ? (
+                    <canvas className="visualizer-modal__canvas" ref={setGlCanvas} />
+                ) : (
+                    // The GL canvas stays mounted so the kernel keeps its device across a
+                    // transient fault; it is simply covered by the active fallback tier.
+                    <canvas className="visualizer-modal__canvas is-hidden" ref={setGlCanvas} />
+                )}
+
+                {!unavailableMessage && showFallbackCanvas ? (
+                    <canvas className="visualizer-modal__canvas" ref={setFallbackCanvas} />
+                ) : null}
+
+                {unavailableMessage || showArtworkOnly ? (
+                    <img className="visualizer-modal__artwork" src={player.artworkSrc} alt={player.artworkAltText} />
+                ) : null}
+
+                {unavailableMessage ? (
+                    <div className="visualizer-modal__notice" role="status">
+                        <strong>Visualizer unavailable in this playback mode</strong>
+                        <span>{unavailableMessage}</span>
+                    </div>
+                ) : (
+                    <div className="visualizer-modal__status">
+                        <span>{describeTier(tier)}</span>
+                        {readout?.performance ? (
+                            <span>
+                                L{readout.performance.level} · {readout.frameTimeMs.toFixed(0)}ms
+                            </span>
+                        ) : null}
+                        {faults.length > 0 ? <span>{describeFault(faults[0])}</span> : null}
+                    </div>
+                )}
+
+                <div className="visualizer-modal__chrome">
+                    {!unavailableMessage ? (
+                        <button
+                            type="button"
+                            className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
+                            onClick={() => setShowDiagnostics((open) => !open)}
+                            aria-pressed={showDiagnostics}
+                            title="Diagnostics"
+                        >
+                            Diagnostics
+                        </button>
+                    ) : null}
+                    <button
+                        type="button"
+                        className="visualizer-modal__button"
+                        onClick={() => setExpanded(false)}
+                        aria-label="Close visualizer"
+                    >
+                        ×
+                    </button>
+                </div>
+
+                {!unavailableMessage && showDiagnostics && readout ? (
+                    <Suspense fallback={null}>
+                        <DiagnosticsPanel
+                            readout={readout}
+                            faults={faults}
+                            controls={controls}
+                            onControls={setControls}
+                            handle={handle}
+                            onClose={() => setShowDiagnostics(false)}
+                        />
+                    </Suspense>
+                ) : null}
+            </div>
+        </div>
+    ) : null;
+
     return (
         <>
             <div className="bottom-player__visualizer" title={unavailableMessage}>
@@ -128,89 +213,7 @@ export default function VisualizerPanel() {
                 </button>
             </div>
 
-            {expanded ? (
-                <div
-                    className="visualizer-modal"
-                    role="dialog"
-                    aria-modal="true"
-                    aria-label="Visualizer"
-                    onClick={(event) => {
-                        if (event.target === event.currentTarget) {
-                            setExpanded(false);
-                        }
-                    }}
-                >
-                    <div className="visualizer-modal__frame">
-                        {unavailableMessage ? null : tierNeedsGpu(tier) ? (
-                            <canvas className="visualizer-modal__canvas" ref={setGlCanvas} />
-                        ) : (
-                            // The GL canvas stays mounted so the kernel keeps its device across a
-                            // transient fault; it is simply covered by the active fallback tier.
-                            <canvas className="visualizer-modal__canvas is-hidden" ref={setGlCanvas} />
-                        )}
-
-                        {!unavailableMessage && showFallbackCanvas ? (
-                            <canvas className="visualizer-modal__canvas" ref={setFallbackCanvas} />
-                        ) : null}
-
-                        {unavailableMessage || showArtworkOnly ? (
-                            <img className="visualizer-modal__artwork" src={player.artworkSrc} alt={player.artworkAltText} />
-                        ) : null}
-
-                        {unavailableMessage ? (
-                            <div className="visualizer-modal__notice" role="status">
-                                <strong>Visualizer unavailable in this playback mode</strong>
-                                <span>{unavailableMessage}</span>
-                            </div>
-                        ) : (
-                            <div className="visualizer-modal__status">
-                                <span>{describeTier(tier)}</span>
-                                {readout?.performance ? (
-                                    <span>
-                                        L{readout.performance.level} · {readout.frameTimeMs.toFixed(0)}ms
-                                    </span>
-                                ) : null}
-                                {faults.length > 0 ? <span>{describeFault(faults[0])}</span> : null}
-                            </div>
-                        )}
-
-                        <div className="visualizer-modal__chrome">
-                            {!unavailableMessage ? (
-                                <button
-                                    type="button"
-                                    className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
-                                    onClick={() => setShowDiagnostics((open) => !open)}
-                                    aria-pressed={showDiagnostics}
-                                    title="Diagnostics"
-                                >
-                                    Diagnostics
-                                </button>
-                            ) : null}
-                            <button
-                                type="button"
-                                className="visualizer-modal__button"
-                                onClick={() => setExpanded(false)}
-                                aria-label="Close visualizer"
-                            >
-                                ×
-                            </button>
-                        </div>
-
-                        {!unavailableMessage && showDiagnostics && readout ? (
-                            <Suspense fallback={null}>
-                                <DiagnosticsPanel
-                                    readout={readout}
-                                    faults={faults}
-                                    controls={controls}
-                                    onControls={setControls}
-                                    handle={handle}
-                                    onClose={() => setShowDiagnostics(false)}
-                                />
-                            </Suspense>
-                        ) : null}
-                    </div>
-                </div>
-            ) : null}
+            {modal && typeof document !== 'undefined' ? createPortal(modal, document.body) : modal}
         </>
     );
 }

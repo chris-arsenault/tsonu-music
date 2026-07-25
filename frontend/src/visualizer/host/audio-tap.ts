@@ -72,6 +72,21 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
     let silentFrames = 0;
     let flatlined = false;
     let analysis: AudioWorkletNode | undefined;
+    let analysisConnected = false;
+
+    const handleSnapshot = (event: MessageEvent<FeatureSnapshot>) => {
+        latest = event.data;
+
+        if (event.data.rms === 0 && !element.paused) {
+            silentFrames += 1;
+            if (silentFrames >= FLATLINE_FRAME_LIMIT) {
+                flatlined = true;
+            }
+        } else {
+            silentFrames = 0;
+            flatlined = false;
+        }
+    };
 
     try {
         await context.audioWorklet.addModule(workletUrl);
@@ -83,23 +98,12 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
             channelCountMode: 'explicit',
         });
 
-        analysis.port.onmessage = (event: MessageEvent<FeatureSnapshot>) => {
-            latest = event.data;
-
-            if (event.data.rms === 0 && !element.paused) {
-                silentFrames += 1;
-                if (silentFrames >= FLATLINE_FRAME_LIMIT) {
-                    flatlined = true;
-                }
-            } else {
-                silentFrames = 0;
-                flatlined = false;
-            }
-        };
+        analysis.port.onmessage = handleSnapshot;
 
         // The parallel branch. `numberOfOutputs: 0` is what makes it a dead end: the node consumes
         // the signal and produces nothing, so it cannot contribute to or interrupt output.
         source.connect(analysis);
+        analysisConnected = true;
     } catch (error) {
         // Analysis failed to start. Audio is unaffected; report as flatlined so the caller falls back.
         flatlined = true;
@@ -133,6 +137,15 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         },
 
         async resume() {
+            if (analysis && !analysisConnected) {
+                latest = undefined;
+                silentFrames = 0;
+                flatlined = false;
+                analysis.port.onmessage = handleSnapshot;
+                source.connect(analysis);
+                analysisConnected = true;
+            }
+
             if (context.state !== 'running') {
                 await context.resume();
             }
@@ -140,11 +153,12 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
 
         dispose() {
             // The tap itself is never torn down — the source node cannot be detached from the
-            // element. Only the analysis branch is released; audio keeps flowing through the gain.
-            if (analysis) {
+            // element. Pause its reusable analysis branch; audio keeps flowing through the gain.
+            if (analysis && analysisConnected) {
                 analysis.port.onmessage = null;
                 source.disconnect(analysis);
-                analysis = undefined;
+                analysisConnected = false;
+                latest = undefined;
             }
         },
     };
