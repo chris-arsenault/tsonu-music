@@ -10,9 +10,12 @@
  */
 
 import {
+    createExcitationFollower,
     createPeakFollower,
+    followExcitation,
     followPeak,
     type BandName,
+    type ExcitationFollower,
     type PeakFollower,
     SPECTRAL_BANDS,
 } from './analysis';
@@ -27,6 +30,18 @@ export interface TimedFeatureEvent {
     metadata?: Record<string, number>;
 }
 
+/**
+ * Level and excitation are two different questions and plugins want different ones.
+ *
+ * Level is where a measure sits against the loudest thing heard lately. It carries the balance
+ * between bands, and on mastered music it is close to constant: the dominant band sits near the top
+ * of its range and a quiet band sits near the bottom of its own, whatever the music is doing.
+ *
+ * Excitation is how far a measure sits above its own recent behaviour. It is near zero at rest
+ * however loud the track is, and rises on the events a listener would call musical. A parameter that
+ * should respond to *what is happening* wants excitation; one that should respond to *what is there*
+ * wants level.
+ */
 export interface ContinuousFeatures {
     rms: number;
     peak: number;
@@ -37,6 +52,14 @@ export interface ContinuousFeatures {
     mid: number;
     highMid: number;
     treble: number;
+
+    rmsExcite: number;
+    subBassExcite: number;
+    bassExcite: number;
+    lowMidExcite: number;
+    midExcite: number;
+    highMidExcite: number;
+    trebleExcite: number;
 
     spectralCentroid: number;
     spectralFlux: number;
@@ -111,9 +134,32 @@ export interface FeatureBusInput {
  */
 export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands';
 
+/** Measures carrying an excitation channel beside their level: every band, plus overall level. */
+export type ExcitationName = BandName | 'rms';
+
+export const EXCITED_MEASURES: readonly ExcitationName[] = [
+    'rms',
+    'subBass',
+    'bass',
+    'lowMid',
+    'mid',
+    'highMid',
+    'treble',
+];
+
+/** `bass` becomes `bassExcite`, matching how bindings name the feature. */
+export function excitationFeatureName(measure: ExcitationName): string {
+    return `${measure}Excite`;
+}
+
 export interface FeatureBusState {
     bus: AudioFeatureBus;
     followers: Record<FollowerName, PeakFollower>;
+    /**
+     * Per-measure running statistics. Kept separate from the peak followers because they answer a
+     * different question and must not share a ceiling — coupling them is what flattened the bands.
+     */
+    excitation: Record<ExcitationName, ExcitationFollower>;
     pendingOnsets: readonly RawOnset[];
     /** Events detected before this audio time are discarded rather than presented. */
     transientGateUntilAudioTime: number;
@@ -151,6 +197,9 @@ export function createFeatureBusState(): FeatureBusState {
             spectrum: EMPTY_SPECTRUM,
         },
         followers,
+        excitation: Object.fromEntries(
+            EXCITED_MEASURES.map((measure) => [measure, createExcitationFollower()]),
+        ) as Record<ExcitationName, ExcitationFollower>,
         pendingOnsets: [],
         transientGateUntilAudioTime: 0,
         beat: { periodSeconds: 0, confidence: 0, anchorAudioTime: 0 },
@@ -196,7 +245,15 @@ function applyEffects(state: FeatureBusState, input: FeatureBusInput): FeatureBu
     }
 
     if (input.effects.includes('clear-analysis-history')) {
-        next = { ...next, audioToPlaybackOffset: 0 };
+        // Excitation is short-term history by definition. Carrying a mean across a seek would report
+        // the new position as a large event purely because it differs from the old one.
+        next = {
+            ...next,
+            audioToPlaybackOffset: 0,
+            excitation: Object.fromEntries(
+                EXCITED_MEASURES.map((measure) => [measure, createExcitationFollower()]),
+            ) as Record<ExcitationName, ExcitationFollower>,
+        };
     }
 
     if (input.effects.includes('suppress-transients')) {
@@ -236,6 +293,16 @@ function absorbSnapshot(
     const bandCeiling = followers.bands.peak;
     const scaleBand = (value: number): number => clamp01(bandCeiling > 0 ? value / bandCeiling : 0);
 
+    // Measured from raw energy, never from the scaled level. Running it on scaled values would put
+    // every band back under one ceiling and reintroduce exactly the coupling excitation exists to
+    // avoid: a quiet band's own dynamics would be divided away by a loud band's peak.
+    const excitation = { ...state.excitation };
+    const excite = (measure: ExcitationName, raw: number): number => {
+        const result = followExcitation(excitation[measure], raw, delta);
+        excitation[measure] = result.follower;
+        return result.excitation;
+    };
+
     const continuous: ContinuousFeatures = {
         ...state.bus.continuous,
         rms: normalizeWith('rms', snapshot.rms),
@@ -246,6 +313,13 @@ function absorbSnapshot(
         mid: scaleBand(snapshot.bands.mid),
         highMid: scaleBand(snapshot.bands.highMid),
         treble: scaleBand(snapshot.bands.treble),
+        rmsExcite: excite('rms', snapshot.rms),
+        subBassExcite: excite('subBass', snapshot.bands.subBass),
+        bassExcite: excite('bass', snapshot.bands.bass),
+        lowMidExcite: excite('lowMid', snapshot.bands.lowMid),
+        midExcite: excite('mid', snapshot.bands.mid),
+        highMidExcite: excite('highMid', snapshot.bands.highMid),
+        trebleExcite: excite('treble', snapshot.bands.treble),
         spectralFlux: normalizeWith('flux', snapshot.spectralFlux),
         spectralCentroid: clamp01(snapshot.spectralCentroidHz / CENTROID_CEILING_HZ),
         leftLevel: clamp01(snapshot.leftLevel),
@@ -263,6 +337,7 @@ function absorbSnapshot(
     return {
         ...state,
         followers,
+        excitation,
         audioToPlaybackOffset,
         beat: {
             periodSeconds: snapshot.beatPeriodSeconds,
@@ -373,6 +448,24 @@ export function stereoBalance(leftLevel: number, rightLevel: number): number {
     return balance < -1 ? -1 : balance > 1 ? 1 : balance;
 }
 
+/**
+ * A bus carrying silence.
+ *
+ * The starting state of a real bus, and the base every caller that needs a bus with two or three
+ * features set should build on. Exported so adding a feature does not mean editing every place one
+ * was hand-built.
+ */
+export function silentFeatureBus(
+    overrides: Partial<ContinuousFeatures> = {},
+): AudioFeatureBus {
+    return {
+        continuous: { ...zeroContinuous(), ...overrides },
+        events: { onset: [], beat: [], sectionChange: [] },
+        waveform: EMPTY_SPECTRUM,
+        spectrum: EMPTY_SPECTRUM,
+    };
+}
+
 function zeroContinuous(): ContinuousFeatures {
     return {
         rms: 0,
@@ -383,6 +476,13 @@ function zeroContinuous(): ContinuousFeatures {
         mid: 0,
         highMid: 0,
         treble: 0,
+        rmsExcite: 0,
+        subBassExcite: 0,
+        bassExcite: 0,
+        lowMidExcite: 0,
+        midExcite: 0,
+        highMidExcite: 0,
+        trebleExcite: 0,
         spectralCentroid: 0,
         spectralFlux: 0,
         beatConfidence: 0,

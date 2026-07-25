@@ -149,6 +149,81 @@ export function followPeak(
 }
 
 /* -------------------------------------------------------------------------- */
+/* Excitation                                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Running mean and mean absolute deviation for one measure.
+ *
+ * A peak follower answers "how loud is this against the loudest thing lately", which on mastered
+ * music is close to constant. This answers "how far is this above its own recent behaviour", which
+ * is what actually tracks musical events. The two are complementary: level carries the balance
+ * between bands, excitation carries the dynamics that level cannot express.
+ */
+export interface ExcitationFollower {
+    mean: number;
+    deviation: number;
+}
+
+export function createExcitationFollower(): ExcitationFollower {
+    return { mean: 0, deviation: 0 };
+}
+
+/** Seconds for the running statistics to forget. Long enough to span a bar at most tempos. */
+const EXCITATION_WINDOW_SECONDS = 1.6;
+
+/** Deviations above the mean that read as fully excited. */
+const EXCITATION_HEADROOM = 2;
+
+/**
+ * Smallest deviation, as a fraction of the measure's own mean, that the denominator may fall to.
+ *
+ * Without it a steady measure stays slightly excited forever: the excess above the mean and the
+ * deviation both decay at the same exponential rate, so their ratio falls only as one over the frame
+ * count. A measure varying by less than this fraction of itself is steady, and dividing by its
+ * vanishing deviation would amplify noise into full-scale response. Relative rather than absolute, so
+ * a quiet band is held to the same standard as a loud one.
+ */
+const MINIMUM_RELATIVE_DEVIATION = 0.08;
+
+/** Below this the measure is silence rather than a quiet passage, and excitation reads zero. */
+const EXCITATION_FLOOR = 1e-6;
+
+/**
+ * Advances the statistics and reports how far the observation sits above its own recent mean,
+ * normalized by its own recent deviation.
+ *
+ * Deliberately one-sided: falling below the mean is not negative excitation, it is rest. A measure
+ * with no variation reports zero however loud it is, which is what stops a sustained bass note from
+ * pinning a parameter at full scale for the length of a track.
+ */
+export function followExcitation(
+    follower: ExcitationFollower,
+    value: number,
+    deltaSeconds: number,
+): { follower: ExcitationFollower; excitation: number } {
+    // Framerate-independent exponential approach, matching how bindings smooth.
+    const factor = deltaSeconds > 0
+        ? 1 - Math.exp(-deltaSeconds / EXCITATION_WINDOW_SECONDS)
+        : 0;
+
+    const excess = value - follower.mean;
+    const scale = Math.max(
+        follower.deviation * EXCITATION_HEADROOM,
+        follower.mean * MINIMUM_RELATIVE_DEVIATION,
+    );
+    const excitation = scale > EXCITATION_FLOOR ? clamp01(excess / scale) : 0;
+
+    return {
+        follower: {
+            mean: follower.mean + excess * factor,
+            deviation: follower.deviation + (Math.abs(excess) - follower.deviation) * factor,
+        },
+        excitation,
+    };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Onset detection                                                            */
 /* -------------------------------------------------------------------------- */
 

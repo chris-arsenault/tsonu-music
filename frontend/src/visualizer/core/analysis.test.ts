@@ -3,9 +3,11 @@ import {
     bandEnergy,
     beatPhaseAt,
     createBeatTracker,
+    createExcitationFollower,
     createOnsetDetector,
     createPeakFollower,
     detectOnset,
+    followExcitation,
     followPeak,
     invalidateTempo,
     observeOnset,
@@ -329,5 +331,67 @@ describe('beat tracking', () => {
 
         expect(relocked.periodSeconds).toBeCloseTo(0.4, 2);
         expect(relocked.confidence).toBeGreaterThan(0.8);
+    });
+});
+
+/**
+ * Excitation exists because a peak follower cannot express dynamics on mastered music: the loudest
+ * band sits near its own ceiling whatever the track is doing. These assert the property that made it
+ * necessary — a constant is not exciting however loud, and a departure from the recent norm is.
+ */
+describe('excitation', () => {
+    /** Runs a series of observations at a fixed rate and reports the excitation of each. */
+    function trace(values: readonly number[], deltaSeconds = 1 / 40): number[] {
+        let follower = createExcitationFollower();
+
+        return values.map((value) => {
+            const result = followExcitation(follower, value, deltaSeconds);
+            follower = result.follower;
+            return result.excitation;
+        });
+    }
+
+    test('a loud constant reports no excitation', () => {
+        const settled = trace(Array.from({ length: 400 }, () => 0.9)).slice(-40);
+
+        for (const excitation of settled) {
+            expect(excitation).toBeLessThan(0.05);
+        }
+    });
+
+    test('a transient above the recent norm excites', () => {
+        const values = [...Array.from({ length: 200 }, () => 0.2), 0.9];
+        const excitation = trace(values);
+
+        expect(excitation[excitation.length - 1]).toBeGreaterThan(0.5);
+    });
+
+    test('a quiet band is as expressive as a loud one', () => {
+        // The defect: one shared ceiling scaled treble by the bass peak, so treble never left the
+        // bottom of its range. Excitation is per measure, so scale must not decide expressiveness.
+        const loud = trace([...Array.from({ length: 200 }, () => 0.4), 0.8]);
+        const quiet = trace([...Array.from({ length: 200 }, () => 0.004), 0.008]);
+
+        expect(quiet[quiet.length - 1]).toBeCloseTo(loud[loud.length - 1], 2);
+    });
+
+    test('falling below the norm is rest rather than negative excitation', () => {
+        const values = [...Array.from({ length: 200 }, () => 0.6), 0.1];
+        const excitation = trace(values);
+
+        expect(excitation[excitation.length - 1]).toBe(0);
+    });
+
+    test('silence never excites', () => {
+        for (const excitation of trace(Array.from({ length: 100 }, () => 0))) {
+            expect(excitation).toBe(0);
+        }
+    });
+
+    test('a frozen clock holds the statistics still', () => {
+        const settled = createExcitationFollower();
+        const first = followExcitation(settled, 0.5, 0);
+
+        expect(first.follower).toEqual(settled);
     });
 });

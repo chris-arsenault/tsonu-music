@@ -51,3 +51,57 @@ describe('concurrent modulation', () => {
         }
     });
 });
+
+describe('modulation depth and exemptions', () => {
+    const swept = (parameter: string, bindings: ParameterBinding[], value: number) => {
+        let low = Number.POSITIVE_INFINITY;
+        let high = Number.NEGATIVE_INFINITY;
+
+        for (let time = 0; time < 120; time += 0.1) {
+            const modulated = modulateParameters({ [parameter]: value }, bindings, time, 0.4, 0.9, 0.371);
+            low = Math.min(low, modulated[parameter]);
+            high = Math.max(high, modulated[parameter]);
+        }
+
+        return high - low;
+    };
+
+    test('motion sweeps a visible fraction of the range', () => {
+        // At the original depth this swept under a tenth of the range, which on a typical binding was
+        // below the threshold of visibility: the scene was described as breathing while holding still.
+        const span = swept('amount', BINDINGS, 1.1);
+
+        expect(span / (2 - 0.2)).toBeGreaterThan(0.15);
+    });
+
+    test('a rate parameter is left to integrate', () => {
+        // Its value is an accumulating angle, not a position inside the output range. Clamping it
+        // there would stop the integration dead.
+        const rate: ParameterBinding[] = [{
+            feature: 'mid',
+            parameter: 'spin',
+            mode: 'rate',
+            outputRange: [0, 2],
+            attack: 0,
+            release: 0,
+            curve: 'linear',
+        }];
+
+        expect(swept('spin', rate, 400)).toBe(0);
+        expect(modulateParameters({ spin: 400 }, rate, 12, 0.4, 0.9, 0.371).spin).toBe(400);
+    });
+
+    test('an impulse envelope is left unsmeared', () => {
+        const impulse: ParameterBinding[] = [{
+            feature: 'onset',
+            parameter: 'burst',
+            mode: 'impulse',
+            outputRange: [0, 1],
+            attack: 0,
+            release: 0.2,
+            curve: 'linear',
+        }];
+
+        expect(swept('burst', impulse, 0.5)).toBe(0);
+    });
+});

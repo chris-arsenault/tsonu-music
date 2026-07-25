@@ -45,6 +45,8 @@ const CPU_SIDE_PARAMETERS: Record<string, string> = {
     'ImpactCascadeSimulator:energyScale': 'scales collision energy in the CPU-side cascade step',
     'ParticleSimulator:lifetime': 'bounds particle age in the simulation step',
     'ParticleRenderer:pointSize': 'set as a vertex-stage point size rather than a fragment uniform',
+    'SymmetryTransform:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
+    'SDFShapeSource:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
 };
 
 function isCpuSide(definition: VisualPluginDefinition, parameter: string): boolean {

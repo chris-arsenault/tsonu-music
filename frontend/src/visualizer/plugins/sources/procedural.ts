@@ -298,10 +298,11 @@ export function createSdfShapeSource(
         capabilities: ['procedural', 'sdf'],
         fragment: SDF_SHAPE_FRAGMENT,
         uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1, uEnergy: 0.35 },
-        parameters: { morph: 0.5, repeat: 1, energy: 0.35 },
+        parameters: { morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
         bindings: [
             {
                 feature: 'lowMid',
+                role: 'deformation',
                 parameter: 'morph',
                 outputRange: [0, 1],
                 attack: 0.25,
@@ -310,11 +311,26 @@ export function createSdfShapeSource(
             },
             {
                 feature: 'rms',
+                role: 'intensity',
                 parameter: 'energy',
                 outputRange: [0.1, 1],
                 attack: 0.08,
                 release: 0.45,
                 curve: 'sqrt',
+            },
+            {
+                // The mandala's sector rotation and the palette phase both read `uPhase`. As a
+                // constant they made the shape a fixed emblem; integrated, it turns and its colour
+                // walks at a speed the music sets.
+                feature: 'highMid',
+                role: 'detail',
+                mode: 'rate',
+                parameter: 'spin',
+                outputRange: [0.08, 1.4],
+                attack: 0.2,
+                release: 0.9,
+                curve: 'smooth',
+                wrap: Math.PI * 2,
             },
         ],
         character: character({ geometricOrder: 0.9, visualDensity: 0.4, motionEnergy: 0.25 }),

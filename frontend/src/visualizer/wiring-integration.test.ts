@@ -18,7 +18,7 @@ import { compileGraph } from './core/graph';
 import { wireScene } from './core/wiring';
 import { advanceMutation, createMutationState } from './core/scheduler';
 import { POLICY_DURATIONS } from './core/deactivation';
-import type { AudioFeatureBus } from './core/features';
+import { silentFeatureBus, type AudioFeatureBus } from './core/features';
 
 const CATALOG = allDefinitions();
 
@@ -37,16 +37,7 @@ function plugin(id: string) {
 }
 
 function features(overrides: Partial<AudioFeatureBus['continuous']> = {}): AudioFeatureBus {
-    return {
-        continuous: {
-            rms: 0, peak: 0, subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0,
-            spectralCentroid: 0, spectralFlux: 0, beatConfidence: 0, beatPhase: 0,
-            leftLevel: 0, rightLevel: 0, stereoBalance: 0, ...overrides,
-        },
-        events: { onset: [], beat: [], sectionChange: [] },
-        waveform: new Float32Array(0),
-        spectrum: new Float32Array(0),
-    };
+    return silentFeatureBus(overrides);
 }
 
 describe('bindings reach the shader', () => {

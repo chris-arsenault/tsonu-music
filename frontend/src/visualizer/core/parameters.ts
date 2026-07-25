@@ -9,7 +9,13 @@
  * exactly how the whole catalog came to ignore its own bindings.
  */
 
-import { advanceBinding, type ParameterBinding } from './bindings';
+import {
+    advanceBinding,
+    advanceImpulse,
+    bindingMode,
+    integrateBinding,
+    type ParameterBinding,
+} from './bindings';
 import type { AudioFeatureBus } from './features';
 import type { UniformValue } from './passes';
 
@@ -62,6 +68,32 @@ export function readFeature(features: AudioFeatureBus, name: string): number | u
     return typeof value === 'number' ? value : undefined;
 }
 
+/** Event channels an impulse binding may fire from. */
+export const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat', 'sectionChange'];
+
+/**
+ * Strongest event on a channel this frame, or undefined when nothing fired.
+ *
+ * The bus already holds events until they are audible, so reading them here needs no latency
+ * handling of its own.
+ */
+export function readEventStrength(features: AudioFeatureBus, name: string): number | undefined {
+    const channels = features.events as unknown as Record<string, { strength: number }[] | undefined>;
+    const events = channels[name];
+    if (!events || events.length === 0) {
+        return undefined;
+    }
+
+    let strongest = 0;
+    for (const event of events) {
+        if (event.strength > strongest) {
+            strongest = event.strength;
+        }
+    }
+
+    return strongest;
+}
+
 /**
  * Advances every bound parameter one frame.
  *
@@ -78,17 +110,28 @@ export function resolveParameters(
     const resolved: Record<string, number> = { ...previous };
 
     for (const binding of bindings) {
+        const mode = bindingMode(binding);
+
+        // An impulse reads the event channels rather than the continuous bus, so it must dispatch
+        // before the continuous lookup — `onset` is not a continuous feature and would be skipped.
+        if (mode === 'impulse') {
+            resolved[binding.parameter] = advanceImpulse(
+                binding,
+                resolved[binding.parameter],
+                readEventStrength(features, binding.feature),
+                deltaSeconds,
+            );
+            continue;
+        }
+
         const raw = readFeature(features, binding.feature);
         if (raw === undefined) {
             continue;
         }
 
-        resolved[binding.parameter] = advanceBinding(
-            binding,
-            resolved[binding.parameter],
-            raw,
-            deltaSeconds,
-        );
+        resolved[binding.parameter] = mode === 'rate'
+            ? integrateBinding(binding, resolved[binding.parameter], raw, deltaSeconds)
+            : advanceBinding(binding, resolved[binding.parameter], raw, deltaSeconds);
     }
 
     return resolved;

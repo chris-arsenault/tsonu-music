@@ -9,6 +9,7 @@ import {
     transformerDefinitions,
 } from './registry';
 import { validateDefinition, type PluginCategory, type VisualPluginDefinition } from '../core/plugin';
+import { silentFeatureBus } from '../core/features';
 import { compileGraph } from '../core/graph';
 import { assetResourceId, wireScene, type AssetResource } from '../core/wiring';
 import { buildScene } from '../core/scene-builder';
@@ -38,11 +39,11 @@ function frame(overrides: Partial<FrameContext> = {}): { frame: FrameContext; im
         frame: {
             clock: { trackId: 't', playbackTime: 10, duration: 100, state: 'playing', generation: 1 },
             features: {
-                continuous: {
+                ...silentFeatureBus({
                     rms: 0.5, peak: 0.7, subBass: 0.3, bass: 0.6, lowMid: 0.4, mid: 0.4,
                     highMid: 0.3, treble: 0.35, spectralCentroid: 0.4, spectralFlux: 0.3,
-                    beatConfidence: 0.7, beatPhase: 0.3, leftLevel: 0.5, rightLevel: 0.5, stereoBalance: 0,
-                },
+                    beatConfidence: 0.7, beatPhase: 0.3, leftLevel: 0.5, rightLevel: 0.5,
+                }),
                 events: {
                     onset: [{ feature: 'onset', playbackTime: 10, audioTime: 10, strength: 0.8 }],
                     beat: [], sectionChange: [],

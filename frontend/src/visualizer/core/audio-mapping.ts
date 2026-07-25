@@ -5,40 +5,61 @@
  * whatever suits it in isolation, and the whole scene pulses together on every beat — the specific
  * failure the mapping table exists to prevent.
  *
- * This assigns each plugin a distinct feature focus, so bass drives large-scale motion while treble
- * drives detail and onsets drive bursts.
+ * Distribution happens *within* what a binding means, never across it. Section 20 is a table of
+ * appropriate targets: bass belongs to large-scale force, treble to edge detail, onsets to bursts.
+ * An earlier version picked a feature at random from a pool defined by the plugin's category, which
+ * moved feedback expansion onto stereo balance and palette movement onto beat phase — reactivity was
+ * spread, and the meaning of every parameter was destroyed to do it. A binding now declares its role
+ * and the scheduler chooses only among the features that role admits.
  */
 
-import type { ParameterBinding } from './bindings';
-import type { PluginCategory, VisualPluginDefinition } from './plugin';
+import { bindingMode, type BindingRole, type ParameterBinding } from './bindings';
+import type { VisualPluginDefinition } from './plugin';
 import type { Rng } from './random';
 
-/** Features the scheduler distributes, with what each is appropriate for. */
-export type FeatureRole =
-    | 'rms'
-    | 'bass'
-    | 'subBass'
-    | 'mid'
-    | 'lowMid'
-    | 'highMid'
-    | 'treble'
-    | 'spectralCentroid'
-    | 'spectralFlux'
-    | 'beatPhase'
-    | 'stereoBalance';
+/**
+ * Features each role admits, from the section 20 table. Ordered by how well each expresses the role,
+ * since selection prefers whatever is still unclaimed and falls back along this order.
+ *
+ * Excitation features appear where a role is about *events* — detail and burst want the transient,
+ * not the standing level. Level features appear where a role is about *presence* — a large-scale
+ * force should hold while the bass holds.
+ */
+export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
+    intensity: ['rms', 'peak', 'rmsExcite'],
+    'large-scale-force': ['bass', 'subBass', 'bassExcite', 'subBassExcite'],
+    deformation: ['mid', 'lowMid', 'midExcite', 'lowMidExcite'],
+    detail: ['trebleExcite', 'highMidExcite', 'treble', 'highMid'],
+    burst: ['spectralFlux', 'trebleExcite', 'bassExcite', 'rmsExcite'],
+    'repeating-motion': ['beatPhase'],
+    complexity: ['spectralCentroid'],
+    'lateral-force': ['stereoBalance'],
+};
+
+/** Event channels an impulse binding fires from. Distribution never moves one onto a level. */
+const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat'];
 
 /**
- * Which features suit which category, from the section 20 table. A field wants large-scale force, a
- * postprocess stage wants brightness and palette movement, and so on.
+ * The role a feature belongs to, so a binding written before roles existed keeps its meaning.
+ *
+ * This is what lets role-based distribution take effect across the whole catalog without editing
+ * every plugin definition: an author who wrote `feature: 'bass'` meant large-scale force, and that
+ * is exactly what the table says.
  */
-export const CATEGORY_AFFINITY: Record<PluginCategory, readonly FeatureRole[]> = {
-    source: ['rms', 'mid', 'treble', 'beatPhase', 'spectralCentroid'],
-    field: ['bass', 'subBass', 'stereoBalance', 'spectralFlux'],
-    simulator: ['bass', 'treble', 'spectralFlux', 'rms'],
-    transformer: ['bass', 'beatPhase', 'mid', 'lowMid'],
-    compositor: ['rms', 'highMid', 'spectralCentroid'],
-    postprocess: ['rms', 'spectralCentroid', 'highMid'],
-};
+export function roleForFeature(feature: string): BindingRole | undefined {
+    for (const [role, features] of Object.entries(ROLE_FEATURES) as [BindingRole, readonly string[]][]) {
+        if (features.includes(feature)) {
+            return role;
+        }
+    }
+
+    return undefined;
+}
+
+/** A binding's declared role, or the one implied by the feature it was authored against. */
+export function bindingRole(binding: ParameterBinding): BindingRole | undefined {
+    return binding.role ?? roleForFeature(binding.feature);
+}
 
 export interface DistributedBinding {
     pluginId: string;
@@ -46,42 +67,53 @@ export interface DistributedBinding {
 }
 
 /**
- * Rewrites every binding onto a feature chosen for it.
+ * Spreads bindings across the features their roles admit.
  *
  * Assignment is per binding, not per plugin: a plugin that binds amplitude to level and brightness to
  * treble means those to be different signals, and collapsing them onto one feature would undo exactly
  * the separation this function exists to create.
  *
- * Features already claimed are avoided until the pool runs dry, at which point reuse is allowed — a
- * scene with more bindings than features cannot give each an exclusive signal, but it can still avoid
- * every binding sharing one.
+ * Features already claimed are avoided until a role's pool runs dry, at which point reuse is allowed
+ * — a scene with more bindings in one role than that role has features cannot give each an exclusive
+ * signal, but it can still avoid every binding sharing one.
  */
 export function distributeReactivity(
     plugins: readonly VisualPluginDefinition[],
     rng: Rng,
 ): DistributedBinding[] {
-    const claimed = new Set<FeatureRole>();
+    const claimed = new Set<string>();
 
-    const claim = (affinity: readonly FeatureRole[]): FeatureRole => {
-        const unclaimed = affinity.filter((role) => !claimed.has(role));
-        const pool = unclaimed.length > 0 ? unclaimed : affinity;
-        const role = rng.pick(pool) ?? affinity[0];
+    const claim = (pool: readonly string[], fallback: string): string => {
+        if (pool.length === 0) {
+            return fallback;
+        }
 
-        claimed.add(role);
-        return role;
+        const unclaimed = pool.filter((feature) => !claimed.has(feature));
+        const feature = rng.pick(unclaimed.length > 0 ? unclaimed : pool) ?? pool[0];
+
+        claimed.add(feature);
+        return feature;
     };
 
-    return plugins.map((definition) => {
-        const affinity = CATEGORY_AFFINITY[definition.category];
+    return plugins.map((definition) => ({
+        pluginId: definition.id,
+        bindings: (definition.defaultBindings ?? []).map((binding) => {
+            // An impulse names an event channel. Rewriting it onto a continuous feature would leave
+            // the binding reading a channel that never fires.
+            if (bindingMode(binding) === 'impulse') {
+                return { ...binding, feature: claim(IMPULSE_FEATURES, binding.feature) };
+            }
 
-        return {
-            pluginId: definition.id,
-            bindings: (definition.defaultBindings ?? []).map((binding) => ({
-                ...binding,
-                feature: claim(affinity),
-            })),
-        };
-    });
+            const role = bindingRole(binding);
+            if (!role) {
+                // A feature outside the table is deliberate and specific. Leave it alone rather than
+                // guessing at a replacement.
+                return { ...binding };
+            }
+
+            return { ...binding, role, feature: claim(ROLE_FEATURES[role], binding.feature) };
+        }),
+    }));
 }
 
 /**

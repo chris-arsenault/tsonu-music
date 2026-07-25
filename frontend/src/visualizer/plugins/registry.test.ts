@@ -5,6 +5,7 @@ import { validateDefinition } from '../core/plugin';
 import { countPasses, isGeometryPass } from '../core/passes';
 import { SIGNAL_TRACE_MODES, traceVertices } from './sources/signal-trace';
 import type { FrameContext } from '../core/plugin';
+import { silentFeatureBus } from '../core/features';
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { FEEDBACK_FLOW_MODES, feedbackModeIndex } from './transformers/feedback-flow';
 
@@ -30,13 +31,11 @@ function frameContext(overrides: Partial<FrameContext> = {}) {
         frame: {
             clock: { trackId: 't', playbackTime: 1, duration: 10, state: 'playing' as const, generation: 1 },
             features: {
-                continuous: {
+                ...silentFeatureBus({
                     rms: 0.5, peak: 0.6, subBass: 0.2, bass: 0.7, lowMid: 0.3, mid: 0.3,
                     highMid: 0.2, treble: 0.4, spectralCentroid: 0.3, spectralFlux: 0.2,
                     beatConfidence: 0.8, beatPhase: 0.25, leftLevel: 0.5, rightLevel: 0.5,
-                    stereoBalance: 0,
-                },
-                events: { onset: [], beat: [], sectionChange: [] },
+                }),
                 waveform: Float32Array.from({ length: 256 }, (_, i) => Math.sin(i / 8)),
                 spectrum: new Float32Array(64),
             },

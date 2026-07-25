@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'vitest';
 import { instanceIdFor, wireScene } from './wiring';
 import { compileGraph } from './graph';
-import { distributeReactivity, peakConcentration, reactivitySpread } from './audio-mapping';
+import {
+    distributeReactivity,
+    peakConcentration,
+    reactivitySpread,
+    ROLE_FEATURES,
+} from './audio-mapping';
 import { createRng } from './random';
 import type { PluginCategory, PluginPort, VisualPluginDefinition } from './plugin';
 
@@ -244,11 +249,51 @@ describe('reactivity distribution', () => {
         expect(reactivitySpread(distributed).size).toBeGreaterThan(1);
     });
 
-    test('assignments come from the category affinity table', () => {
-        const distributed = distributeReactivity([withBindings('f', 'field')], createRng('affinity'));
+    test('assignments stay inside the role the binding was authored for', () => {
+        // `rms` implies the intensity role, so distribution may move it to another intensity feature
+        // and to nothing else. Spreading reactivity must not change what a parameter means.
+        for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
+            const distributed = distributeReactivity([withBindings('f', 'field')], createRng(seed));
+            const rewritten = distributed[0].bindings[0];
 
-        expect(['bass', 'subBass', 'stereoBalance', 'spectralFlux'])
-            .toContain(distributed[0].bindings[0].feature);
+            expect(rewritten.role).toBe('intensity');
+            expect(ROLE_FEATURES.intensity).toContain(rewritten.feature);
+        }
+    });
+
+    test('a declared role outranks the feature it was authored against', () => {
+        const declared = plugin('r', 'source', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{ ...binding, role: 'detail' as const }],
+        });
+
+        const rewritten = distributeReactivity([declared], createRng('declared'))[0].bindings[0];
+
+        expect(ROLE_FEATURES.detail).toContain(rewritten.feature);
+    });
+
+    test('a feature outside the mapping table is left alone', () => {
+        // Deliberate and specific. Guessing at a replacement is how a parameter loses its meaning.
+        const exotic = plugin('x', 'source', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{ ...binding, feature: 'beatConfidence' }],
+        });
+
+        const distributed = distributeReactivity([exotic], createRng('exotic'));
+
+        expect(distributed[0].bindings[0].feature).toBe('beatConfidence');
+        expect(distributed[0].bindings[0].role).toBeUndefined();
+    });
+
+    test('an impulse binding stays on an event channel', () => {
+        const impulse = plugin('i', 'postprocess', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{ ...binding, feature: 'onset', mode: 'impulse' as const }],
+        });
+
+        const distributed = distributeReactivity([impulse], createRng('impulse'));
+
+        expect(['onset', 'beat']).toContain(distributed[0].bindings[0].feature);
     });
 
     test('stays stable within one scene build', () => {

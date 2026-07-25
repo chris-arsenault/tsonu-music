@@ -50,9 +50,28 @@ listener opens the visualizer, preserving position and play state. Safari remain
 no audio-reactive visualizer. See
 [ADR-0006](./adr/0006-hls-js-visualizer-playback-policy.md).
 
+Each band and the overall level carry two channels. **Level** is the measure against the loudest
+thing heard lately, which preserves the balance between bands. **Excitation** is how far the measure
+sits above its own recent mean relative to its own recent deviation, measured per band from raw
+energy so no band's dynamics are divided away by another's ceiling. Level answers what is there;
+excitation answers what is happening. A steady measure reports no excitation however loud it is, and
+excitation is dropped alongside the other short-term history on seek and track change.
+
 Plugins consume normalized features through the feature bus and declare parameter bindings; feature
-extraction is never duplicated inside a plugin. Reactivity is distributed per binding, so a scene
-spreads across features rather than pulsing together on every beat.
+extraction is never duplicated inside a plugin.
+
+A binding reaches its parameter in one of three modes. `value` drives the parameter directly.
+`rate` treats the output range as units per second and the kernel integrates, which is how audio
+changes the speed of a motion rather than the size of a displacement — `spin` is the convention for
+an integrated phase velocity, folded into a shader plugin's `uPhase`. `impulse` fires a decaying
+envelope from a detected onset or beat. A frozen clock passes zero delta and all three hold.
+
+A binding also declares the role it plays, drawn from the specification's section 20 mapping table:
+`intensity`, `large-scale-force`, `deformation`, `detail`, `burst`, `repeating-motion`, `complexity`,
+`lateral-force`. A binding written against a feature in the table infers its role from that feature.
+Reactivity is distributed within the role, so a scene spreads across features rather than pulsing
+together on every beat, without a parameter ever being moved onto a signal that means something
+else. A feature outside the table is left as authored.
 
 ## Time
 
@@ -96,9 +115,11 @@ producers for a mixer's two inputs. A flow-field compositor traces through force
 visible material, and derives chromatic ribbons from the same samples. Collision fields additionally
 carry boundary proximity so particles reflect from mask-derived geometry.
 
-Every audio-bound parameter also receives independent, playback-clocked slow modulation. Several
-layers therefore breathe, fold, and drift concurrently while their immediate response remains
-distributed across different audio features. Structural mutation operates at parameter, plugin,
+Every `value`-bound parameter also receives independent, playback-clocked slow modulation across a
+visible fraction of its authored range, clamped to that range. Several layers therefore breathe,
+fold, and drift concurrently while their immediate response remains distributed across different
+audio features. Rate and impulse bindings are exempt: an integrator is already in continuous motion,
+and an envelope's value is its shape. Structural mutation operates at parameter, plugin,
 branch, and scene granularity. Branch mutation rebuilds within the current family while retaining
 compatible feedback and simulator state; scene mutation is rare. Stateful plugins declare a
 deactivation policy so they leave gracefully rather than vanishing.

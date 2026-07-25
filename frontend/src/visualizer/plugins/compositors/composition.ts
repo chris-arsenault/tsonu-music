@@ -523,14 +523,30 @@ export function createGlowAndScatter(
         fragment: GLOW_FRAGMENT,
         uniforms: { uMode: GLOW_MODES.indexOf(mode), uAmount: 0.8, uThreshold: 0.55 },
         parameters: { amount: 0.8, threshold: 0.55 },
-        bindings: [{
-            feature: 'peak',
-            parameter: 'amount',
-            outputRange: [0.35, 1.5],
-            attack: 0.05,
-            release: 0.4,
-            curve: 'sqrt',
-        }],
+        bindings: [
+            {
+                // Section 20 puts onsets on bursts. Tracking `peak` continuously kept the bloom at a
+                // near-constant level on compressed material; an envelope fired by the detected onset
+                // gives it the transient shape the table asks for.
+                feature: 'onset',
+                role: 'burst',
+                mode: 'impulse',
+                parameter: 'amount',
+                outputRange: [0.3, 1.6],
+                attack: 0.015,
+                release: 0.32,
+                curve: 'sqrt',
+            },
+            {
+                feature: 'trebleExcite',
+                role: 'detail',
+                parameter: 'threshold',
+                outputRange: [0.62, 0.34],
+                attack: 0.08,
+                release: 0.5,
+                curve: 'smooth',
+            },
+        ],
         character: character({ brightness: 0.85, visualDensity: 0.3, dominance: 'supporting' }),
         gpuCost: 2,
         activationWeight: 1.2,

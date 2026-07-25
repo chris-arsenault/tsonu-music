@@ -6,22 +6,12 @@ import {
     readFeature,
     resolveParameters,
 } from './parameters';
-import type { AudioFeatureBus } from './features';
-import type { ParameterBinding } from './bindings';
+import { silentFeatureBus, type AudioFeatureBus } from './features';
+import { bindingMode, type ParameterBinding } from './bindings';
 import { allDefinitions } from '../plugins/registry';
 
 function features(overrides: Partial<AudioFeatureBus['continuous']> = {}): AudioFeatureBus {
-    return {
-        continuous: {
-            rms: 0, peak: 0, subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, treble: 0,
-            spectralCentroid: 0, spectralFlux: 0, beatConfidence: 0, beatPhase: 0,
-            leftLevel: 0, rightLevel: 0, stereoBalance: 0,
-            ...overrides,
-        },
-        events: { onset: [], beat: [], sectionChange: [] },
-        waveform: new Float32Array(0),
-        spectrum: new Float32Array(0),
-    };
+    return silentFeatureBus(overrides);
 }
 
 const binding = (overrides: Partial<ParameterBinding> = {}): ParameterBinding => ({
@@ -180,11 +170,22 @@ describe('every bound plugin reacts to its feature', () => {
 
     test('a silent and a loud frame produce different uniforms', () => {
         const silent = features();
-        const loud = features({
-            rms: 1, peak: 1, subBass: 1, bass: 1, lowMid: 1, mid: 1, highMid: 1, treble: 1,
-            spectralCentroid: 1, spectralFlux: 1, beatConfidence: 1, beatPhase: 1,
-            leftLevel: 1, rightLevel: 1, stereoBalance: 1,
-        });
+        // Every continuous channel at full scale, derived rather than listed so a newly added feature
+        // is covered without this test needing to know about it.
+        const loud: AudioFeatureBus = {
+            ...features(
+                Object.fromEntries(
+                    Object.keys(silent.continuous).map((name) => [name, 1]),
+                ) as Partial<AudioFeatureBus['continuous']>,
+            ),
+            // Impulse bindings read the event channels, so a purely continuous frame could never
+            // exercise them and a plugin bound only to onsets would pass by standing still.
+            events: {
+                onset: [{ feature: 'onset', playbackTime: 1, audioTime: 1, strength: 0.9 }],
+                beat: [{ feature: 'beat', playbackTime: 1, audioTime: 1, strength: 0.9 }],
+                sectionChange: [],
+            },
+        };
 
         for (const definition of bound) {
             const defaults = definition.parameters ?? {};
@@ -213,12 +214,82 @@ describe('every bound plugin reacts to its feature', () => {
     });
 
     test('every bound parameter names a feature the bus actually carries', () => {
-        const carried = new Set(Object.keys(features().continuous));
+        const continuous = new Set(Object.keys(features().continuous));
+        const events = new Set(Object.keys(features().events));
 
         for (const definition of allDefinitions()) {
             for (const binding of definition.defaultBindings ?? []) {
+                // An impulse fires from an event channel; every other mode reads the continuous bus.
+                // Checking the wrong one is how a binding ends up reading a name nothing ever sets.
+                const carried = bindingMode(binding) === 'impulse' ? events : continuous;
+
                 expect(carried, `${definition.id} binds ${binding.feature}`).toContain(binding.feature);
             }
         }
+    });
+});
+
+describe('binding modes reach parameters', () => {
+    const rateBinding = binding({
+        feature: 'mid',
+        parameter: 'spin',
+        mode: 'rate',
+        outputRange: [0, 2],
+    });
+
+    const impulseBinding = binding({
+        feature: 'onset',
+        parameter: 'burst',
+        mode: 'impulse',
+        outputRange: [0, 1],
+        release: 0.2,
+    });
+
+    const withOnset = (strength: number): AudioFeatureBus => ({
+        ...features(),
+        events: {
+            onset: [{ feature: 'onset', playbackTime: 1, audioTime: 1, strength }],
+            beat: [],
+            sectionChange: [],
+        },
+    });
+
+    test('a rate binding integrates across frames', () => {
+        let values: Record<string, number> = { spin: 0 };
+        for (let frame = 0; frame < 60; frame += 1) {
+            values = resolveParameters(values, [rateBinding], features({ mid: 1 }), 1 / 60);
+        }
+
+        expect(values.spin).toBeCloseTo(2, 2);
+    });
+
+    test('an impulse binding reads the event channel rather than the continuous bus', () => {
+        // `onset` is not a continuous feature. Dispatching on mode is what keeps it from being
+        // skipped as an unknown name and leaving the parameter at its default forever.
+        const fired = resolveParameters({ burst: 0 }, [impulseBinding], withOnset(0.8), 1 / 60);
+
+        expect(fired.burst).toBeCloseTo(0.8, 6);
+    });
+
+    test('an impulse decays once the event has passed', () => {
+        let values = resolveParameters({ burst: 0 }, [impulseBinding], withOnset(1), 1 / 60);
+        for (let frame = 0; frame < 60; frame += 1) {
+            values = resolveParameters(values, [impulseBinding], features(), 1 / 60);
+        }
+
+        expect(values.burst).toBeLessThan(0.05);
+    });
+
+    test('both modes hold under a frozen clock', () => {
+        const held = { spin: 1.5, burst: 0.6 };
+        const frozen = resolveParameters(held, [rateBinding, impulseBinding], withOnset(1), 0);
+
+        expect(frozen).toEqual(held);
+    });
+
+    test('a rate parameter reaches the shader under its own uniform name', () => {
+        const resolved = resolveParameters({ spin: 0 }, [rateBinding], features({ mid: 1 }), 1);
+
+        expect(mergeUniforms({}, resolved).uSpin).toBeCloseTo(2, 6);
     });
 });

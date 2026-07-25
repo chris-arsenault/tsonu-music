@@ -321,15 +321,33 @@ export function createSymmetryTransform(
         capabilities: ['symmetry'],
         fragment: SYMMETRY_FRAGMENT,
         uniforms: { uMode: SYMMETRY_MODES.indexOf(mode), uSectors: 6 },
-        parameters: { sectors: 6 },
-        bindings: [{
-            feature: 'beatPhase',
-            parameter: 'sectors',
-            outputRange: [4, 10],
-            attack: 0.4,
-            release: 0.8,
-            curve: 'smooth',
-        }],
+        parameters: { sectors: 6, spin: 0 },
+        bindings: [
+            {
+                feature: 'beatPhase',
+                role: 'repeating-motion',
+                parameter: 'sectors',
+                outputRange: [4, 10],
+                attack: 0.4,
+                release: 0.8,
+                curve: 'smooth',
+            },
+            {
+                // Every angular mode offsets by `uPhase`, which was a per-instance constant — the
+                // kaleidoscope held one fixed orientation for as long as it was on screen. Bound as a
+                // rate, the midrange sets how fast the symmetry axis turns, per section 20's
+                // midrange-to-rotation row.
+                feature: 'mid',
+                role: 'deformation',
+                mode: 'rate',
+                parameter: 'spin',
+                outputRange: [0.05, 0.9],
+                attack: 0.3,
+                release: 1,
+                curve: 'smooth',
+                wrap: Math.PI * 2,
+            },
+        ],
         character: character({ geometricOrder: 0.95, visualDensity: 0.6, motionEnergy: 0.3 }),
         activationWeight: 1.2,
         minimumDuration: 14,

@@ -107,6 +107,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
         create(context): VisualPluginInstance {
             let elapsed = 0;
             let phase = 0;
+            let spin = 0;
             let impact = { centre: [0.5, 0.5] as [number, number], radius: 0, energy: 0 };
 
             return {
@@ -121,11 +122,19 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                 activate() {
                     phase = context.seed * Math.PI * 2;
                     elapsed = 0;
+                    spin = 0;
                 },
 
                 update(frame) {
                     // Frozen-aware: a paused clock passes zero, so animated plugins hold their frame.
                     elapsed += frame.deltaSeconds;
+
+                    // `spin` is the convention for an audio-driven phase velocity: a plugin declares
+                    // it as a parameter with a `rate` binding and the kernel integrates it, so how
+                    // fast the shader's phase advances follows the music. `uTime` alone can only run
+                    // at one speed. Added to the seed phase rather than replacing it, so instances of
+                    // the same plugin stay separated.
+                    spin = frame.parameters.spin ?? 0;
 
                     if (!spec.impactDriven) {
                         return;
@@ -173,7 +182,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         scale: spec.scale,
                         uniforms: {
                             uTime: elapsed,
-                            uPhase: phase,
+                            uPhase: phase + spin,
                             uSeed: context.seed,
                             ...(spec.uniforms ?? {}),
                             ...(spec.impactDriven

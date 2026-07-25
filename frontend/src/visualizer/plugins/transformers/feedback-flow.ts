@@ -120,6 +120,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
             {
                 // Bass drives large-scale expansion, per the section 20 mapping table.
                 feature: 'bass',
+                role: 'large-scale-force',
                 parameter: 'strength',
                 outputRange: [0.004, 0.05],
                 attack: 0.08,

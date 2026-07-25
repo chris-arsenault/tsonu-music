@@ -331,3 +331,75 @@ describe('beat presentation', () => {
         }
     });
 });
+
+/**
+ * The defect: every band was divided by one ceiling driven by the loudest of them, so on ordinary
+ * music the dominant band sat near the top of its range and every quieter band sat near the bottom,
+ * whatever was happening. Any binding on treble was reading a signal that never moved.
+ */
+describe('band excitation', () => {
+    /** A bass-dominant mix, as almost all mastered music is. */
+    const mix = (treble: number) => snapshot({
+        bands: { subBass: 0.5, bass: 0.9, lowMid: 0.3, mid: 0.2, highMid: 0.06, treble },
+    });
+
+    /** Settles the bus on a steady mix, then reports the frame after `final` arrives. */
+    function settleThen(steady: number, final: number) {
+        let state = createFeatureBusState();
+        let audioTime = 100;
+
+        for (let frame = 0; frame < 240; frame += 1) {
+            audioTime += 1 / 60;
+            state = advanceFeatureBus(state, input({ snapshot: mix(steady), currentAudioTime: audioTime }));
+        }
+
+        const before = state.bus.continuous;
+        audioTime += 1 / 60;
+        state = advanceFeatureBus(state, input({ snapshot: mix(final), currentAudioTime: audioTime }));
+
+        return { before, after: state.bus.continuous };
+    }
+
+    test('a quiet band stays crushed in level, which is what excitation exists to answer', () => {
+        const { before } = settleThen(0.02, 0.02);
+
+        expect(before.treble).toBeLessThan(0.1);
+        expect(before.bass).toBeGreaterThan(0.9);
+    });
+
+    test('a treble transient excites even while its level barely moves', () => {
+        const { before, after } = settleThen(0.02, 0.2);
+
+        expect(after.trebleExcite).toBeGreaterThan(0.5);
+        // The level channel moved by a fraction of what excitation reports, because the bass ceiling
+        // it is divided by did not change.
+        expect(after.treble - before.treble).toBeLessThan(0.25);
+    });
+
+    test('a steady dominant band is not permanently excited', () => {
+        const { after } = settleThen(0.02, 0.02);
+
+        expect(after.bass).toBeGreaterThan(0.9);
+        expect(after.bassExcite).toBeLessThan(0.2);
+    });
+
+    test('excitation is short-term history and is dropped on a seek', () => {
+        let state = createFeatureBusState();
+        let audioTime = 100;
+
+        for (let frame = 0; frame < 120; frame += 1) {
+            audioTime += 1 / 60;
+            state = advanceFeatureBus(state, input({ snapshot: mix(0.02), currentAudioTime: audioTime }));
+        }
+
+        expect(state.excitation.bass.mean).toBeGreaterThan(0);
+
+        const seeked = advanceFeatureBus(state, input({
+            effects: ['clear-analysis-history'] as ClockEffect[],
+            currentAudioTime: audioTime,
+        }));
+
+        expect(seeked.excitation.bass.mean).toBe(0);
+        expect(seeked.excitation.treble.deviation).toBe(0);
+    });
+});
