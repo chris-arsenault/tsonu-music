@@ -8,6 +8,7 @@
 
 import type { ParameterBinding } from '../core/bindings';
 import type { RenderPass, ResourceId } from '../core/passes';
+import { impactAge, strongestImpact } from '../core/impact';
 import type {
     DeactivationPolicy,
     PluginCategory,
@@ -48,6 +49,13 @@ export interface SimpleShaderPlugin {
     scale?: number;
     /** Reads its own previous frame through a declared feedback edge. */
     feedbackPort?: string;
+    /**
+     * Feeds the strongest live impact into `uImpactCentre`, `uImpactRadius`, and `uImpactEnergy`.
+     *
+     * Declaring `impact-consumer` is not enough on its own — a plugin has to actually read the bus, and
+     * several declared the capability while rendering from static uniforms.
+     */
+    impactDriven?: boolean;
 }
 
 /**
@@ -99,6 +107,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
         create(context): VisualPluginInstance {
             let elapsed = 0;
             let phase = 0;
+            let impact = { centre: [0.5, 0.5] as [number, number], radius: 0, energy: 0 };
 
             return {
                 initialize() {
@@ -117,6 +126,25 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                 update(frame) {
                     // Frozen-aware: a paused clock passes zero, so animated plugins hold their frame.
                     elapsed += frame.deltaSeconds;
+
+                    if (!spec.impactDriven) {
+                        return;
+                    }
+
+                    const strongest = strongestImpact(frame.impacts, frame.clock.playbackTime);
+                    if (!strongest) {
+                        impact = { centre: impact.centre, radius: 0, energy: 0 };
+                        return;
+                    }
+
+                    // Radius grows with the impact's age, so the ring travels outward from where the
+                    // collision actually happened rather than sitting at the centre of the frame.
+                    const age = impactAge(strongest, frame.clock.playbackTime);
+                    impact = {
+                        centre: strongest.position,
+                        radius: strongest.radius + age * 0.8,
+                        energy: strongest.energy * (1 - age),
+                    };
                 },
 
                 render(render): RenderPass[] {
@@ -148,6 +176,14 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                             uPhase: phase,
                             uSeed: context.seed,
                             ...(spec.uniforms ?? {}),
+                            ...(spec.impactDriven
+                                ? {
+                                    uCentre: impact.centre,
+                                    uImpactCentre: impact.centre,
+                                    uImpactRadius: impact.radius,
+                                    uImpactEnergy: impact.energy,
+                                }
+                                : {}),
                         },
                     }];
                 },

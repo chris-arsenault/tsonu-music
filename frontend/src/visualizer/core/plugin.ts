@@ -97,6 +97,10 @@ export interface FrameContext {
     parameters: Readonly<Record<string, number>>;
     /** Uploads geometry for a `GeometryPass` to draw. */
     uploadGeometry(upload: GeometryUpload): void;
+    /** Particle and agent count multiplier from the quality ladder. */
+    particleScale?: number;
+    /** Frames of temporal history the quality ladder permits a plugin to retain. */
+    historyDepth?: number;
     /** Live impacts any plugin may respond to (spec section 19.6). */
     impacts: ImpactBus;
     /** Publishes impacts for other plugins to consume. */

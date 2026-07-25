@@ -22,6 +22,35 @@ export interface BuiltScene {
     wired: WiredScene;
     graph: CompiledGraph;
     bindings: DistributedBinding[];
+    /** Per-plugin starting parameters the theme dictates, applied over each plugin's own defaults. */
+    parameterOverrides: Record<string, Record<string, number>>;
+}
+
+/**
+ * Turns a theme's colour policy into starting parameters.
+ *
+ * The policy says how strongly the scene's colour should come from its palette source; the plugins that
+ * map colour are the ones that can act on it, so the policy lands on their strength parameters rather
+ * than being stored and forgotten.
+ */
+export function colourOverrides(
+    policy: VisualTheme['colorPolicy'],
+): Record<string, Record<string, number>> {
+    if (!policy) {
+        return {};
+    }
+
+    const strength = policy.strength <= 0 ? 0 : policy.strength > 1 ? 1 : policy.strength;
+
+    return {
+        PaletteMapper: { strength },
+        // A curated policy leaves the source material's own colour largely intact, so the transform
+        // works less hard; a palette-derived policy pushes harder toward the palette.
+        ...Object.fromEntries(
+            ['hue-rotate', 'saturation', 'contrast', 'solarize', 'invert', 'permute', 'duotone', 'quantize', 'luminance']
+                .map((mode) => [`ColorTransform:${mode}`, { amount: strength * 0.6 }]),
+        ),
+    };
 }
 
 export type SceneBuildFailure =
@@ -101,6 +130,9 @@ export function buildScene(
             wired,
             graph: compiled.graph,
             bindings: distributeReactivity(assembled.plugins, createRng(`${seed}:bindings`)),
+            // The theme's colour policy reaches the plugins that map colour, so a theme asking for the
+            // album palette at full strength actually gets it.
+            parameterOverrides: colourOverrides(effectiveTheme.colorPolicy),
         },
     };
 }

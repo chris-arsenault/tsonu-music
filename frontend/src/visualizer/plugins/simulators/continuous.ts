@@ -107,6 +107,9 @@ uniform float uDelta;
 uniform float uDamping;
 uniform float uSpeed;
 uniform float uOnset;
+uniform vec2 uImpactCentre;
+uniform float uImpactRadius;
+uniform float uImpactEnergy;
 ${GLSL_COMMON}
 
 void main() {
@@ -125,6 +128,12 @@ void main() {
 
     // Onsets inject impulses, which is the section 20 mapping for transient events.
     float injected = texture(uImpulse, vUv).r * uOnset;
+
+    // An impact drops a localized ring into the surface where the collision happened (section 19.6).
+    if (uImpactEnergy > 0.001) {
+        float ring = 1.0 - smoothstep(0.0, max(uImpactRadius, 0.02), length(vUv - uImpactCentre));
+        injected += ring * uImpactEnergy * 0.15;
+    }
 
     float step_scale = clamp(uDelta * 60.0, 0.0, 1.5);
     velocity = (velocity + acceleration * step_scale) * (1.0 - uDamping * step_scale);
@@ -217,6 +226,8 @@ export function createReactionDiffusionView(): VisualPluginDefinition {
 
 export function createWaveFieldSimulator(): VisualPluginDefinition {
     return defineShaderPlugin({
+        // Impacts inject height impulses, which is section 19.6's wave-field response to a collision.
+        impactDriven: true,
         id: 'WaveFieldSimulator',
         category: 'simulator',
         inputs: [

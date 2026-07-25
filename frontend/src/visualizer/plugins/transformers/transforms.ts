@@ -240,24 +240,34 @@ uniform float uMode;
 uniform float uAmount;
 uniform float uRadius;
 uniform vec2 uCentre;
+uniform vec2 uImpactCentre;
+uniform float uImpactRadius;
+uniform float uImpactEnergy;
 ${GLSL_COMMON}
 
 void main() {
-    vec2 toCentre = vUv - uCentre;
+    // A live impact wins: the ring is centred where the collision happened and travels outward with it.
+    // With no impact, spectral flux drives a ring from the centre so the transform still responds to audio.
+    bool hasImpact = uImpactEnergy > 0.001;
+    vec2 centre = hasImpact ? uImpactCentre : uCentre;
+    float ringRadius = hasImpact ? uImpactRadius : uRadius;
+    float strength = uAmount * (hasImpact ? clamp(uImpactEnergy, 0.0, 2.0) : 1.0);
+
+    vec2 toCentre = vUv - centre;
     float distance = length(toCentre);
     // A band travelling outward, rather than a global distortion.
-    float band = 1.0 - smoothstep(0.0, 0.14, abs(distance - uRadius));
+    float band = 1.0 - smoothstep(0.0, 0.14, abs(distance - ringRadius));
     vec2 direction = normalize(toCentre + 1e-5);
     vec2 offset = vec2(0.0);
 
     if (uMode < 0.5) {                       // radial bulge
-        offset = direction * band * uAmount * 0.08;
+        offset = direction * band * strength * 0.08;
     } else if (uMode < 1.5) {                // compression ring
-        offset = -direction * band * uAmount * 0.06;
+        offset = -direction * band * strength * 0.06;
     } else if (uMode < 2.5) {                // refraction ring
-        offset = direction * band * uAmount * 0.05 * sin(distance * 40.0);
+        offset = direction * band * strength * 0.05 * sin(distance * 40.0);
     } else if (uMode < 3.5) {                // chromatic shock
-        float shift = band * uAmount * 0.02;
+        float shift = band * strength * 0.02;
         fragColor = vec4(
             texture(uSource, clamp(vUv + direction * shift, 0.0, 1.0)).r,
             texture(uSource, vUv).g,
@@ -266,9 +276,9 @@ void main() {
         );
         return;
     } else if (uMode < 4.5) {                // directional blast
-        offset = vec2(band * uAmount * 0.09, 0.0);
+        offset = vec2(band * strength * 0.09, 0.0);
     } else {                                 // gravitational lens
-        offset = -direction * uAmount * 0.05 / max(distance * distance, 0.02);
+        offset = -direction * strength * 0.05 / max(distance * distance, 0.02);
     }
 
     fragColor = texture(uSource, clamp(vUv + offset, 0.0, 1.0));
@@ -427,7 +437,11 @@ export function createEdgeContourTransform(
 export function createShockwaveTransform(
     mode: typeof SHOCKWAVE_MODES[number] = 'bulge',
 ): VisualPluginDefinition {
+    // Declares impact consumption and actually reads the bus: the ring is centred on the strongest live
+    // impact and its radius grows with that impact's age, so a collision elsewhere in the scene distorts
+    // this layer where it happened.
     return defineShaderPlugin({
+        impactDriven: true,
         id: `ShockwaveTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],

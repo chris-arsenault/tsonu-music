@@ -6,7 +6,7 @@
  * from the compositor.
  */
 
-import { advanceBinding } from '../core/bindings';
+import type { ParameterBinding } from '../core/bindings';
 import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { CompiledGraph, CompiledNode } from '../core/graph';
@@ -23,7 +23,9 @@ import {
     publishImpacts,
     type ImpactBus,
 } from '../core/impact';
-import { resolvePassScale, type RenderPass, type ResourceId } from '../core/passes';
+import { mergeUniforms, resolveParameters } from '../core/parameters';
+import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
+import type { QualityProfile } from '../core/performance';
 import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
@@ -33,6 +35,8 @@ export interface ActiveInstance {
     instance: VisualPluginInstance;
     node: CompiledNode;
     parameters: Record<string, number>;
+    /** Scene bindings from the scheduler's reactivity distribution, if any. */
+    bindings?: readonly ParameterBinding[];
 }
 
 export interface RuntimeFrame {
@@ -48,12 +52,30 @@ export interface RuntimeFrame {
     clearTransients?: boolean;
     /** Diagnostics overrides. Absent in normal operation. */
     controls?: DiagnosticsControls;
+    /** The active quality profile, so the ladder's plugin-level rungs take effect. */
+    profile?: QualityProfile;
+    /**
+     * Plugins that have left the scene but are still finishing their deactivation policy. They keep
+     * updating and rendering into their old resources, which is what makes drain and dissolve visible
+     * rather than an instant cut.
+     */
+    retiring?: readonly RetiringInstance[];
+}
+
+export interface RetiringInstance {
+    active: ActiveInstance;
+    /** Layer opacity for this frame, from the retirement policy. */
+    opacity: number;
+    /** False once a draining plugin should stop producing new material. */
+    emitting: boolean;
 }
 
 export interface RuntimeStats {
     passesExecuted: number;
     targetsAllocated: number;
     skippedPasses: number;
+    /** Plugins the quality ladder switched off this frame. */
+    suppressedPlugins: number;
 }
 
 export interface Runtime {
@@ -83,7 +105,13 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         }
 
         const key = previous ? plan.readKeys[resource] : plan.writeKeys[resource];
-        return key ? device.acquireTarget(key, plan.width, plan.height).texture : undefined;
+        if (!key) {
+            return undefined;
+        }
+
+        // The plan owns every size, so acquiring never disagrees with what was allocated.
+        const size = plan.sizes[resource] ?? { width: plan.width, height: plan.height };
+        return device.acquireTarget(key, size.width, size.height).texture;
     }
 
     function executePass(
@@ -91,6 +119,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         node: CompiledNode,
         plan: RenderPlan,
         stats: RuntimeStats,
+        parameters: Readonly<Record<string, number>>,
     ): void {
         const program = device.useProgram(pass.shader);
         if (!program) {
@@ -99,17 +128,15 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             return;
         }
 
-        const scale = resolvePassScale(pass, 1);
         const outputResource = pass.output ?? Object.values(node.outputs)[0];
         const outputKey = outputResource ? plan.writeKeys[outputResource] : undefined;
 
         let target: RenderTarget | null = null;
-        if (outputKey) {
-            target = device.acquireTarget(
-                outputKey,
-                Math.round(plan.width * scale),
-                Math.round(plan.height * scale),
-            );
+        if (outputKey && outputResource) {
+            // Sized from the plan rather than from the pass. Recomputing it here disagreed with what
+            // planTargets allocated, so every scaled pass deleted and recreated its texture each frame.
+            const size = plan.sizes[outputResource] ?? { width: plan.width, height: plan.height };
+            target = device.acquireTarget(outputKey, size.width, size.height);
         }
 
         device.beginPass(target, pass.blend ?? 'none', pass.clear ?? true);
@@ -125,9 +152,11 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             }
         }
 
+        // Live bound parameters override the pass's static defaults. Applied here so every plugin gets
+        // its bindings for free and none can silently render at fixed values.
         device.setUniforms(program, {
             uResolution: [target?.width ?? plan.width, target?.height ?? plan.height],
-            ...(pass.uniforms ?? {}),
+            ...mergeUniforms(pass.uniforms, parameters),
         });
 
         if (pass.kind === 'geometry') {
@@ -146,12 +175,38 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         },
 
         renderFrame(frame) {
-            const stats: RuntimeStats = { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0 };
+            const stats: RuntimeStats = { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
             if (!graph || device.isLost()) {
                 return stats;
             }
 
-            const plan = planTargets(graph, frame.renderWidth, frame.renderHeight, frame.qualityScale, frameParity);
+            // Retiring plugins' resources are planned alongside the live graph's, so a departing plugin
+            // still has somewhere to draw while it finishes.
+            const retiring = frame.retiring ?? [];
+            const planningGraph: CompiledGraph = retiring.length === 0
+                ? graph
+                : {
+                    ...graph,
+                    resources: [
+                        ...graph.resources,
+                        ...retiring.flatMap((entry) =>
+                            entry.active.node.definition.outputs.map((port) => ({
+                                id: entry.active.node.outputs[port.name],
+                                type: port.type,
+                                producedBy: entry.active.instanceId,
+                                port: port.name,
+                            }))),
+                    ],
+                };
+
+            const plan = planTargets(
+                planningGraph,
+                frame.renderWidth,
+                frame.renderHeight,
+                frame.qualityScale,
+                frameParity,
+                frame.profile?.simulationScale ?? 1,
+            );
             frameParity += 1;
 
             // Expired before the pass, so a plugin never reads an impact past its lifetime. A frozen
@@ -187,7 +242,26 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     continue;
                 }
 
-                applyBindings(active, { ...frame, deltaSeconds });
+                // Ladder rungs 5 to 7 drop whole plugins rather than reducing resolution.
+                if (frame.profile && isSuppressedByQuality(
+                    node.definition.capabilities,
+                    node.definition.character.dominance,
+                    node.definition.cost.gpu,
+                    frame.profile,
+                )) {
+                    stats.suppressedPlugins += 1;
+                    continue;
+                }
+
+                // Scene bindings override the plugin's defaults, since the scheduler redistributes them
+                // across features to keep a scene from pulsing together.
+                const bindings = active.bindings ?? active.node.definition.defaultBindings ?? [];
+                active.parameters = resolveParameters(
+                    active.parameters,
+                    bindings,
+                    frame.features,
+                    deltaSeconds,
+                );
 
                 active.instance.update({
                     clock: frame.clock,
@@ -198,6 +272,8 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderHeight: plan.height,
                     parameters: active.parameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
+                    particleScale: frame.profile?.particleScale,
+                    historyDepth: frame.profile?.historyDepth,
                     impacts,
                     publishImpacts: (published) => {
                         impacts = publishImpacts(impacts, published);
@@ -213,7 +289,37 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 });
 
                 for (const pass of passes) {
-                    executePass(pass, node, plan, stats);
+                    executePass(pass, node, plan, stats, active.parameters);
+                }
+            }
+
+            // Retiring plugins render after the live graph, into the resources they already owned.
+            for (const entry of retiring) {
+                const active = entry.active;
+                active.instance.update({
+                    clock: frame.clock,
+                    features: frame.features,
+                    deltaSeconds,
+                    seed: hashSeed(active.instanceId),
+                    renderWidth: plan.width,
+                    renderHeight: plan.height,
+                    parameters: active.parameters,
+                    uploadGeometry: (upload) => device.uploadGeometry(upload),
+                    // A draining plugin keeps simulating but stops emitting new material.
+                    particleScale: entry.emitting ? frame.profile?.particleScale : 0,
+                    historyDepth: frame.profile?.historyDepth,
+                    impacts,
+                    publishImpacts: () => undefined,
+                });
+
+                for (const pass of active.instance.render({
+                    inputs: active.node.inputs,
+                    outputs: active.node.outputs,
+                    previous: active.node.previous,
+                    renderWidth: plan.width,
+                    renderHeight: plan.height,
+                })) {
+                    executePass(pass, active.node, plan, stats, active.parameters);
                 }
             }
 
@@ -261,7 +367,8 @@ function presentSingle(
         return;
     }
 
-    const target = device.acquireTarget(key, plan.width, plan.height);
+    const size = plan.sizes[resource] ?? { width: plan.width, height: plan.height };
+    const target = device.acquireTarget(key, size.width, size.height);
 
     device.beginPass(null, 'none', true);
     device.bindTexture(program, 'uSource', target.texture, 0);
@@ -304,7 +411,8 @@ function present(
         }
 
         const key = plan.writeKeys[resource] ?? resource;
-        const target = device.acquireTarget(key, plan.width, plan.height);
+        const size = plan.sizes[resource] ?? { width: plan.width, height: plan.height };
+        const target = device.acquireTarget(key, size.width, size.height);
 
         device.beginPass(null, index === 0 ? 'none' : step.blendMode, index === 0);
         device.bindTexture(program, 'uSource', target.texture, 0);
@@ -315,32 +423,6 @@ function present(
         device.drawFullscreen();
         stats.passesExecuted += 1;
     });
-}
-
-/** Resolves each parameter from its bindings against this frame's features. */
-function applyBindings(active: ActiveInstance, frame: RuntimeFrame): void {
-    const bindings = active.node.definition.defaultBindings ?? [];
-
-    for (const binding of bindings) {
-        const raw = readFeature(frame.features, binding.feature);
-        if (raw === undefined) {
-            continue;
-        }
-
-        active.parameters[binding.parameter] = advanceBinding(
-            binding,
-            active.parameters[binding.parameter],
-            raw,
-            frame.deltaSeconds,
-        );
-    }
-}
-
-function readFeature(features: AudioFeatureBus, name: string): number | undefined {
-    const continuous = features.continuous as unknown as Record<string, number>;
-    const value = continuous[name];
-
-    return typeof value === 'number' ? value : undefined;
 }
 
 /** Stable per-instance seed so a scene reproduces from its id set. */

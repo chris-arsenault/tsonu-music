@@ -7,6 +7,7 @@
  */
 
 import type { CompiledGraph } from './graph';
+import type { PortType } from './plugin';
 import type { ResourceId } from './passes';
 
 export interface TargetPlanEntry {
@@ -27,11 +28,17 @@ export interface RenderPlan {
     writeKeys: Record<ResourceId, string>;
     /** Resource to the key holding the previous frame, for declared feedback reads. */
     readKeys: Record<ResourceId, string>;
+    /** Allocated size per resource, since not every resource is the render size. */
+    sizes: Record<ResourceId, { width: number; height: number }>;
     presentKey: string | undefined;
 }
 
 /** Smallest useful render dimension. Below this, feedback and blur read as mush. */
 const MINIMUM_DIMENSION = 16;
+
+function clampScale(value: number): number {
+    return value <= 0 ? 0 : value > 1 ? 1 : value;
+}
 
 export function targetKey(resource: ResourceId, slot?: 0 | 1): string {
     return slot === undefined ? resource : `${resource}#${slot}`;
@@ -44,14 +51,32 @@ export function targetKey(resource: ResourceId, slot?: 0 | 1): string {
  * slot, so it sees the previous frame rather than the one being written — which is what stops a
  * feedback loop from sampling its own partial output.
  */
+/**
+ * Per-port-type size multipliers and pixel budgets.
+ *
+ * A resource is not always the render size. A vector field consumed by advection needs no pixel detail,
+ * and a particle buffer is one texel per particle rather than one per screen pixel — sizing it to the
+ * viewport would silently change the particle count with the window.
+ */
+export const RESOURCE_SIZING: Partial<Record<PortType, { scale?: number; fixed?: number }>> = {
+    'vector-field': { scale: 0.5 },
+    'motion-field': { scale: 0.5 },
+    'distance-field': { scale: 0.5 },
+    'particle-buffer': { fixed: 128 },
+    // A palette is a strip of swatches, not an image.
+    palette: { fixed: 64 },
+};
+
 export function planTargets(
     graph: CompiledGraph,
     renderWidth: number,
     renderHeight: number,
     qualityScale: number,
     frameParity: number,
+    /** Simulation-resolution multiplier from the quality ladder, applied to field and buffer resources. */
+    simulationScale = 1,
 ): RenderPlan {
-    const scale = qualityScale <= 0 ? 0 : qualityScale > 1 ? 1 : qualityScale;
+    const scale = clampScale(qualityScale);
     const width = Math.max(MINIMUM_DIMENSION, Math.round(renderWidth * scale));
     const height = Math.max(MINIMUM_DIMENSION, Math.round(renderHeight * scale));
 
@@ -59,21 +84,40 @@ export function planTargets(
     const targets: TargetPlanEntry[] = [];
     const writeKeys: Record<ResourceId, string> = {};
     const readKeys: Record<ResourceId, string> = {};
+    const sizes: Record<ResourceId, { width: number; height: number }> = {};
 
     const writeSlot: 0 | 1 = frameParity % 2 === 0 ? 0 : 1;
     const readSlot: 0 | 1 = writeSlot === 0 ? 1 : 0;
 
     for (const resource of graph.resources) {
+        // Sized by what the resource is for, so a field or particle buffer is not needlessly allocated at
+        // full viewport resolution — and so the size is stable across frames rather than recomputed per
+        // pass, which is what previously caused a delete-and-recreate every frame.
+        const sizing = RESOURCE_SIZING[resource.type];
+        let resourceWidth = width;
+        let resourceHeight = height;
+
+        if (sizing?.fixed !== undefined) {
+            resourceWidth = sizing.fixed;
+            resourceHeight = sizing.fixed;
+        } else if (sizing?.scale !== undefined) {
+            const combined = sizing.scale * clampScale(simulationScale);
+            resourceWidth = Math.max(MINIMUM_DIMENSION, Math.round(width * combined));
+            resourceHeight = Math.max(MINIMUM_DIMENSION, Math.round(height * combined));
+        }
+
         if (pingPong.has(resource.id)) {
-            targets.push({ key: targetKey(resource.id, 0), resource: resource.id, width, height, slot: 0 });
-            targets.push({ key: targetKey(resource.id, 1), resource: resource.id, width, height, slot: 1 });
+            targets.push({ key: targetKey(resource.id, 0), resource: resource.id, width: resourceWidth, height: resourceHeight, slot: 0 });
+            targets.push({ key: targetKey(resource.id, 1), resource: resource.id, width: resourceWidth, height: resourceHeight, slot: 1 });
             writeKeys[resource.id] = targetKey(resource.id, writeSlot);
             readKeys[resource.id] = targetKey(resource.id, readSlot);
         } else {
-            targets.push({ key: targetKey(resource.id), resource: resource.id, width, height });
+            targets.push({ key: targetKey(resource.id), resource: resource.id, width: resourceWidth, height: resourceHeight });
             writeKeys[resource.id] = targetKey(resource.id);
             readKeys[resource.id] = targetKey(resource.id);
         }
+
+        sizes[resource.id] = { width: resourceWidth, height: resourceHeight };
     }
 
     return {
@@ -82,6 +126,7 @@ export function planTargets(
         targets,
         writeKeys,
         readKeys,
+        sizes,
         presentKey: graph.present ? writeKeys[graph.present] : undefined,
     };
 }

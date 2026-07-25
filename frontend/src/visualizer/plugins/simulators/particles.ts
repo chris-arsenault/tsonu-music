@@ -330,6 +330,7 @@ export function createParticleRenderer(
             // One vertex per particle, holding only its lookup coordinate; positions come from the texture.
             const indices = new Float32Array(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * 2);
             let uploaded = false;
+            let activeCount = PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE;
 
             for (let y = 0; y < PARTICLE_TEXTURE_SIDE; y += 1) {
                 for (let x = 0; x < PARTICLE_TEXTURE_SIDE; x += 1) {
@@ -353,6 +354,16 @@ export function createParticleRenderer(
                 },
 
                 update(frame) {
+                    // Ladder rung 2 reduces particle count. Applied by drawing fewer vertices from the
+                    // same buffer, so nothing is reallocated when quality changes.
+                    activeCount = Math.max(
+                        0,
+                        Math.min(
+                            PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE,
+                            Math.round(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * (frame.particleScale ?? 1)),
+                        ),
+                    );
+
                     // Uploaded once: the index buffer never changes, only the state texture it reads.
                     if (!uploaded) {
                         frame.uploadGeometry({
@@ -366,7 +377,7 @@ export function createParticleRenderer(
 
                 render(render): RenderPass[] {
                     const state = render.inputs.state;
-                    if (!state) {
+                    if (!state || activeCount === 0) {
                         return [];
                     }
 
@@ -375,7 +386,7 @@ export function createParticleRenderer(
                         shader: RENDERER_SHADER,
                         geometry: GEOMETRY_ID,
                         primitive: 'points',
-                        vertexCount: PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE,
+                        vertexCount: activeCount,
                         inputs: { uState: state },
                         output: render.outputs.color,
                         blend: 'add',

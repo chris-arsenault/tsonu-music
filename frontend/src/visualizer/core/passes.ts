@@ -122,3 +122,41 @@ export function resolvePassScale(pass: RenderPass, qualityScale: number): number
 
     return scale <= 0 ? 0 : scale > 1 ? 1 : scale;
 }
+
+/**
+ * What a plugin's declared capabilities let the quality profile switch off.
+ *
+ * The performance ladder gives things up in a specific order (spec section 21.2), and most of those rungs
+ * are about which plugins keep running rather than about resolution. Expressed against capabilities so
+ * the ladder needs no list of plugin ids.
+ */
+export interface QualityGate {
+    secondaryPostProcess: boolean;
+    expensiveSupporting: boolean;
+    expensivePrimary: boolean;
+}
+
+export function isSuppressedByQuality(
+    capabilities: readonly string[],
+    dominance: 'supporting' | 'primary' | 'either',
+    gpuCost: number,
+    gate: QualityGate,
+): boolean {
+    // Optional glow and secondary post-processing is the first whole plugin the ladder drops.
+    if (!gate.secondaryPostProcess && capabilities.includes('secondary-postprocess')) {
+        return true;
+    }
+
+    // Then the most expensive supporting plugin, then the most expensive optional primary. Supporting
+    // and primary is the plugin's declared character, not its cost flag: an expensive primary defines the
+    // scene and must outlive an expensive support act.
+    if (!gate.expensiveSupporting && gpuCost >= 2 && dominance === 'supporting') {
+        return true;
+    }
+
+    if (!gate.expensivePrimary && gpuCost >= 3) {
+        return true;
+    }
+
+    return false;
+}

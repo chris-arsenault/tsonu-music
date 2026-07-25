@@ -8,11 +8,30 @@
 
 import type { CompiledGraph } from '../core/graph';
 import { createLayer, type VisualLayer } from '../core/layers';
+import {
+    advanceRetirement,
+    beginRetirement,
+    isRetired,
+    retirementFeedbackParticipation,
+    retirementOpacity,
+    type Retirement,
+} from '../core/deactivation';
 import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
 import type { DiagnosticsControls } from '../core/diagnostics';
 import { buildFirstViableScene } from '../core/scene-builder';
+import { compileGraph } from '../core/graph';
+import { distributeReactivity } from '../core/audio-mapping';
+import { createRng, type Rng } from '../core/random';
+import {
+    decideMutation,
+    type ActivePluginRecord,
+    type MutationKind,
+    type MutationPolicy,
+    type SchedulerContext,
+} from '../core/scheduler';
+import { wireScene } from '../core/wiring';
 import { assetResourceId, type AssetResource } from '../core/wiring';
 import { sceneSeed } from '../core/random';
 import { createM1Registry } from '../plugins/registry';
@@ -20,6 +39,7 @@ import { satisfiableThemes } from '../plugins/themes';
 import { PRESENT_SHADER, PRESENT_SHADER_ID } from '../plugins/postprocess/tone-mapper';
 import { createDevice, type Device } from './device';
 import { createRuntime, type ActiveInstance, type RuntimeStats } from './runtime';
+import type { DistributedBinding } from '../core/audio-mapping';
 
 export interface RendererFrame {
     clock: PlaybackClock;
@@ -56,6 +76,16 @@ export interface Renderer {
     seed(): string;
     /** Rebuilds from an explicit seed, so a reported scene can be reproduced exactly. */
     rebuildFromSeed(seed: string, profile: QualityProfile): boolean;
+    /**
+     * Applies one mutation (spec section 17). Returns what actually happened, which may be less than
+     * asked for when no replacement is available.
+     */
+    mutate(profile: QualityProfile, playbackTime: number): MutationKind | 'none';
+    /** Plugin ids active long enough to be replaced, with their instance ids. */
+    activeRecords(): ActivePluginRecord[];
+    mutationPolicy(): MutationPolicy;
+    /** Layers the compositor is blending, for the diagnostics overlay. */
+    layerCount(): number;
     resize(): void;
     dispose(): void;
 }
@@ -129,11 +159,19 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     device.registerShader(PRESENT_SHADER);
 
     let scene = initial.scene;
-    let instances = instantiate(device, scene.graph);
+    let instances = instantiate(device, scene.graph, scene.bindings, [], scene.parameterOverrides).instances;
     let layers = buildLayers(scene.graph);
     runtime.setGraph(scene.graph, instances);
 
     let lostHandled = false;
+    // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
+    let lastClock: PlaybackClock = {
+        trackId: options.trackId,
+        playbackTime: 0,
+        duration: 0,
+        state: 'idle',
+        generation: options.generation,
+    };
 
     function sizeCanvas(): void {
         const ratio = device!.capabilities.maxPixelRatio;
@@ -151,6 +189,93 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     // Bound after the capability guards above, so the closures below need no further narrowing.
     const activeDevice: Device = device;
 
+    let mutationCount = 0;
+    /** Plugins finishing their deactivation policy. Rendered until each retirement completes. */
+    const retiring: { active: ActiveInstance; retirement: Retirement }[] = [];
+    /** When each instance entered the scene, so mutation can respect the minimum plugin age. */
+    const activatedAt = new Map<string, number>();
+
+    const schedulerContext = (playbackTime: number, profile: QualityProfile): SchedulerContext => ({
+        available: registry.all(),
+        theme: scene.theme,
+        assets: assetIds,
+        capabilities: deviceCapabilities,
+        history: {},
+        playbackTime,
+        allowHighCost: profile.expensivePrimary,
+        allowDominant: profile.expensivePrimary,
+    });
+
+    const records = (): ActivePluginRecord[] => instances.map((entry) => ({
+        instanceId: entry.instanceId,
+        pluginId: entry.node.definition.id,
+        activationTime: activatedAt.get(entry.instanceId) ?? 0,
+    }));
+
+    /** Re-runs reactivity distribution in place. No instance is torn down. */
+    const redistribute = (rng: Rng): void => {
+        const bindings = distributeReactivity(scene.plugins, rng);
+        scene = { ...scene, bindings };
+
+        for (const entry of instances) {
+            entry.bindings = bindings.find((candidate) => candidate.pluginId === entry.node.definition.id)?.bindings
+                ?? entry.node.definition.defaultBindings;
+        }
+    };
+
+    /**
+     * Replaces one plugin in the current scene, keeping every other plugin's instance and state.
+     *
+     * Rebuilt through the normal wire-and-compile path so the swap is validated exactly as an assembled
+     * scene would be, and rejected rather than applied if the result does not compile.
+     */
+    const swapPlugin = (instanceId: string, replacementId: string): boolean => {
+        const target = instances.find((entry) => entry.instanceId === instanceId);
+        const replacement = registry.get(replacementId);
+        if (!target || !replacement) {
+            return false;
+        }
+
+        const plugins = scene.plugins.map((definition) =>
+            definition.id === target.node.definition.id ? replacement : definition);
+
+        const wired = wireScene(plugins, assetResources);
+        if (wired.unsatisfied.length > 0) {
+            return false;
+        }
+
+        const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
+        if (!compiled.ok) {
+            return false;
+        }
+
+        return applyBuild({
+            ok: true,
+            scene: { ...scene, plugins, wired, graph: compiled.graph },
+        });
+    };
+
+    /**
+     * Layers for plugins still retiring, at the opacity their policy dictates.
+     *
+     * A handoff-feedback retirement raises its feedback participation as it fades, which is how a
+     * departing image is left in the feedback buffer for its replacement rather than lost.
+     */
+    const retiringLayers = (): VisualLayer[] => retiring.flatMap((entry) => {
+        const colour = entry.active.node.definition.outputs.find((port) => port.type === 'color-texture');
+        const resource = colour && entry.active.node.outputs[colour.name];
+        if (!resource) {
+            return [];
+        }
+
+        return [createLayer(`retiring:${entry.active.instanceId}`, resource, {
+            order: 1000,
+            blendMode: 'screen',
+            opacity: retirementOpacity(entry.retirement),
+            feedbackParticipation: retirementFeedbackParticipation(entry.retirement),
+        })];
+    });
+
     /** Swaps in a newly built scene, keeping the current one if the build failed. */
     const applyBuild = (result: ReturnType<typeof buildFromSeed>): boolean => {
         if (!result.ok) {
@@ -159,9 +284,37 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             return false;
         }
 
-        runtime.dispose();
         scene = result.scene;
-        instances = instantiate(activeDevice, scene.graph);
+        // Reuses instances whose plugin is unchanged, so a mutation preserves unrelated state. Only the
+        // instances actually leaving the scene are retired.
+        const rebuilt = instantiate(activeDevice, scene.graph, scene.bindings, instances, scene.parameterOverrides);
+
+        for (const departing of rebuilt.retired) {
+            const policy = departing.node.definition.deactivationPolicy ?? 'immediate';
+            departing.instance.deactivate({ policy, clock: lastClock });
+
+            const retirement = beginRetirement(departing.instanceId, policy);
+            if (isRetired(retirement)) {
+                // Immediate policies have nothing to finish.
+                departing.instance.destroy();
+                continue;
+            }
+
+            // Kept alive and rendering until its policy completes, so particles drain and frozen frames
+            // dissolve instead of vanishing between frames.
+            retiring.push({ active: departing, retirement });
+        }
+
+        instances = rebuilt.instances;
+        for (const entry of instances) {
+            if (!activatedAt.has(entry.instanceId)) {
+                activatedAt.set(entry.instanceId, lastClock.playbackTime);
+            }
+        }
+        for (const departing of rebuilt.retired) {
+            activatedAt.delete(departing.instanceId);
+        }
+
         layers = buildLayers(scene.graph);
         runtime.setGraph(scene.graph, instances);
 
@@ -174,7 +327,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             renderFrame(frame) {
                 // Section 21.3: nothing renders when suspended, at the ladder's floor or page-hidden.
                 if (frame.profile.suspended) {
-                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0 };
+                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
                 }
 
                 if (device.isLost()) {
@@ -185,11 +338,24 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         runtime.reinitialize();
                         device.registerShader(PRESENT_SHADER);
                     }
-                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0 };
+                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
                 }
 
                 lostHandled = false;
+                lastClock = frame.clock;
                 sizeCanvas();
+
+                // Frozen-aware, so a retirement holds mid-drain while the track is paused rather than
+                // completing invisibly.
+                for (let index = retiring.length - 1; index >= 0; index -= 1) {
+                    const entry = retiring[index];
+                    entry.retirement = advanceRetirement(entry.retirement, frame.deltaSeconds);
+
+                    if (isRetired(entry.retirement)) {
+                        entry.active.instance.destroy();
+                        retiring.splice(index, 1);
+                    }
+                }
 
                 return runtime.renderFrame({
                     clock: frame.clock,
@@ -198,9 +364,15 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     qualityScale: frame.profile.renderScale,
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
-                    layers,
+                    layers: [...layers, ...retiringLayers()],
                     clearTransients: frame.clearTransients,
                     controls: frame.controls,
+                    profile: frame.profile,
+                    retiring: retiring.map((entry) => ({
+                        active: entry.active,
+                        opacity: retirementOpacity(entry.retirement),
+                        emitting: entry.retirement.emitting,
+                    })),
                 });
             },
 
@@ -214,6 +386,52 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
             rebuildFromSeed(seed, profile) {
                 return applyBuild(buildFromSeed(seed, profile));
+            },
+
+            activeRecords() {
+                return records();
+            },
+
+            mutationPolicy() {
+                return scene.theme.mutationPolicy;
+            },
+
+            layerCount() {
+                return layers.length;
+            },
+
+            mutate(profile, playbackTime) {
+                const policy = scene.theme.mutationPolicy;
+                // Forked from the seed and the mutation counter, so a scene's evolution is as
+                // reproducible as its assembly.
+                const rng = createRng(`${scene.seed}:mutation:${mutationCount}`);
+                mutationCount += 1;
+
+                const decision = decideMutation(rng, records(), schedulerContext(playbackTime, profile), policy);
+
+                switch (decision.kind) {
+                    case 'scene':
+                        // Rare by design: this is the one that discards accumulated state.
+                        return applyBuild(buildFromSeed(`${scene.seed}:scene:${mutationCount}`, profile))
+                            ? 'scene'
+                            : 'none';
+
+                    case 'plugin':
+                    case 'branch': {
+                        if (!decision.targetInstanceId || !decision.replacement) {
+                            return 'none';
+                        }
+
+                        const swapped = swapPlugin(decision.targetInstanceId, decision.replacement.id);
+                        return swapped ? decision.kind : 'none';
+                    }
+
+                    case 'parameter':
+                        // Redistributes which feature drives which parameter. Nothing is torn down, so
+                        // every simulator and feedback buffer keeps running.
+                        redistribute(rng);
+                        return 'parameter';
+                }
             },
 
             setAssets(ids) {
@@ -297,9 +515,55 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     };
 }
 
-function instantiate(device: Device, graph: CompiledGraph): ActiveInstance[] {
-    return graph.order.map((node) => {
+/**
+ * Builds the active instance list for a graph, reusing any previous instance whose id and plugin are
+ * unchanged.
+ *
+ * Reuse is what makes incremental mutation meaningful: swapping one plugin must not reset the particle
+ * state, feedback accumulation, or smoothed parameters of every other plugin in the scene.
+ */
+function instantiate(
+    device: Device,
+    graph: CompiledGraph,
+    bindings: readonly DistributedBinding[],
+    previous: readonly ActiveInstance[] = [],
+    overrides: Record<string, Record<string, number>> = {},
+): { instances: ActiveInstance[]; retired: ActiveInstance[] } {
+    const reusable = new Map(previous.map((entry) => [entry.instanceId, entry]));
+    const kept = new Set<string>();
+
+    const instances = graph.order.map((node) => {
         const definition = node.definition;
+        const existing = reusable.get(node.instanceId);
+
+        if (existing && existing.node.definition.id === definition.id) {
+            kept.add(node.instanceId);
+            // Carries state and smoothed parameters across; only the graph position is refreshed.
+            return {
+                ...existing,
+                node,
+                bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
+                    ?? definition.defaultBindings,
+            };
+        }
+
+        return createInstance(device, node, definition, bindings, overrides[definition.id]);
+    });
+
+    return {
+        instances,
+        retired: previous.filter((entry) => !kept.has(entry.instanceId)),
+    };
+}
+
+function createInstance(
+    device: Device,
+    node: CompiledGraph['order'][number],
+    definition: CompiledGraph['order'][number]['definition'],
+    bindings: readonly DistributedBinding[],
+    overrides: Record<string, number> = {},
+): ActiveInstance {
+    {
         const instance = definition.create({
             instanceId: node.instanceId,
             seed: seedFor(node.instanceId),
@@ -316,17 +580,60 @@ function instantiate(device: Device, graph: CompiledGraph): ActiveInstance[] {
             instanceId: node.instanceId,
             instance,
             node,
-            parameters: { ...(definition.parameters ?? {}) },
+            parameters: { ...(definition.parameters ?? {}), ...overrides },
+            // The scheduler's redistributed bindings, so reactivity is spread rather than every plugin
+            // reading the feature its author happened to pick.
+            bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
+                ?? definition.defaultBindings,
         };
-    });
+    }
 }
 
 /**
- * One layer for the presented resource. The scheduler builds richer stacks in M2; the compositor
- * already handles order, blending, and crossfades regardless of how many arrive.
+ * The layer stack the compositor blends.
+ *
+ * Every plugin producing a colour output that nothing else consumes becomes a layer, so a scene with two
+ * parallel visual branches genuinely composites rather than presenting only the last one. Order follows
+ * graph order, and a plugin whose material is meant to persist contributes to feedback in proportion to
+ * its declared persistence.
  */
 function buildLayers(graph: CompiledGraph): VisualLayer[] {
-    return graph.present ? [createLayer('output', graph.present, { order: 0 })] : [];
+    const consumed = new Set<string>();
+    for (const node of graph.order) {
+        for (const resource of Object.values(node.inputs)) {
+            consumed.add(resource);
+        }
+    }
+
+    const layers: VisualLayer[] = [];
+
+    graph.order.forEach((node, index) => {
+        for (const port of node.definition.outputs) {
+            if (port.type !== 'color-texture') {
+                continue;
+            }
+
+            const resource = node.outputs[port.name];
+            // A resource something downstream reads is an intermediate, not a layer.
+            if (!resource || consumed.has(resource)) {
+                continue;
+            }
+
+            layers.push(createLayer(node.instanceId, resource, {
+                order: index,
+                // Additive above the base, so parallel branches accumulate rather than occluding.
+                blendMode: layers.length === 0 ? 'normal' : 'screen',
+                feedbackParticipation: node.definition.character.persistence,
+            }));
+        }
+    });
+
+    if (layers.length === 0 && graph.present) {
+        // Everything was consumed by something, so present the graph's own output.
+        layers.push(createLayer('output', graph.present, { order: 0 }));
+    }
+
+    return layers;
 }
 
 function seedFor(instanceId: string): number {

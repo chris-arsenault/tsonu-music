@@ -32,6 +32,11 @@ import {
     type DiagnosticsControls,
 } from '../core/diagnostics';
 import {
+    advanceMutation,
+    createMutationState,
+    type MutationKind,
+} from '../core/scheduler';
+import {
     advancePerformance,
     applyReducedMotion,
     createPerformanceState,
@@ -78,6 +83,10 @@ export interface KernelReadout {
         assets: readonly string[];
         activationHistory: readonly string[];
         estimatedTextureBytes: number;
+        /** The most recent mutation the scheduler applied. */
+        lastMutation: string;
+        /** Layers the compositor is blending this frame. */
+        layerCount: number;
     };
     gpu?: {
         floatRenderTargets: boolean;
@@ -155,6 +164,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
     let lastRebuiltGeneration = clock.generation;
     let controls: DiagnosticsControls = createDiagnosticsControls();
     let activationHistory: readonly string[] = [];
+    let mutation = createMutationState();
+    let lastMutation: MutationKind | 'none' = 'none';
 
     const currentProfile = (): QualityProfile => {
         if (typeof document !== 'undefined' && document.hidden) {
@@ -312,6 +323,17 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 }
             }
 
+            // Section 17: scenes evolve by mutation between track changes. The timer takes frozen-aware
+            // delta, so a paused track does not bank mutations that all fire at once on resume.
+            const step = advanceMutation(mutation, deltaSeconds, renderer.mutationPolicy());
+            mutation = step.state;
+            if (step.due && !controls.freezeMutations) {
+                lastMutation = renderer.mutate(profile, clock.playbackTime);
+                if (lastMutation !== 'none') {
+                    activationHistory = recordActivation(activationHistory, `mutate:${lastMutation}`);
+                }
+            }
+
             const stats = renderer.renderFrame({
                 clock,
                 features: features.bus,
@@ -353,6 +375,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         assets: renderer.availableAssets(),
                         activationHistory,
                         estimatedTextureBytes: renderer.estimatedTextureBytes(),
+                        lastMutation,
+                        layerCount: renderer.layerCount(),
                     }
                     : undefined,
                 gpu: renderer

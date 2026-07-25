@@ -14,6 +14,8 @@ const ART_SHADER = 'album-art';
 const PALETTE_SHADER = 'album-art-palette';
 const EDGES_SHADER = 'album-art-edges';
 const DISPLACEMENT_SHADER = 'album-art-displacement';
+// Its own id: two plugins sharing one meant whichever registered first silently won.
+const LUMINANCE_SHADER = 'image-luminance-field';
 
 const ART_FRAGMENT = `#version 300 es
 precision highp float;
@@ -348,7 +350,7 @@ export function createImageLuminanceField(): VisualPluginDefinition {
         parameters: { scale: 1 },
         deactivationPolicy: 'immediate',
         create: derivation({
-            shaderId: DISPLACEMENT_SHADER,
+            shaderId: LUMINANCE_SHADER,
             fragment: DISPLACEMENT_FRAGMENT,
             sampler: 'uArt',
             outputPort: 'luminance',
