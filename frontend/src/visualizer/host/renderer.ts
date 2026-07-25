@@ -12,6 +12,7 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
 import { buildFirstViableScene } from '../core/scene-builder';
+import { assetResourceId, type AssetResource } from '../core/wiring';
 import { sceneSeed } from '../core/random';
 import { createM1Registry } from '../plugins/registry';
 import { satisfiableThemes } from '../plugins/themes';
@@ -34,6 +35,8 @@ export interface Renderer {
     rebuild(trackId: string | null, generation: number, profile: QualityProfile): boolean;
     /** Replaces the resolvable asset set. Takes effect on the next rebuild. */
     setAssets(ids: readonly string[]): void;
+    /** Uploads a loaded asset image so the graph can bind it. */
+    uploadAsset(assetId: string, kind: 'album-art' | 'mask', image: HTMLImageElement): void;
     availableAssets(): readonly string[];
     /** Ids of the active plugins, for the diagnostics overlay. */
     activePluginIds(): string[];
@@ -80,6 +83,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     const deviceCapabilities = ['float-textures', 'webgl2'];
 
     let assetIds: readonly string[] = options.assets ?? [];
+    let assetResources: readonly AssetResource[] = [];
 
     function build(trackId: string | null, generation: number, profile: QualityProfile) {
         return buildFirstViableScene(
@@ -88,6 +92,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             {
                 available: registry.all(),
                 assets: assetIds,
+                assetResources,
                 capabilities: deviceCapabilities,
                 history: {},
                 playbackTime: 0,
@@ -183,6 +188,18 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
             setAssets(ids) {
                 assetIds = ids;
+            },
+
+            uploadAsset(assetId, kind, image) {
+                const resource = assetResourceId(assetId);
+                device.uploadAssetTexture(resource, image);
+
+                // Album art enters as colour; a mask enters as a mask texture, which is also accepted by
+                // anything wanting a distance field's single channel.
+                const type = kind === 'mask' ? 'mask-texture' : 'color-texture';
+                if (!assetResources.some((entry) => entry.resource === resource)) {
+                    assetResources = [...assetResources, { resource, type }];
+                }
             },
 
             availableAssets() {

@@ -81,6 +81,11 @@ export function compileGraph(
     nodes: readonly GraphNode[],
     edges: readonly RenderGraphEdge[],
     presentFrom?: { instanceId: string; port: string },
+    /**
+     * Inputs fed by host-supplied asset textures. Passed separately from edges because an asset is not
+     * a node, so it takes no place in execution order — but it does satisfy a required input.
+     */
+    assetBindings: readonly { instanceId: string; port: string; resource: ResourceId }[] = [],
 ): CompileResult {
     const errors: string[] = [];
     const byInstance = new Map<string, GraphNode>();
@@ -109,7 +114,7 @@ export function compileGraph(
         return { ok: false, errors };
     }
 
-    errors.push(...validateRequiredInputs(nodes, edges));
+    errors.push(...validateRequiredInputs(nodes, edges, assetBindings));
 
     const forward = edges.filter((edge) => !edge.feedback);
     const ordered = topologicalOrder(nodes, forward);
@@ -132,6 +137,12 @@ export function compileGraph(
     const compiled = ordered.map((node): CompiledNode => {
         const inputs: Record<string, ResourceId> = {};
         const previous: Record<string, ResourceId> = {};
+
+        for (const binding of assetBindings) {
+            if (binding.instanceId === node.instanceId) {
+                inputs[binding.port] = binding.resource;
+            }
+        }
 
         for (const edge of edges) {
             if (edge.to.instanceId !== node.instanceId) {
@@ -217,9 +228,13 @@ function validateEdges(
 function validateRequiredInputs(
     nodes: readonly GraphNode[],
     edges: readonly RenderGraphEdge[],
+    assetBindings: readonly { instanceId: string; port: string }[],
 ): string[] {
     const errors: string[] = [];
-    const connected = new Set(edges.map((edge) => `${edge.to.instanceId}.${edge.to.port}`));
+    const connected = new Set([
+        ...edges.map((edge) => `${edge.to.instanceId}.${edge.to.port}`),
+        ...assetBindings.map((binding) => `${binding.instanceId}.${binding.port}`),
+    ]);
 
     for (const node of nodes) {
         for (const port of node.definition.inputs) {

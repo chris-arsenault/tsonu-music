@@ -5,6 +5,7 @@ import { validateDefinition } from '../core/plugin';
 import { countPasses, isGeometryPass } from '../core/passes';
 import { SIGNAL_TRACE_MODES, traceVertices } from './sources/signal-trace';
 import type { FrameContext } from '../core/plugin';
+import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { FEEDBACK_FLOW_MODES, feedbackModeIndex } from './transformers/feedback-flow';
 
 /** Minimal create context: records shaders instead of compiling them. */
@@ -22,6 +23,7 @@ function createContext(instanceId = 'test') {
 
 function frameContext(overrides: Partial<FrameContext> = {}) {
     const uploads: { id: string; vertexCount: number }[] = [];
+    const impacts: ImpactEvent[] = [];
 
     return {
         uploads,
@@ -45,8 +47,13 @@ function frameContext(overrides: Partial<FrameContext> = {}) {
             parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4 },
             uploadGeometry: (upload: { id: string; data: Float32Array }) =>
                 uploads.push({ id: upload.id, vertexCount: upload.data.length / 3 }),
+            impacts: createImpactBus(),
+            publishImpacts: (published: readonly ImpactEvent[]) => {
+                impacts.push(...published);
+            },
             ...overrides,
         },
+        impacts,
     };
 }
 
@@ -60,12 +67,26 @@ describe('M1 plugin catalog', () => {
     test('all definitions register without a kernel change', () => {
         const registry = createM1Registry();
 
-        // Signal plugins plus the asset-derivation plugins registered alongside them.
+        // The full catalog, of which the signal plugins are one part.
         expect(registry.all().length).toBeGreaterThanOrEqual(
             SIGNAL_TRACE_MODES.length + FEEDBACK_FLOW_MODES.length + 1,
         );
-        expect(registry.byCategory('transformer')).toHaveLength(FEEDBACK_FLOW_MODES.length);
-        expect(registry.byCategory('postprocess')).toHaveLength(1);
+
+        for (const mode of FEEDBACK_FLOW_MODES) {
+            expect(registry.get(`FeedbackFlowTransform:${mode}`), mode).toBeDefined();
+        }
+        for (const mode of SIGNAL_TRACE_MODES) {
+            expect(registry.get(`SignalTraceSource:${mode}`), mode).toBeDefined();
+        }
+        expect(registry.get('ToneMapper')).toBeDefined();
+    });
+
+    test('every category is populated, so no grammar is unsatisfiable', () => {
+        const registry = createM1Registry();
+
+        for (const category of ['source', 'field', 'simulator', 'transformer', 'compositor', 'postprocess'] as const) {
+            expect(registry.byCategory(category).length, category).toBeGreaterThan(0);
+        }
     });
 
     test('ids are unique across the catalog', () => {

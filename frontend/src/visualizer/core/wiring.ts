@@ -26,6 +26,11 @@ export interface WiredScene {
     nodes: GraphNode[];
     edges: RenderGraphEdge[];
     present?: { instanceId: string; port: string };
+    /**
+     * Inputs fed by a host-supplied asset texture rather than another plugin. Kept separate from edges
+     * because an asset is not a graph node, so it has no execution order to participate in.
+     */
+    assetBindings: { instanceId: string; port: string; resource: string }[];
     /** Required inputs nothing could satisfy. A scene with any of these will not compile. */
     unsatisfied: { instanceId: string; port: string; type: string }[];
 }
@@ -41,10 +46,32 @@ export function instanceIdFor(definition: VisualPluginDefinition, index: number)
  * rather than the original source — which is what chains transformers instead of running them in
  * parallel off the same input.
  */
-export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScene {
-    const ordered = orderByDependency([...plugins].sort(
-        (left, right) => CHAIN_ORDER.indexOf(left.category) - CHAIN_ORDER.indexOf(right.category),
-    ));
+/**
+ * A texture the host supplies rather than a plugin producing: loaded album art, a mask image.
+ *
+ * Assets have to be graph resources, because the plugins that consume them declare ordinary typed
+ * inputs. Without this, an album-art source could never be satisfied by anything.
+ */
+export interface AssetResource {
+    resource: string;
+    type: PluginPort['type'];
+}
+
+/** Resource id for a bound asset, distinguishable from a plugin output. */
+export function assetResourceId(assetId: string): string {
+    return `asset:${assetId}`;
+}
+
+export function wireScene(
+    plugins: readonly VisualPluginDefinition[],
+    assets: readonly AssetResource[] = [],
+): WiredScene {
+    const ordered = orderByDependency(
+        [...plugins].sort(
+            (left, right) => CHAIN_ORDER.indexOf(left.category) - CHAIN_ORDER.indexOf(right.category),
+        ),
+        assets,
+    );
 
     const nodes: GraphNode[] = ordered.map((definition, index) => ({
         instanceId: instanceIdFor(definition, index),
@@ -52,6 +79,7 @@ export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScen
     }));
 
     const edges: RenderGraphEdge[] = [];
+    const assetBindings: WiredScene['assetBindings'] = [];
     const unsatisfied: WiredScene['unsatisfied'] = [];
     /** Most recent producer per port type, freshest last. */
     const producers = new Map<string, { instanceId: string; port: string }[]>();
@@ -62,6 +90,18 @@ export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScen
 
             if (source) {
                 edges.push({ from: source, to: { instanceId: node.instanceId, port: port.name } });
+                continue;
+            }
+
+            // No plugin produces this, so fall back to a host asset of a compatible type. Checked after
+            // plugin outputs, so a derived texture always wins over the raw asset it came from.
+            const asset = findAsset(assets, port);
+            if (asset) {
+                assetBindings.push({
+                    instanceId: node.instanceId,
+                    port: port.name,
+                    resource: asset.resource,
+                });
                 continue;
             }
 
@@ -112,7 +152,14 @@ export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScen
         }
     }
 
-    return { nodes, edges, present: resolvePresent(nodes), unsatisfied };
+    return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };
+}
+
+function findAsset(
+    assets: readonly AssetResource[],
+    port: PluginPort,
+): AssetResource | undefined {
+    return assets.find((asset) => portsCompatible(asset.type, port.type));
 }
 
 /**
@@ -124,10 +171,12 @@ export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScen
  */
 function orderByDependency(
     plugins: readonly VisualPluginDefinition[],
+    assets: readonly AssetResource[] = [],
 ): VisualPluginDefinition[] {
     const remaining = [...plugins];
     const ordered: VisualPluginDefinition[] = [];
-    const produced = new Set<PluginPort['type']>();
+    // Assets are available from the start, so a plugin reading one is ready immediately.
+    const produced = new Set<PluginPort['type']>(assets.map((asset) => asset.type));
 
     while (remaining.length > 0) {
         const readyIndex = remaining.findIndex((definition) =>

@@ -11,6 +11,13 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { CompiledGraph, CompiledNode } from '../core/graph';
 import { composeLayers, type Crossfade, type VisualLayer } from '../core/layers';
+import {
+    clearImpacts,
+    createImpactBus,
+    expireImpacts,
+    publishImpacts,
+    type ImpactBus,
+} from '../core/impact';
 import { resolvePassScale, type RenderPass, type ResourceId } from '../core/passes';
 import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
@@ -32,6 +39,8 @@ export interface RuntimeFrame {
     renderHeight: number;
     layers: readonly VisualLayer[];
     crossfades?: readonly Crossfade[];
+    /** Set on the frame a seek or track change lands, to drop stale impacts alongside audio events. */
+    clearTransients?: boolean;
 }
 
 export interface RuntimeStats {
@@ -52,10 +61,18 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
     let graph: CompiledGraph | undefined;
     let instances: readonly ActiveInstance[] = [];
     let frameParity = 0;
+    // Kernel-level, so an impact published by one plugin is readable by every other.
+    let impacts: ImpactBus = createImpactBus();
 
     function resolveTexture(plan: RenderPlan, resource: ResourceId | undefined, previous: boolean): WebGLTexture | undefined {
         if (!resource) {
             return undefined;
+        }
+
+        // Asset resources are host-supplied textures rather than graph targets, so they resolve first.
+        const asset = device.assetTexture(resource);
+        if (asset) {
+            return asset;
         }
 
         const key = previous ? plan.readKeys[resource] : plan.writeKeys[resource];
@@ -130,6 +147,13 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             const plan = planTargets(graph, frame.renderWidth, frame.renderHeight, frame.qualityScale, frameParity);
             frameParity += 1;
 
+            // Expired before the pass, so a plugin never reads an impact past its lifetime. A frozen
+            // clock does not advance playback time, so impacts persist through a pause.
+            impacts = expireImpacts(impacts, frame.clock.playbackTime);
+            if (frame.clearTransients) {
+                impacts = clearImpacts();
+            }
+
             device.releaseUnused(liveKeys(plan));
             for (const target of plan.targets) {
                 device.acquireTarget(target.key, target.width, target.height);
@@ -155,6 +179,10 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderHeight: plan.height,
                     parameters: active.parameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
+                    impacts,
+                    publishImpacts: (published) => {
+                        impacts = publishImpacts(impacts, published);
+                    },
                 });
 
                 const passes = active.instance.render({

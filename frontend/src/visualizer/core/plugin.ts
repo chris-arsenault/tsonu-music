@@ -9,6 +9,7 @@
 import type { AudioFeatureBus } from './features';
 import type { ParameterBinding } from './bindings';
 import type { PlaybackClock } from './clock';
+import type { ImpactBus, ImpactEvent } from './impact';
 import type { GeometryUpload, RenderPass, ResourceId, ShaderSource } from './passes';
 
 export type PluginCategory =
@@ -96,6 +97,10 @@ export interface FrameContext {
     parameters: Readonly<Record<string, number>>;
     /** Uploads geometry for a `GeometryPass` to draw. */
     uploadGeometry(upload: GeometryUpload): void;
+    /** Live impacts any plugin may respond to (spec section 19.6). */
+    impacts: ImpactBus;
+    /** Publishes impacts for other plugins to consume. */
+    publishImpacts(impacts: readonly ImpactEvent[]): void;
 }
 
 export interface RenderContext {

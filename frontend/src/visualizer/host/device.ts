@@ -56,6 +56,9 @@ export interface Device {
 
     acquireTarget(key: string, width: number, height: number): RenderTarget;
     releaseUnused(liveKeys: ReadonlySet<string>): void;
+    /** Uploads a loaded image as a texture the graph can bind to a plugin input. */
+    uploadAssetTexture(key: string, image: HTMLImageElement): void;
+    assetTexture(key: string): WebGLTexture | undefined;
 
     beginPass(target: RenderTarget | null, blend: BlendMode, clear: boolean): void;
     useProgram(id: string): Program | undefined;
@@ -106,6 +109,7 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
     const programs = new Map<string, Program>();
     const errors: { id: string; message: string }[] = [];
     const targets = new Map<string, RenderTarget>();
+    const assetTextures = new Map<string, WebGLTexture>();
     const geometries = new Map<string, { buffer: WebGLBuffer; vao: WebGLVertexArrayObject; stride: number }>();
 
     const quadBuffer = gl.createBuffer();
@@ -284,6 +288,34 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             return target;
         },
 
+        uploadAssetTexture(key, image) {
+            if (lost) {
+                return;
+            }
+
+            const existing = assetTextures.get(key);
+            const texture = existing ?? gl.createTexture();
+            if (!texture) {
+                return;
+            }
+
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            // Flipped, because image origin is top-left while GL's is bottom-left.
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+            gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 0);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+            assetTextures.set(key, texture);
+        },
+
+        assetTexture(key) {
+            return assetTextures.get(key);
+        },
+
         releaseUnused(liveKeys) {
             for (const [key, target] of targets) {
                 if (liveKeys.has(key)) {
@@ -397,6 +429,11 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
                 gl.deleteVertexArray(entry.vao);
             }
             geometries.clear();
+
+            for (const texture of assetTextures.values()) {
+                gl.deleteTexture(texture);
+            }
+            assetTextures.clear();
 
             for (const entry of programs.values()) {
                 gl.deleteProgram(entry.program);

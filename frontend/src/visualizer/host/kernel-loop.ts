@@ -25,7 +25,7 @@ import {
     availableAssetIds,
     type VisualAsset,
 } from '../core/assets';
-import { loadMaskAssets } from './asset-loader';
+import { loadMaskAssets, loadTextures } from './asset-loader';
 import {
     advancePerformance,
     applyReducedMotion,
@@ -153,24 +153,47 @@ export function startKernel(options: KernelOptions): KernelHandle {
 
     // Masks load asynchronously and are optional, so the scene starts without them and is rebuilt once
     // they arrive rather than blocking the first frame on a fetch.
-    void loadMaskAssets().then((masks) => {
-        if (!running || !renderer) {
-            return;
-        }
-
+    void (async () => {
+        const masks = await loadMaskAssets();
         const assets: VisualAsset[] = [...masks];
         if (options.artworkSrc) {
             assets.push(albumArtAssetFrom(options.artworkSrc));
         }
 
-        const ids = availableAssetIds(assets);
-        if (ids.length === 0) {
+        if (assets.length === 0 || !running || !renderer) {
             return;
         }
 
-        renderer.setAssets(ids);
+        // Only assets whose texture actually uploaded are advertised, so a plugin is never activated for
+        // an asset the graph cannot bind.
+        const loaded = await loadTextures(assets.map((asset) => ({
+            assetId: asset.id,
+            src: 'src' in asset ? asset.src : '',
+        })));
+
+        if (!running || !renderer) {
+            return;
+        }
+
+        const uploadedIds = new Set<string>();
+        for (const texture of loaded) {
+            const asset = assets.find((candidate) => candidate.id === texture.assetId);
+            if (!asset || (asset.kind !== 'mask' && asset.kind !== 'album-art')) {
+                continue;
+            }
+
+            renderer.uploadAsset(asset.id, asset.kind, texture.image);
+            uploadedIds.add(asset.id);
+        }
+
+        const usable = assets.filter((asset) => uploadedIds.has(asset.id));
+        if (usable.length === 0) {
+            return;
+        }
+
+        renderer.setAssets(availableAssetIds(usable));
         renderer.rebuild(clock.trackId, clock.generation, currentProfile());
-    });
+    })();
 
     void acquireTap(element)
         .then(async (acquired) => {

@@ -64,7 +64,8 @@ describe('asset plugin catalog', () => {
     test('the registry holds both signal and asset plugins', () => {
         const registry = createM1Registry();
 
-        expect(registry.all()).toHaveLength(m1Definitions().length + assetDefinitions().length);
+        expect(registry.all().length).toBe(allDefinitions().length);
+        expect(registry.all().length).toBeGreaterThan(m1Definitions().length + assetDefinitions().length);
         expect(registry.get('AlbumArtPalette')).toBeDefined();
         expect(registry.get('MaskSignedDistanceField')).toBeDefined();
     });

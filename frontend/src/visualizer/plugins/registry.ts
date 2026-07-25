@@ -23,6 +23,70 @@ import {
     createMaskEffectStencil,
     createMaskSignedDistanceField,
 } from './fields/mask-fields';
+import {
+    createParametricCurveSource,
+    createProceduralTextureSource,
+    createSdfShapeSource,
+    PARAMETRIC_CURVE_MODES,
+    PROCEDURAL_TEXTURE_MODES,
+    SDF_SHAPE_MODES,
+} from './sources/procedural';
+import {
+    createSpectrumGeometrySource,
+    createTransientGlyphSource,
+    GLYPH_MODES,
+    SPECTRUM_MODES,
+} from './sources/spectrum';
+import {
+    createAudioImpulseField,
+    createProceduralVectorField,
+    IMPULSE_FIELD_MODES,
+    VECTOR_FIELD_MODES,
+} from './fields/procedural-fields';
+import {
+    createParticleEmitter,
+    createParticleForceField,
+    createParticleRenderer,
+    createParticleSimulator,
+    createParticleTrailInjector,
+    EMITTER_MODES,
+    FORCE_MODES,
+    PARTICLE_RENDER_MODES,
+} from './simulators/particles';
+import {
+    createReactionDiffusionSimulator,
+    createReactionDiffusionView,
+    createWaveFieldSimulator,
+    createWaveFieldView,
+} from './simulators/continuous';
+import { CASCADE_MODES, createImpactCascadeSimulator } from './simulators/impact-cascade';
+import {
+    COORDINATE_WARP_MODES,
+    createCoordinateWarpTransform,
+    createDomainWarpTransform,
+    createEdgeContourTransform,
+    createShockwaveTransform,
+    createSymmetryTransform,
+    createTilingTransform,
+    DOMAIN_WARP_MODES,
+    EDGE_CONTOUR_MODES,
+    SHOCKWAVE_MODES,
+    SYMMETRY_MODES,
+    TILING_MODES,
+} from './transformers/transforms';
+import {
+    COLOR_TRANSFORM_MODES,
+    createColorTransform,
+    createFeedbackInjector,
+    createGlowAndScatter,
+    createLayerMixer,
+    createMaskRouter,
+    createPaletteMapper,
+    FEEDBACK_INJECTOR_MODES,
+    GLOW_MODES,
+    LAYER_MIXER_MODES,
+    MASK_ROUTER_MODES,
+} from './compositors/composition';
 
 /** Signal-derived and procedural plugins, available whether or not any asset is loaded. */
 export function m1Definitions(): VisualPluginDefinition[] {
@@ -51,8 +115,75 @@ export function assetDefinitions(): VisualPluginDefinition[] {
     ];
 }
 
+/** Procedural and spectrum sources (spec section 19.1, 19.2). */
+export function sourceDefinitions(): VisualPluginDefinition[] {
+    return [
+        ...PROCEDURAL_TEXTURE_MODES.map(createProceduralTextureSource),
+        ...PARAMETRIC_CURVE_MODES.map(createParametricCurveSource),
+        ...SDF_SHAPE_MODES.map(createSdfShapeSource),
+        ...SPECTRUM_MODES.map(createSpectrumGeometrySource),
+        ...GLYPH_MODES.map(createTransientGlyphSource),
+    ];
+}
+
+/** Procedural and audio-driven fields (spec section 19.4). */
+export function fieldDefinitions(): VisualPluginDefinition[] {
+    return [
+        ...VECTOR_FIELD_MODES.map(createProceduralVectorField),
+        ...IMPULSE_FIELD_MODES.map(createAudioImpulseField),
+    ];
+}
+
+/** Particle, continuous, and impact simulation (spec sections 19.5, 19.6, 19.7). */
+export function simulatorDefinitions(): VisualPluginDefinition[] {
+    return [
+        createParticleSimulator(),
+        ...EMITTER_MODES.map(createParticleEmitter),
+        ...FORCE_MODES.map(createParticleForceField),
+        ...PARTICLE_RENDER_MODES.map(createParticleRenderer),
+        createParticleTrailInjector(),
+        createReactionDiffusionSimulator(),
+        createReactionDiffusionView(),
+        createWaveFieldSimulator(),
+        createWaveFieldView(),
+        ...CASCADE_MODES.map(createImpactCascadeSimulator),
+    ];
+}
+
+/** Coordinate and image transformers (spec section 19.8). */
+export function transformerDefinitions(): VisualPluginDefinition[] {
+    return [
+        ...SYMMETRY_MODES.map(createSymmetryTransform),
+        ...COORDINATE_WARP_MODES.map(createCoordinateWarpTransform),
+        ...DOMAIN_WARP_MODES.map(createDomainWarpTransform),
+        ...TILING_MODES.map(createTilingTransform),
+        ...EDGE_CONTOUR_MODES.map(createEdgeContourTransform),
+        ...SHOCKWAVE_MODES.map(createShockwaveTransform),
+    ];
+}
+
+/** Compositors and colour (spec section 19.9). */
+export function compositorDefinitions(): VisualPluginDefinition[] {
+    return [
+        ...LAYER_MIXER_MODES.map(createLayerMixer),
+        ...MASK_ROUTER_MODES.map(createMaskRouter),
+        ...FEEDBACK_INJECTOR_MODES.map(createFeedbackInjector),
+        createPaletteMapper(),
+        ...COLOR_TRANSFORM_MODES.map(createColorTransform),
+        ...GLOW_MODES.map(createGlowAndScatter),
+    ];
+}
+
 export function allDefinitions(): VisualPluginDefinition[] {
-    return [...m1Definitions(), ...assetDefinitions()];
+    return [
+        ...m1Definitions(),
+        ...assetDefinitions(),
+        ...sourceDefinitions(),
+        ...fieldDefinitions(),
+        ...simulatorDefinitions(),
+        ...transformerDefinitions(),
+        ...compositorDefinitions(),
+    ];
 }
 
 export function createM1Registry(): PluginRegistry {

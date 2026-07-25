@@ -13,7 +13,7 @@ import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
 import { createRng } from './random';
 import { assembleScene, type SchedulerContext, type VisualTheme } from './scheduler';
-import { wireScene, type WiredScene } from './wiring';
+import { wireScene, type AssetResource, type WiredScene } from './wiring';
 
 export interface BuiltScene {
     seed: string;
@@ -40,10 +40,16 @@ export type SceneBuildResult =
  * level the grammar itself gets cheaper and expensive plugins become ineligible, so a struggling device
  * assembles a scene it can render instead of one it must then dismantle.
  */
+export interface SceneBuildContext
+    extends Omit<SchedulerContext, 'theme' | 'allowHighCost' | 'allowDominant'> {
+    /** Host-supplied asset textures the graph may bind to plugin inputs. */
+    assetResources?: readonly AssetResource[];
+}
+
 export function buildScene(
     seed: string,
     theme: VisualTheme,
-    context: Omit<SchedulerContext, 'theme' | 'allowHighCost' | 'allowDominant'>,
+    context: SceneBuildContext,
     profile: QualityProfile,
 ): SceneBuildResult {
     const effectiveTheme: VisualTheme = profile.reducedGrammar
@@ -68,7 +74,7 @@ export function buildScene(
         };
     }
 
-    const wired = wireScene(assembled.plugins);
+    const wired = wireScene(assembled.plugins, context.assetResources ?? []);
     if (wired.unsatisfied.length > 0) {
         return {
             ok: false,
@@ -81,7 +87,7 @@ export function buildScene(
         };
     }
 
-    const compiled = compileGraph(wired.nodes, wired.edges, wired.present);
+    const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
     if (!compiled.ok) {
         return { ok: false, failure: { reason: 'compile', detail: compiled.errors.join('; ') } };
     }
@@ -109,7 +115,7 @@ export function buildScene(
 export function buildFirstViableScene(
     seed: string,
     themes: readonly VisualTheme[],
-    context: Omit<SchedulerContext, 'theme' | 'allowHighCost' | 'allowDominant'>,
+    context: SceneBuildContext,
     profile: QualityProfile,
 ): SceneBuildResult {
     let lastFailure: SceneBuildFailure = { reason: 'grammar', detail: 'no themes supplied' };
