@@ -4,6 +4,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import type { PlaybackEngine } from '../../music/playback-engine';
 import { resolveAvailability, type VisualizerAvailability } from '../host/capabilities';
 import {
     startKernel,
@@ -15,6 +16,7 @@ import type { DiagnosticsControls } from '../core/diagnostics';
 
 export interface KernelSubject {
     getAudioElement: () => HTMLAudioElement | null;
+    playbackEngine: PlaybackEngine;
     trackId: string | null;
     trackDurationSeconds: number;
     /** Omit to run analysis without rendering. */
@@ -66,8 +68,12 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
     useEffect(() => {
         const resolved = getElementRef.current();
         setElement(resolved);
-        setAvailability(resolveAvailability(resolved));
-    }, []);
+        setAvailability(
+            subject.playbackEngine === 'pending'
+                ? undefined
+                : resolveAvailability(subject.playbackEngine),
+        );
+    }, [subject.playbackEngine]);
 
     const canvas = subject.canvas ?? undefined;
     const canRun = active && element !== null && availability?.available === true;

@@ -39,6 +39,14 @@ import {
     type PlayerEventContext,
 } from '../player-analytics';
 import { getRuntimeConfig } from '../runtime-config';
+import {
+    canFallbackToNativeHls,
+    classifyBrowser,
+    currentBrowserPlatform,
+    selectPreferredPlaybackEngine,
+    supportsHlsJsVisualizer,
+    type PlaybackEngine,
+} from './playback-engine';
 
 type LoadState = 'loading' | 'ready' | 'error';
 export type QualitySelection = 'auto' | PlaybackQuality;
@@ -75,6 +83,8 @@ export interface MusicPlayerContextValue {
     artworkAltText: string;
     canGoBack: boolean;
     canGoForward: boolean;
+    /** The engine currently feeding the audio element. The visualizer gates its irreversible tap on this. */
+    playbackEngine: PlaybackEngine;
     /**
      * The single audio element, for the visualizer's analysis tap. Read at call time rather than
      * exposed as state, since the element is mounted once and never remounted.
@@ -86,6 +96,11 @@ export interface MusicPlayerContextValue {
      * `forwardBufferSeconds` is undefined on the native path, where no hls.js instance exists.
      */
     getBufferHealth: () => { forwardBufferSeconds?: number; stalled?: boolean };
+    /**
+     * On Chromium and Firefox, opt into the MSE playback path before the visualizer creates its
+     * audio tap. Safari and other platforms keep their current engine.
+     */
+    prepareVisualizerPlayback: () => boolean;
     playRelease: (releaseId: StableId) => void;
     playTrack: (releaseId: StableId, trackId: StableId) => void;
     selectRelease: (releaseId: StableId) => void;
@@ -215,8 +230,10 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const runtimeConfig = useMemo(() => getRuntimeConfig(), []);
     const mediaBaseUrl = runtimeConfig.mediaBaseUrl;
     const catalogApiBaseUrl = runtimeConfig.adminApiBaseUrl;
+    const browserFamily = useMemo(() => classifyBrowser(currentBrowserPlatform()), []);
     const audioRef = useRef<HTMLAudioElement | null>(null);
     const hlsRef = useRef<HlsInstance | undefined>(undefined);
+    const visualizerHlsCommittedRef = useRef(false);
     const stalledRef = useRef(false);
     const pendingRestoreRef = useRef<PendingPlaybackRestore | null>(null);
     const pendingRouteTrackSlugRef = useRef<string | undefined>(undefined);
@@ -237,6 +254,8 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
+    const [playbackEngine, setPlaybackEngine] = useState<PlaybackEngine>('pending');
+    const [visualizerPlaybackRequested, setVisualizerPlaybackRequested] = useState(false);
 
     const selectedReleaseSummary = useMemo(
         () => (
@@ -391,6 +410,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         let removedNativeListener: (() => void) | undefined;
         let disposed = false;
 
+        setPlaybackEngine('pending');
         suppressPauseUntilRef.current = Date.now() + 500;
 
         const restorePlayback = () => {
@@ -431,6 +451,21 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             setPlaybackError('Playback failed.');
         };
 
+        const nativeHlsSupported = audio.canPlayType(HLS_MIME_TYPE) !== '';
+
+        const attachNativeHls = () => {
+            if (disposed) {
+                return;
+            }
+
+            setPlaybackEngine('native-hls');
+            const handleLoadedMetadata = () => restorePlayback();
+            audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+            removedNativeListener = () => audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+            audio.src = selectedSource.url;
+            audio.load();
+        };
+
         const attachHls = async () => {
             const { default: Hls } = await import('hls.js/light');
             if (disposed) {
@@ -438,9 +473,20 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             }
 
             if (!Hls.isSupported()) {
-                recordSourceError(new Error('HLS playback is not supported in this browser.'));
+                if (canFallbackToNativeHls(nativeHlsSupported, visualizerHlsCommittedRef.current)) {
+                    attachNativeHls();
+                } else {
+                    setPlaybackEngine('unsupported');
+                    recordSourceError(new Error('HLS playback is not supported in this browser.'));
+                }
                 return;
             }
+
+            // The element may already own a native-HLS URL. Release that resource before attaching
+            // MediaSource so only one playback engine controls the lifetime-mounted element.
+            suppressPauseUntilRef.current = Date.now() + 500;
+            audio.removeAttribute('src');
+            audio.load();
 
             hls = new Hls({
                 enableWorker: true,
@@ -457,37 +503,72 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
                     return;
                 }
 
-                recordSourceError(new Error(`HLS ${data.type}: ${data.details}`));
                 if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                    recordSourceError(new Error(`HLS ${data.type}: ${data.details}`));
                     hls?.startLoad();
                     return;
                 }
 
                 if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                    recordSourceError(new Error(`HLS ${data.type}: ${data.details}`));
                     hls?.recoverMediaError();
                     return;
                 }
 
+                const fallbackRestore = pendingRestoreRef.current ?? {
+                    positionSeconds: audio.currentTime,
+                    shouldPlay: !audio.paused,
+                    skipPlayStart: true,
+                };
                 hls?.destroy();
+                hls = undefined;
+                hlsRef.current = undefined;
+                if (canFallbackToNativeHls(nativeHlsSupported, visualizerHlsCommittedRef.current)) {
+                    pendingRestoreRef.current = fallbackRestore;
+                    attachNativeHls();
+                } else {
+                    setPlaybackEngine('unsupported');
+                    recordSourceError(new Error(`HLS ${data.type}: ${data.details}`));
+                }
             });
             hls.on(Hls.Events.FRAG_BUFFERED, () => {
                 stalledRef.current = false;
             });
-            hls.on(Hls.Events.MANIFEST_PARSED, restorePlayback);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                if (disposed) {
+                    return;
+                }
+
+                visualizerHlsCommittedRef.current = true;
+                setPlaybackEngine('hls-js');
+                restorePlayback();
+            });
             hls.loadSource(selectedSource.url);
             hls.attachMedia(audio);
         };
 
-        if (audio.canPlayType(HLS_MIME_TYPE)) {
-            const handleLoadedMetadata = () => restorePlayback();
-            audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
-            removedNativeListener = () => audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-            audio.src = selectedSource.url;
-            audio.load();
-        } else {
+        const preferredEngine = selectPreferredPlaybackEngine({
+            nativeHlsSupported,
+            browserFamily,
+            visualizerRequested: visualizerPlaybackRequested,
+        });
+        if (preferredEngine === 'native-hls') {
+            attachNativeHls();
+        } else if (preferredEngine === 'hls-js') {
             void attachHls().catch((error: unknown) => {
-                recordSourceError(error);
+                hls?.destroy();
+                hls = undefined;
+                hlsRef.current = undefined;
+                if (canFallbackToNativeHls(nativeHlsSupported, visualizerHlsCommittedRef.current)) {
+                    attachNativeHls();
+                } else {
+                    setPlaybackEngine('unsupported');
+                    recordSourceError(error);
+                }
             });
+        } else {
+            setPlaybackEngine('unsupported');
+            recordSourceError(new Error('HLS playback is not supported in this browser.'));
         }
 
         return () => {
@@ -496,7 +577,30 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             hlsRef.current = undefined;
             hls?.destroy();
         };
-    }, [releaseManifest, selectedSource, selectedTrack]);
+    }, [browserFamily, releaseManifest, selectedSource, selectedTrack, visualizerPlaybackRequested]);
+
+    function prepareVisualizerPlayback(): boolean {
+        const audio = audioRef.current;
+        if (!audio || !supportsHlsJsVisualizer(browserFamily)) {
+            return false;
+        }
+
+        if (playbackEngine === 'hls-js' || visualizerPlaybackRequested) {
+            return true;
+        }
+
+        if (playbackEngine === 'native-hls') {
+            pendingRestoreRef.current = {
+                positionSeconds: audio.currentTime,
+                shouldPlay: !audio.paused,
+                skipPlayStart: true,
+            };
+        }
+
+        setPlaybackEngine('pending');
+        setVisualizerPlaybackRequested(true);
+        return true;
+    }
 
     function getBufferHealth(): { forwardBufferSeconds?: number; stalled?: boolean } {
         const stalled = stalledRef.current;
@@ -857,8 +961,10 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         artworkAltText,
         canGoBack,
         canGoForward,
+        playbackEngine,
         getAudioElement: () => audioRef.current,
         getBufferHealth,
+        prepareVisualizerPlayback,
         playRelease,
         playTrack,
         selectRelease,

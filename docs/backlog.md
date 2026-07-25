@@ -45,8 +45,9 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 
 ## Visualizer platform reach
 
-- Recover desktop Safari by probing analysis on a throwaway hidden audio element with its own
-  context and a silent gain stage, caching the verdict by user-agent version. See
+- Evaluate future desktop Safari support by probing analysis on a throwaway hidden audio element
+  with its own context and a silent gain stage, caching the verdict by user-agent version. The
+  production player remains native-only on Safari unless that work proves the tap safe. See
   [ADR-0001](./adr/0001-visualizer-audio-tap-policy.md).
 - Move visualizer rendering to an `OffscreenCanvas` in a worker so main-thread contention cannot
   reach the HLS buffer-append path. See

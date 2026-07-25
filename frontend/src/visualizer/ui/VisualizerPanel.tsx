@@ -34,6 +34,7 @@ export default function VisualizerPanel() {
     const { availability, readout, handle } = useKernelReadout(
         {
             getAudioElement: player.getAudioElement,
+            playbackEngine: player.playbackEngine,
             trackId: player.selectedTrack?.trackId ?? null,
             trackDurationSeconds: player.selectedTrack?.durationSeconds ?? 0,
             canvas: glCanvas,
@@ -43,6 +44,9 @@ export default function VisualizerPanel() {
         },
         enabled && expanded,
     );
+    const unavailableMessage = availability && !availability.available
+        ? availability.reasons.map(describeUnavailableReason).join(' ')
+        : undefined;
 
     const toggle = useCallback((next: boolean) => {
         setEnabled(next);
@@ -53,9 +57,11 @@ export default function VisualizerPanel() {
     }, []);
 
     const openVisualizer = useCallback(() => {
-        toggle(true);
+        if (player.prepareVisualizerPlayback()) {
+            toggle(true);
+        }
         setExpanded(true);
-    }, [toggle]);
+    }, [player, toggle]);
 
     useEffect(() => {
         if (!expanded) {
@@ -95,32 +101,28 @@ export default function VisualizerPanel() {
 
     useFallbackWaveform(showFallbackCanvas ? fallbackCanvas : null, readout?.bus.waveform);
 
-    if (availability && !availability.available) {
-        return (
-            <div className="bottom-player__visualizer" title={availability.reasons.map(describeUnavailableReason).join(' ')}>
-                <span className="bottom-player__visualizer-unavailable" aria-hidden="true" />
-            </div>
-        );
-    }
-
     return (
         <>
-            <div className="bottom-player__visualizer">
-                <label className="bottom-player__visualizer-toggle" title="Show visualizer">
-                    <input
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={(event) => toggle(event.currentTarget.checked)}
-                    />
-                    <span className="sr-only">Enable visualizer</span>
-                </label>
+            <div className="bottom-player__visualizer" title={unavailableMessage}>
+                {unavailableMessage ? (
+                    <span className="bottom-player__visualizer-unavailable" aria-hidden="true" />
+                ) : (
+                    <label className="bottom-player__visualizer-toggle" title="Show visualizer">
+                        <input
+                            type="checkbox"
+                            checked={enabled}
+                            onChange={(event) => toggle(event.currentTarget.checked)}
+                        />
+                        <span className="sr-only">Enable visualizer</span>
+                    </label>
+                )}
 
                 <button
                     type="button"
                     className="bottom-player__visualizer-thumb"
                     onClick={openVisualizer}
-                    aria-label="Open visualizer"
-                    title="Open visualizer"
+                    aria-label={unavailableMessage ? 'Open visualizer availability details' : 'Open visualizer'}
+                    title={unavailableMessage ?? 'Open visualizer'}
                 >
                     <img src={player.artworkSrc} alt="" />
                 </button>
@@ -139,7 +141,7 @@ export default function VisualizerPanel() {
                     }}
                 >
                     <div className="visualizer-modal__frame">
-                        {tierNeedsGpu(tier) ? (
+                        {unavailableMessage ? null : tierNeedsGpu(tier) ? (
                             <canvas className="visualizer-modal__canvas" ref={setGlCanvas} />
                         ) : (
                             // The GL canvas stays mounted so the kernel keeps its device across a
@@ -147,34 +149,43 @@ export default function VisualizerPanel() {
                             <canvas className="visualizer-modal__canvas is-hidden" ref={setGlCanvas} />
                         )}
 
-                        {showFallbackCanvas ? (
+                        {!unavailableMessage && showFallbackCanvas ? (
                             <canvas className="visualizer-modal__canvas" ref={setFallbackCanvas} />
                         ) : null}
 
-                        {showArtworkOnly ? (
+                        {unavailableMessage || showArtworkOnly ? (
                             <img className="visualizer-modal__artwork" src={player.artworkSrc} alt={player.artworkAltText} />
                         ) : null}
 
-                        <div className="visualizer-modal__status">
-                            <span>{describeTier(tier)}</span>
-                            {readout?.performance ? (
-                                <span>
-                                    L{readout.performance.level} · {readout.frameTimeMs.toFixed(0)}ms
-                                </span>
-                            ) : null}
-                            {faults.length > 0 ? <span>{describeFault(faults[0])}</span> : null}
-                        </div>
+                        {unavailableMessage ? (
+                            <div className="visualizer-modal__notice" role="status">
+                                <strong>Visualizer unavailable in this playback mode</strong>
+                                <span>{unavailableMessage}</span>
+                            </div>
+                        ) : (
+                            <div className="visualizer-modal__status">
+                                <span>{describeTier(tier)}</span>
+                                {readout?.performance ? (
+                                    <span>
+                                        L{readout.performance.level} · {readout.frameTimeMs.toFixed(0)}ms
+                                    </span>
+                                ) : null}
+                                {faults.length > 0 ? <span>{describeFault(faults[0])}</span> : null}
+                            </div>
+                        )}
 
                         <div className="visualizer-modal__chrome">
-                            <button
-                                type="button"
-                                className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
-                                onClick={() => setShowDiagnostics((open) => !open)}
-                                aria-pressed={showDiagnostics}
-                                title="Diagnostics"
-                            >
-                                Diagnostics
-                            </button>
+                            {!unavailableMessage ? (
+                                <button
+                                    type="button"
+                                    className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
+                                    onClick={() => setShowDiagnostics((open) => !open)}
+                                    aria-pressed={showDiagnostics}
+                                    title="Diagnostics"
+                                >
+                                    Diagnostics
+                                </button>
+                            ) : null}
                             <button
                                 type="button"
                                 className="visualizer-modal__button"
@@ -185,7 +196,7 @@ export default function VisualizerPanel() {
                             </button>
                         </div>
 
-                        {showDiagnostics && readout ? (
+                        {!unavailableMessage && showDiagnostics && readout ? (
                             <Suspense fallback={null}>
                                 <DiagnosticsPanel
                                     readout={readout}

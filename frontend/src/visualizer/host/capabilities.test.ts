@@ -5,11 +5,6 @@ import {
     type UnavailableReason,
 } from './capabilities';
 
-/** Stands in for a media element's `canPlayType`, which is the whole gate predicate. */
-function element(hlsSupport: '' | 'maybe' | 'probably') {
-    return { canPlayType: () => hlsSupport } as Pick<HTMLMediaElement, 'canPlayType'>;
-}
-
 const ALL_REASONS: UnavailableReason[] = [
     'native-hls-playback',
     'no-webgl2',
@@ -18,15 +13,11 @@ const ALL_REASONS: UnavailableReason[] = [
 ];
 
 describe('native HLS detection', () => {
-    test('an empty support string means hls.js drives playback', () => {
-        expect(usesNativeHlsPlayback(element(''))).toBe(false);
-    });
-
-    test('both non-empty support values mean the native path is taken', () => {
-        // Safari answers "maybe" and iOS "probably"; the player's own branch treats any non-empty
-        // string as native support, so the gate must agree.
-        expect(usesNativeHlsPlayback(element('maybe'))).toBe(true);
-        expect(usesNativeHlsPlayback(element('probably'))).toBe(true);
+    test('gates only the engine the player actually selected', () => {
+        expect(usesNativeHlsPlayback('native-hls')).toBe(true);
+        expect(usesNativeHlsPlayback('hls-js')).toBe(false);
+        expect(usesNativeHlsPlayback('pending')).toBe(false);
+        expect(usesNativeHlsPlayback('unsupported')).toBe(false);
     });
 });
 

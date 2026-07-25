@@ -11,7 +11,9 @@ the code refer to it. Decisions are recorded in [adr/](./adr).
 
 A persisted toggle sits beside the player's seek bar with an artwork thumbnail. The visualizer is
 off for a first-time visitor. The thumbnail shows release artwork and runs nothing; the kernel starts
-when the expanded modal opens and stops when it closes.
+when the expanded modal opens and stops when it closes. The artwork control remains present when the
+current playback engine cannot be analysed, so the limitation is explained instead of replacing the
+control with an unlabeled status dot.
 
 Diagnostics are a **Diagnostics** button in the modal's top-right corner, opening a panel over the
 right-hand side. `?viz-debug=1` opens it immediately on load. It reports on the kernel the modal is
@@ -43,6 +45,11 @@ The tap is created lazily on first activation, once per element, and never on th
 path. Audio flows `source → gain(1.0) → destination` unconditionally with the worklet on a parallel
 branch declaring zero outputs. See
 [ADR-0001](./adr/0001-visualizer-audio-tap-policy.md).
+
+Chromium and Firefox start on native HLS when it is available and switch to `hls.js` only when the
+listener opens the visualizer, preserving position and play state. Safari remains native and has
+no audio-reactive visualizer. See
+[ADR-0006](./adr/0006-hls-js-visualizer-playback-policy.md).
 
 Plugins consume normalized features through the feature bus and declare parameter bindings; feature
 extraction is never duplicated inside a plugin. Reactivity is distributed per binding, so a scene

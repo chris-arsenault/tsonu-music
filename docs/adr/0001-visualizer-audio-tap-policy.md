@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-07-25
+- Amended by: [ADR-0006](./0006-hls-js-visualizer-playback-policy.md), which moves Chromium and
+  Firefox to `hls.js` only after explicit visualizer activation.
 
 ## Context
 
@@ -14,11 +16,13 @@ the Web Audio graph for the element's lifetime, and the element is mounted once 
 root and never remounted across navigation (`frontend/src/music/MusicPlayerContext.tsx`). A
 broken or suspended graph therefore produces silence during apparently normal playback.
 
-Second, the player has two playback paths. When `audio.canPlayType('application/vnd.apple.mpegurl')`
-returns a non-empty string the stream is decoded natively and `hls.js` never loads; otherwise
-`hls.js` drives Media Source Extensions. Analysis of a natively-decoded HLS stream through a
-media-element source is unreliable on Safari and iOS, commonly yielding all-zero data, and
-tapping Web Audio on iOS can disturb route handling for AirPlay and lock-screen controls.
+Second, the player has two playback paths. Native HLS is the initial path wherever
+`audio.canPlayType('application/vnd.apple.mpegurl')` returns a non-empty string; otherwise
+`hls.js` drives Media Source Extensions. ADR-0006 additionally allows an explicit visualizer
+activation to move Chromium and Firefox from native playback to `hls.js`. Analysis of a
+natively-decoded HLS stream through a media-element source is unreliable, commonly yielding
+all-zero data, and tapping Web Audio on iOS can disturb route handling for AirPlay and lock-screen
+controls.
 
 Album artwork and mask textures are unaffected. `crossOrigin="anonymous"` is already set on the
 element, S3 CORS rules cover all four hostnames plus `localhost:3000`, and the media distribution
@@ -42,16 +46,15 @@ during unpaused playback as dead analysis and drops to the non-reactive fallback
   unacceptable default given irreversibility.
 - **Probe analysis on the real element and disable on failure** — cannot work, because probing
   requires the very tap the probe is meant to justify. A throwaway hidden element with its own
-  context can probe safely, and is recorded in `docs/backlog.md` as the route to recovering
-  desktop Safari if usage data justifies it.
+  context could probe safely and remains the backlog route for evaluating future Safari support
+  without risking the real player.
 - **Insert the analyser in series in the audio path** — marginally simpler wiring, but any
   analysis fault then sits between the source and the speakers. Rejected.
 
 ## Consequences
 
-Visitors on Safari and iOS get no audio-reactive visuals, and desktop Safari is grouped with iOS
-by the capability predicate even though its Media Source Extensions support is sound. Recovering
-it needs the throwaway-element probe.
+Visitors who remain on native HLS get no audio-reactive visuals. ADR-0006 switches opted-in
+Chromium and Firefox listeners to the MSE path; Safari remains native.
 
 No visitor who leaves the feature off ever enters the Web Audio graph, so the default
 configuration cannot regress playback. Because the analyser is a dead-end branch, no shader,

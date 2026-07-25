@@ -6,7 +6,7 @@
  * has already rerouted the element's audio for the page's lifetime.
  */
 
-const HLS_MIME_TYPE = 'application/vnd.apple.mpegurl';
+import type { PlaybackEngine } from '../../music/playback-engine';
 
 export type UnavailableReason =
     | 'native-hls-playback'
@@ -21,12 +21,9 @@ export interface VisualizerAvailability {
     prefersReducedMotion: boolean;
 }
 
-/**
- * True when the browser decodes HLS natively, which is the branch the player takes in
- * `MusicPlayerContext` and where media-element analysis is unreliable.
- */
-export function usesNativeHlsPlayback(element: Pick<HTMLMediaElement, 'canPlayType'>): boolean {
-    return element.canPlayType(HLS_MIME_TYPE) !== '';
+/** True only when the player actually selected native HLS, not merely when the browser supports it. */
+export function usesNativeHlsPlayback(engine: PlaybackEngine): boolean {
+    return engine === 'native-hls';
 }
 
 export function supportsAudioWorklet(): boolean {
@@ -70,12 +67,10 @@ export function prefersReducedMotion(): boolean {
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
-export function resolveAvailability(
-    element: Pick<HTMLMediaElement, 'canPlayType'> | null,
-): VisualizerAvailability {
+export function resolveAvailability(playbackEngine: PlaybackEngine): VisualizerAvailability {
     const reasons: UnavailableReason[] = [];
 
-    if (element && usesNativeHlsPlayback(element)) {
+    if (usesNativeHlsPlayback(playbackEngine)) {
         reasons.push('native-hls-playback');
     }
 

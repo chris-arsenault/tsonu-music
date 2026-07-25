@@ -2201,6 +2201,27 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     color: var(--muted);
 }
 
+.visualizer-modal__notice {
+    position: absolute;
+    left: 50%;
+    bottom: 2rem;
+    z-index: 2;
+    display: grid;
+    width: min(34rem, calc(100% - 2rem));
+    gap: 0.45rem;
+    padding: 1rem 1.15rem;
+    border: 1px solid var(--line);
+    border-radius: 0.4rem;
+    background: rgba(0, 0, 0, 0.82);
+    color: var(--ivory-soft);
+    text-align: center;
+    transform: translateX(-50%);
+}
+
+.visualizer-modal__notice strong {
+    color: var(--ivory);
+}
+
 .visualizer-modal__chrome {
     position: absolute;
     top: 0.5rem;

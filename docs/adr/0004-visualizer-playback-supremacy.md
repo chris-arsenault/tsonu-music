@@ -45,5 +45,5 @@ listener on a marginal connection sees the visuals pause rather than the music s
 
 The performance controller now depends on the `hls.js` instance, so the player must surface buffer
 telemetry to the visualizer, coupling two subsystems that would otherwise not interact. On the
-native-HLS path no instance exists, but that path has no visualizer either (see ADR-0001); if it
-ever gains one, `HTMLMediaElement.buffered` supplies a coarser equivalent.
+native-HLS path no instance exists, but that path has no audio-reactive visualizer (see ADR-0001);
+`HTMLMediaElement.buffered` supplies a coarser playback-health equivalent there.
