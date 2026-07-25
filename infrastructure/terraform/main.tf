@@ -60,12 +60,14 @@ module "ctx" {
 # with tsonu.com, www.tsonu.com, and music.ahara.io as additional aliases.
 # All four hostnames resolve to the same CloudFront distribution.
 module "frontend" {
-  source = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/website?ref=31cb98dc59826c61824409ac3ff3085abf3e372b"
+  source = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/website"
 
-  prefix         = local.prefix
-  hostname       = local.frontend_hostname
-  aliases        = local.frontend_aliases
-  site_directory = "${path.module}/../../frontend/build"
+  prefix                     = local.prefix
+  bucket_name                = "${local.prefix}-frontend"
+  hostname                   = local.frontend_hostname
+  aliases                    = local.frontend_aliases
+  site_directory             = "${path.module}/../../frontend/build"
+  static_asset_path_patterns = ["masks/*"]
   runtime_config = {
     app = {
       adminApiBaseUrl   = "https://${local.admin_api_hostname}"
