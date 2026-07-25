@@ -179,14 +179,32 @@ than a spatial field, so it can fill a family's field slot and leave a scene acc
 dragged — about one scene in five. Recategorising it would disturb the particle chain, so it is
 closed by C5's structural predicates instead.
 
-### M3 — Mask dimensions
+### M3 — Mask dimensions — **done**
 
-D3, D4, D5, plus wiring mask-derived fields into the motion bus. This is the milestone that delivers
-masks as scene modifiers across dimensions: colour, animation and feedback, physics surface,
-stencil, containment — composable through the restored set operations.
+D3, D4, D5, plus wiring mask-derived fields into the motion bus.
 
-*Verifiable:* one scene per dimension in §12.2's list, each asserted to compile and to produce
-motion.
+Delivered as planned, and it uncovered a defect larger than the three it was scoped around.
+
+**The mask pipeline had never been reachable.** `inputsSatisfiable` in the scheduler considered only
+the outputs of already-chosen plugins. No plugin produces a mask texture — it comes from a loaded
+asset — so every mask field was judged unsatisfiable and never selected. Wiring had always known that
+an asset satisfies an input; selection did not. Masks were authored in `assets/visualizer-masks/`,
+generated, committed to `frontend/public/masks/`, deployed, fetched by the kernel, uploaded as
+textures, and then unreachable by any scene the scheduler assembled. Selection now takes the asset
+port types alongside the ids, and mask-derived plugins appear in assembled scenes.
+
+The rest as scoped: `FeedbackFlowTransform` gained §19.8's ninth mode, vector-field flow, which lets a
+mask's boundary gradient steer one branch's feedback — the branch-level counterpart to the composite's
+motion bus. `MaskRouter` gained §19.9's union, intersection, and subtraction, each taking a second
+mask that wiring resolves to a distinct producer. All four mask fields gained audio bindings and lost
+the literal uniform blocks that were shadowing them.
+
+Nothing new was needed to reach the motion bus: `MaskBoundaryField` already emits a `collision-field`,
+which M2 made a motion source.
+
+*Verified:* one wiring test per dimension in §12.2's list — stencil without a simulator, feedback
+steering, physics surface, containment, two-mask set operations, and the motion bus — each asserted to
+wire and compile, plus that every mask field responds to audio.
 
 ### M4 — Grammar and catalog depth
 

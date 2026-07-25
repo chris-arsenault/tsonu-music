@@ -18,8 +18,17 @@ export type FeedbackFlowMode =
     | 'radial'
     | 'pinch'
     | 'vortex'
-    | 'drift';
+    | 'drift'
+    | 'vector-field';
 
+/**
+ * Section 19.8's nine modes. Vector-field flow was the one missing.
+ *
+ * The other eight are closed-form warps: the same shape of motion wherever the material came from.
+ * This one is steered by a field the scene produced, so a mask's boundary gradient, a curl field, or
+ * an audio impulse decides where the accumulated image travels. It is the branch-level counterpart to
+ * the composite's motion bus — that drags the whole frame, this drags one branch.
+ */
 export const FEEDBACK_FLOW_MODES: readonly FeedbackFlowMode[] = [
     'zoom',
     'rotate',
@@ -29,6 +38,7 @@ export const FEEDBACK_FLOW_MODES: readonly FeedbackFlowMode[] = [
     'pinch',
     'vortex',
     'drift',
+    'vector-field',
 ];
 
 const SHADER_ID = 'feedback-flow';
@@ -45,6 +55,8 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform sampler2D uHistory;
+/** Steers the vector-field mode. Unbound and unread by the other eight. */
+uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uMode;
 uniform float uStrength;
@@ -91,8 +103,19 @@ void main() {
     // Both constants describe what one frame does, so both are corrected for the frame this actually
     // is. Without it the same scene smeared and drifted at different rates on different hardware.
     float frames = max(uDelta, 0.0) * REFERENCE_RATE;
+    float step = uStrength * frames;
 
-    vec2 sampleUv = warp(vUv, uMode, uStrength * frames);
+    vec2 sampleUv;
+    if (uMode > 7.5) {
+        // Read from behind along the field, so material travels forward along it — the same
+        // convention the composite's gather uses. Scaled up because a warp's strength is a fraction
+        // of the frame while a field vector is already close to unit length.
+        vec2 field = texture(uField, vUv).xy;
+        sampleUv = clamp(vUv - field * step * 3.0, 0.0, 1.0);
+    } else {
+        sampleUv = warp(vUv, uMode, step);
+    }
+
     vec4 history = texture(uHistory, sampleUv) * pow(uDecay, frames);
     vec4 incoming = texture(uSource, vUv);
 
@@ -109,6 +132,11 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
             { name: 'source', type: 'color-texture', required: true },
             // Fed by a declared feedback edge from this plugin's own output.
             { name: 'history', type: 'color-texture', required: false },
+            // Only the vector-field mode declares a field, so the other eight are not wired to one
+            // they would ignore. Required, because without it this mode is a passthrough.
+            ...(mode === 'vector-field'
+                ? [{ name: 'field', type: 'vector-field' as const, required: true }]
+                : []),
         ],
         outputs: [{ name: 'color', type: 'color-texture', required: false }],
         capabilities: ['feedback'],
@@ -162,6 +190,11 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         return [];
                     }
 
+                    const field = render.inputs.field;
+                    if (mode === 'vector-field' && !field) {
+                        return [];
+                    }
+
                     return [{
                         kind: 'fullscreen',
                         shader: SHADER_ID,
@@ -170,6 +203,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                             // Falls back to the incoming frame when no feedback edge is wired, so the
                             // plugin degrades to a passthrough rather than sampling nothing.
                             uHistory: render.previous.history ?? source,
+                            ...(field ? { uField: field } : {}),
                         },
                         output: render.outputs.color,
                         blend: 'none',

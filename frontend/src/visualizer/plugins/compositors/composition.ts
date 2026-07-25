@@ -53,6 +53,8 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform sampler2D uMask;
+/** The second operand for the set operations. Bound only by the modes that need it. */
+uniform sampler2D uOther;
 uniform vec2 uResolution;
 uniform float uMode;
 uniform float uFeather;
@@ -74,8 +76,14 @@ void main() {
         weight = smoothstep(uThreshold - uFeather, uThreshold + uFeather, mask);
     } else if (uMode < 4.5) {                // edge only
         weight = 1.0 - smoothstep(0.0, uFeather * 4.0, abs(mask - uThreshold));
-    } else {                                 // distance falloff
+    } else if (uMode < 5.5) {                // distance falloff
         weight = pow(clamp(mask, 0.0, 1.0), 2.2);
+    } else if (uMode < 6.5) {                // union
+        weight = max(mask, texture(uOther, vUv).r);
+    } else if (uMode < 7.5) {                // intersection
+        weight = min(mask, texture(uOther, vUv).r);
+    } else {                                 // subtraction
+        weight = clamp(mask - texture(uOther, vUv).r, 0.0, 1.0);
     }
 
     fragColor = source * weight;
@@ -312,9 +320,22 @@ export const LAYER_MIXER_MODES = [
     'normal', 'add', 'screen', 'multiply', 'difference', 'lighten', 'darken', 'contrast',
 ] as const;
 
+/**
+ * Section 19.9's nine operations. Union, intersection, and subtraction were missing, which is what
+ * kept masks from composing with one another — they could each route an effect, but not combine.
+ * Appended rather than inserted in the specification's order so the existing modes keep their index.
+ */
 export const MASK_ROUTER_MODES = [
     'apply', 'invert', 'threshold', 'feather', 'edge-only', 'distance-falloff',
+    'union', 'intersection', 'subtraction',
 ] as const;
+
+/** Operations taking a second mask. The other six read one and ignore the port entirely. */
+export const MASK_SET_OPERATIONS: readonly typeof MASK_ROUTER_MODES[number][] = [
+    'union',
+    'intersection',
+    'subtraction',
+];
 
 export const FEEDBACK_INJECTOR_MODES = [
     'continuous', 'event-driven', 'edge-only', 'masked', 'decaying', 'burst',
@@ -411,18 +432,37 @@ export function createLayerMixer(
 export function createMaskRouter(
     mode: typeof MASK_ROUTER_MODES[number] = 'feather',
 ): VisualPluginDefinition {
+    const combines = MASK_SET_OPERATIONS.includes(mode);
+
     return defineShaderPlugin({
         id: `MaskRouter:${mode}`,
         category: 'compositor',
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
             { name: 'mask', type: 'mask-texture', required: true },
+            // Declared only by the modes that read it, so the other six are not wired to a second
+            // mask they would ignore. Wiring reserves distinct producers per port type, so the two
+            // operands resolve to different masks rather than to the same one twice.
+            ...(combines
+                ? [{ name: 'other', type: 'mask-texture' as const, required: true }]
+                : []),
         ],
         outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['mask-routing'],
+        capabilities: combines ? ['mask-routing', 'mask-composition'] : ['mask-routing'],
         fragment: MASK_ROUTER_FRAGMENT,
-        uniforms: { uMode: MASK_ROUTER_MODES.indexOf(mode), uFeather: 0.08, uThreshold: 0.5 },
+        uniforms: { uMode: MASK_ROUTER_MODES.indexOf(mode) },
         parameters: { feather: 0.08, threshold: 0.5 },
+        bindings: [{
+            // Where the mask cuts. Moving it is what makes a routed effect breathe with the music
+            // instead of holding one fixed silhouette.
+            feature: 'mid',
+            role: 'deformation',
+            parameter: 'threshold',
+            outputRange: [0.35, 0.66],
+            attack: 0.15,
+            release: 0.6,
+            curve: 'smooth',
+        }],
         character: character({ visualDensity: 0.4, geometricOrder: 0.7, dominance: 'supporting' }),
         activationWeight: 1,
     });

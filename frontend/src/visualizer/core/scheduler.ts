@@ -67,6 +67,11 @@ export interface SchedulerContext {
     theme: VisualTheme;
     /** Asset ids currently resolvable, for `requiredAssets`. */
     assets: readonly string[];
+    /**
+     * Port types those assets can be bound to. Structural rather than the wiring type, so selection
+     * needs no dependency on the wiring module to know that a loaded mask satisfies a mask input.
+     */
+    assetResources?: readonly { type: PortType }[];
     /** Capabilities the device offers, for `requiredCapabilities`. */
     capabilities: readonly string[];
     /** Plugin ids used recently, with the playback time they were last deactivated. */
@@ -252,8 +257,17 @@ export interface AssembledScene {
 export function inputsSatisfiable(
     chosen: readonly VisualPluginDefinition[],
     candidate: VisualPluginDefinition,
+    /**
+     * Port types the host can supply directly from a loaded asset.
+     *
+     * Wiring has always known that an asset satisfies an input; selection did not. A plugin whose
+     * required input can only come from an asset — every mask field, since a mask texture is not
+     * produced by any plugin — was therefore judged unsatisfiable and never chosen. Masks were
+     * authored, generated, deployed, loaded, and then unreachable by any scene the scheduler built.
+     */
+    assetTypes: readonly PortType[] = [],
 ): boolean {
-    const produced = new Set<PortType>();
+    const produced = new Set<PortType>(assetTypes);
     for (const definition of chosen) {
         for (const port of definition.outputs) {
             produced.add(port.type);
@@ -301,6 +315,7 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
     const eligible = eligiblePlugins(context);
     const chosen: VisualPluginDefinition[] = [];
     const { grammar } = context.theme;
+    const assetTypes = (context.assetResources ?? []).map((resource) => resource.type);
 
     for (const category of FILL_ORDER) {
         const rangeKey = CATEGORY_RANGES[category];
@@ -316,7 +331,7 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
             const candidates = pool.filter((definition) =>
                 !conflictsWith(chosen, definition)
                 && !wouldViolate(chosen, definition, grammar)
-                && inputsSatisfiable(chosen, definition));
+                && inputsSatisfiable(chosen, definition, assetTypes));
 
             const picked = rng.weighted(
                 candidates,
@@ -340,7 +355,7 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
             declaresCapability(definition, 'feedback')
             && !conflictsWith(chosen, definition)
             && !wouldViolate(chosen, definition, grammar)
-            && inputsSatisfiable(chosen, definition));
+            && inputsSatisfiable(chosen, definition, assetTypes));
 
         const picked = rng.weighted(
             candidates,
@@ -358,7 +373,7 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         const visible = eligible.filter((definition) =>
             isVisibleSource(definition)
             && !conflictsWith(chosen, definition)
-            && inputsSatisfiable(chosen, definition));
+            && inputsSatisfiable(chosen, definition, assetTypes));
         const picked = rng.weighted(
             visible,
             (definition) => interactionWeight(definition, chosen, context),

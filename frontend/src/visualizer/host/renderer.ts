@@ -235,6 +235,9 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         available: registry.all(),
         theme: scene.theme,
         assets: assetIds,
+        // Selection needs the types too, not just the ids: a plugin whose required input can only come
+        // from an asset is otherwise judged unsatisfiable and never chosen as a replacement.
+        assetResources,
         capabilities: deviceCapabilities,
         history: {},
         playbackTime,

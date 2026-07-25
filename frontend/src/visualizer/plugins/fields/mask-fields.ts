@@ -168,6 +168,19 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 2, requiredAssets: ['mask'] },
         parameters: { threshold: 0.5, invert: 0, searchRadius: 0.12 },
+        defaultBindings: [{
+            // The threshold is where the mask's boundary sits, so moving it makes the silhouette
+            // itself breathe. Every field here declared no bindings at all, which left the whole mask
+            // pipeline frozen: section 12.2 asks masks to control distortion regions and feedback
+            // visibility, and neither can happen while the routing parameters are constants.
+            feature: 'trebleExcite',
+            role: 'detail',
+            parameter: 'threshold',
+            outputRange: [0.6, 0.38],
+            attack: 0.06,
+            release: 0.45,
+            curve: 'smooth',
+        }],
         deactivationPolicy: 'immediate',
         create: statelessInstance(SDF_SHADER, SDF_FRAGMENT, (render) => {
             const mask = render.inputs.mask;
@@ -175,6 +188,9 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
                 return [];
             }
 
+            // No static uniforms: every one this shader reads is a declared parameter, and the runtime
+            // merges the live values over the pass. Restating them here as literals is what made the
+            // catalog look reactive while rendering at fixed values.
             return [{
                 kind: 'fullscreen',
                 shader: SDF_SHADER,
@@ -182,7 +198,6 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
                 output: render.outputs.field,
                 blend: 'none',
                 clear: true,
-                uniforms: { uThreshold: 0.5, uInvert: 0, uSearchRadius: 0.12 },
             }];
         }),
     };
@@ -204,6 +219,17 @@ export function createMaskContainmentField(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1.5, requiredAssets: ['mask'] },
         parameters: { softness: 0.02, outside: 0 },
+        defaultBindings: [{
+            // How hard the containment edge is. A loud passage lets what is contained press further
+            // past the boundary before it fades.
+            feature: 'rms',
+            role: 'intensity',
+            parameter: 'softness',
+            outputRange: [0.012, 0.075],
+            attack: 0.12,
+            release: 0.5,
+            curve: 'smooth',
+        }],
         deactivationPolicy: 'fade',
         create: statelessInstance(CONTAINMENT_SHADER, CONTAINMENT_FRAGMENT, (render) => {
             const field = render.inputs.field;
@@ -218,7 +244,6 @@ export function createMaskContainmentField(): VisualPluginDefinition {
                 output: render.outputs.containment,
                 blend: 'none',
                 clear: true,
-                uniforms: { uSoftness: 0.02, uOutside: 0 },
             }];
         }),
     };
@@ -243,6 +268,17 @@ export function createMaskEffectStencil(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1.5, requiredAssets: ['mask'] },
         parameters: { feather: 0.03, edgeOnly: 0 },
+        defaultBindings: [{
+            // Widens the band the effect is routed through, so the stencil's edge shimmers on detail
+            // rather than holding one fixed cut.
+            feature: 'highMidExcite',
+            role: 'detail',
+            parameter: 'feather',
+            outputRange: [0.014, 0.085],
+            attack: 0.05,
+            release: 0.4,
+            curve: 'sqrt',
+        }],
         deactivationPolicy: 'fade',
         create: statelessInstance(STENCIL_SHADER, STENCIL_FRAGMENT, (render) => {
             const source = render.inputs.source;
@@ -258,7 +294,6 @@ export function createMaskEffectStencil(): VisualPluginDefinition {
                 output: render.outputs.color,
                 blend: 'none',
                 clear: true,
-                uniforms: { uFeather: 0.03, uEdgeOnly: 0 },
             }];
         }),
     };
@@ -280,6 +315,19 @@ export function createMaskBoundaryField(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1, requiredAssets: ['mask'] },
         parameters: { strength: 1 },
+        defaultBindings: [{
+            // This field is both a collision surface for a simulator and, since it is a motion source,
+            // one of the vectors the composite drags the accumulated image along. Bass therefore moves
+            // the picture away from the mask's edges as well as pushing particles off them — the same
+            // large-scale-force row of the section 20 table serving both.
+            feature: 'bass',
+            role: 'large-scale-force',
+            parameter: 'strength',
+            outputRange: [0.5, 2.4],
+            attack: 0.1,
+            release: 0.55,
+            curve: 'smooth',
+        }],
         deactivationPolicy: 'fade',
         create: statelessInstance(BOUNDARY_SHADER, BOUNDARY_FRAGMENT, (render) => {
             const field = render.inputs.field;
@@ -294,7 +342,6 @@ export function createMaskBoundaryField(): VisualPluginDefinition {
                 output: render.outputs.deflection,
                 blend: 'none',
                 clear: true,
-                uniforms: { uStrength: 1 },
             }];
         }),
     };

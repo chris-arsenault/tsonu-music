@@ -15,7 +15,9 @@ import { mergeUniforms, resolveParameters } from './core/parameters';
 import { isSuppressedByQuality } from './core/passes';
 import { planTargets, RESOURCE_SIZING } from './core/render-plan';
 import { compileGraph } from './core/graph';
-import { wireScene } from './core/wiring';
+import { assetResourceId, wireScene, type AssetResource } from './core/wiring';
+import { isMotionSource } from './core/persistence';
+import { MASK_SET_OPERATIONS } from './plugins/compositors/composition';
 import { advanceMutation, createMutationState } from './core/scheduler';
 import { POLICY_DURATIONS } from './core/deactivation';
 import { silentFeatureBus, type AudioFeatureBus } from './core/features';
@@ -307,6 +309,204 @@ describe('mutation and retirement are reachable, not decorative', () => {
         for (const definition of CATALOG.filter((entry) => entry.category === 'simulator')) {
             const policy = definition.deactivationPolicy ?? 'immediate';
             expect(POLICY_DURATIONS[policy], definition.id).toBeGreaterThan(0);
+        }
+    });
+});
+
+/**
+ * Masks as scene modifiers across the dimensions section 12.2 lists.
+ *
+ * Every mask field shipped with no bindings at all and emitted literal uniforms, so the pipeline was
+ * plumbed and frozen: a mask could shape a region but nothing about it ever moved. These build each
+ * dimension explicitly rather than waiting for random assembly to produce one, so a mode that cannot
+ * be wired fails here instead of quietly never appearing.
+ */
+describe('mask dimensions', () => {
+    const MASKS: AssetResource[] = [
+        { resource: assetResourceId('mask-a'), type: 'mask-texture' },
+        { resource: assetResourceId('mask-b'), type: 'mask-texture' },
+    ];
+
+    /** Wires and compiles a named plugin set against the mask assets. */
+    function build(ids: readonly string[], assets: readonly AssetResource[] = MASKS) {
+        const wired = wireScene(ids.map(plugin), assets);
+        expect(wired.unsatisfied, ids.join(' + ')).toEqual([]);
+
+        const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
+        expect(compiled.ok, compiled.ok ? '' : compiled.errors.join('; ')).toBe(true);
+
+        return { wired, graph: compiled.ok ? compiled.graph : undefined };
+    }
+
+    test('a mask stencils colour with no simulator present', () => {
+        // Section 12.2: masks must not imply particle use.
+        const { wired } = build([
+            'ProceduralTextureSource:value-noise',
+            'MaskSignedDistanceField',
+            'MaskEffectStencil',
+            'ToneMapper',
+        ]);
+
+        expect(wired.assetBindings.some((binding) => binding.port === 'mask')).toBe(true);
+    });
+
+    test('a mask steers a feedback branch', () => {
+        // The dimension the missing ninth FeedbackFlowTransform mode was blocking: the mask's boundary
+        // gradient decides where the accumulated branch travels.
+        const { graph } = build([
+            'SignalTraceSource:circular',
+            'MaskSignedDistanceField',
+            'MaskBoundaryField',
+            'FeedbackFlowTransform:vector-field',
+            'ToneMapper',
+        ]);
+
+        const flow = graph?.order.find((node) => node.instanceId.startsWith('FeedbackFlowTransform'));
+        expect(flow?.inputs.field).toBeDefined();
+        expect(flow?.previous.history).toBeDefined();
+    });
+
+    test('a mask is a physics surface particles reflect from', () => {
+        const { graph } = build([
+            'ProceduralVectorField:curl',
+            'MaskSignedDistanceField',
+            'MaskBoundaryField',
+            'ParticleSimulator',
+            'ParticleRenderer:sparks',
+            'ToneMapper',
+        ]);
+
+        const simulator = graph?.order.find((node) => node.instanceId.startsWith('ParticleSimulator'));
+        expect(simulator?.inputs.boundary).toBeDefined();
+    });
+
+    test('a mask contains a system inside its silhouette', () => {
+        const { graph } = build([
+            'ProceduralTextureSource:cellular',
+            'MaskSignedDistanceField',
+            'MaskContainmentField',
+            'MaskRouter:apply',
+            'ToneMapper',
+        ]);
+
+        const router = graph?.order.find((node) => node.instanceId.startsWith('MaskRouter'));
+        expect(router?.inputs.mask).toBeDefined();
+    });
+
+    test('two masks combine through a set operation', () => {
+        // Section 19.9 lists union, intersection, and subtraction; six of the nine operations existed,
+        // so masks could each route an effect but never compose with one another.
+        for (const mode of MASK_SET_OPERATIONS) {
+            const { graph } = build([
+                'ProceduralTextureSource:rings',
+                'MaskSignedDistanceField',
+                'MaskContainmentField',
+                `MaskRouter:${mode}`,
+                'ToneMapper',
+            ]);
+
+            const router = graph?.order.find((node) => node.instanceId.startsWith('MaskRouter'));
+            expect(router?.inputs.mask, mode).toBeDefined();
+            expect(router?.inputs.other, mode).toBeDefined();
+            // Two distinct operands: reading the same mask twice makes the operation a no-op.
+            expect(router?.inputs.mask, mode).not.toBe(router?.inputs.other);
+        }
+    });
+
+    test('a mask drags the whole composite through the motion bus', () => {
+        const { graph } = build([
+            'ProceduralTextureSource:curl-noise',
+            'MaskSignedDistanceField',
+            'MaskBoundaryField',
+            'ToneMapper',
+        ]);
+
+        const motion = graph?.resources.filter((resource) => isMotionSource(resource.type)) ?? [];
+        expect(motion.map((resource) => resource.producedBy))
+            .toContain('MaskBoundaryField#2');
+    });
+
+    test('every mask field responds to audio rather than holding a fixed shape', () => {
+        const maskFields = [
+            'MaskSignedDistanceField',
+            'MaskContainmentField',
+            'MaskEffectStencil',
+            'MaskBoundaryField',
+        ];
+
+        for (const id of maskFields) {
+            const definition = plugin(id);
+            const bindings = definition.defaultBindings ?? [];
+            expect(bindings.length, `${id} declares a binding`).toBeGreaterThan(0);
+
+            const quiet = mergeUniforms(
+                {},
+                resolveParameters(definition.parameters ?? {}, bindings, features(), 1 / 60),
+            );
+            const loud = mergeUniforms(
+                {},
+                resolveParameters(
+                    definition.parameters ?? {},
+                    bindings,
+                    features({
+                        rms: 1, bass: 1, mid: 1, trebleExcite: 1, highMidExcite: 1,
+                    }),
+                    1 / 60,
+                ),
+            );
+
+            expect(quiet, `${id} reacts`).not.toEqual(loud);
+        }
+    });
+});
+
+/**
+ * Selection has to know what the host can supply, not just what plugins produce.
+ *
+ * `inputsSatisfiable` considered only the outputs of already-chosen plugins. A mask texture is not
+ * produced by any plugin, so every mask field was judged unsatisfiable and never selected — masks
+ * were authored, generated, deployed to `frontend/public/masks/`, loaded by the kernel, and then
+ * unreachable by any scene the scheduler assembled. Wiring had always known an asset satisfies an
+ * input; selection did not.
+ */
+describe('assets are reachable by scene assembly', () => {
+    const withMasks = {
+        ...CONTEXT,
+        assets: ['band-mark', 'mask'],
+        assetResources: [{ resource: assetResourceId('band-mark'), type: 'mask-texture' as const }],
+    };
+
+    const assembled = (context: typeof withMasks) => THEMES.flatMap((theme) =>
+        Array.from({ length: 20 }, (_, index) =>
+            buildScene(`asset-${index}`, theme, context, profileFor(0)))
+        .flatMap((result) => (result.ok ? [result.scene] : [])));
+
+    test('a plugin whose only producer is an asset can be selected', () => {
+        const scenes = assembled(withMasks);
+        expect(scenes.length).toBeGreaterThan(40);
+
+        const maskDerived = scenes.filter((scene) =>
+            scene.plugins.some((definition) =>
+                definition.activationRules.requiredAssets?.includes('mask')));
+
+        expect(maskDerived.length).toBeGreaterThan(0);
+    });
+
+    test('without the asset loaded, nothing requiring it is selected', () => {
+        for (const scene of assembled({ ...withMasks, assets: [], assetResources: [] })) {
+            for (const definition of scene.plugins) {
+                expect(definition.activationRules.requiredAssets ?? [], definition.id).toEqual([]);
+            }
+        }
+    });
+
+    test('every scene still builds once assets widen the candidate pool', () => {
+        // A wider pool must not make assembly fail; the grammar and wiring have to absorb it.
+        for (const theme of THEMES) {
+            const results = Array.from({ length: 20 }, (_, index) =>
+                buildScene(`widen-${index}`, theme, withMasks, profileFor(0)));
+
+            expect(results.filter((result) => result.ok).length, theme.id).toBe(results.length);
         }
     });
 });
