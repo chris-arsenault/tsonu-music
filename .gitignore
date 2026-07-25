@@ -40,3 +40,6 @@ pnpm-debug.log*
 # illuminator generation output; the processed masks that ship are copied into
 # frontend/public/masks/ and committed there. Raw renders are regenerable from the pack.
 assets/*/output/
+
+# Dev-only visualizer harness: local audio and a scratch page, never built or deployed.
+frontend/devlab/
