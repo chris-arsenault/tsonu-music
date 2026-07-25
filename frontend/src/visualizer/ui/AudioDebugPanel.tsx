@@ -6,6 +6,7 @@
  */
 
 import { useState } from 'react';
+import type { RendererFailure } from '../host/renderer';
 import { useMusicPlayer } from '../../music/MusicPlayerContext';
 import { describeUnavailableReason } from '../host/capabilities';
 import { useKernelReadout } from './use-kernel-readout';
@@ -32,12 +33,15 @@ export default function AudioDebugPanel() {
     const player = useMusicPlayer();
     // Off until asked for, so opening the panel does not itself create the irreversible tap.
     const [active, setActive] = useState(false);
+    // State rather than a ref, so the kernel restarts once the canvas actually exists.
+    const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
 
     const { availability, readout } = useKernelReadout(
         {
             getAudioElement: player.getAudioElement,
             trackId: player.selectedTrack?.trackId ?? null,
             trackDurationSeconds: player.selectedTrack?.durationSeconds ?? 0,
+            canvas,
         },
         active,
     );
@@ -71,6 +75,22 @@ export default function AudioDebugPanel() {
 
             {active && !readout ? <p className="viz-debug__note">Starting analysis…</p> : null}
 
+            {active ? (
+                <canvas className="viz-debug__canvas" ref={setCanvas} />
+            ) : null}
+
+            {readout?.renderFailure ? (
+                <p className="viz-debug__note">{describeRenderFailure(readout.renderFailure)}</p>
+            ) : null}
+
+            {readout?.render && readout.render.problems.length > 0 ? (
+                <ul className="viz-debug__reasons">
+                    {readout.render.problems.map((problem) => (
+                        <li key={problem}>{problem}</li>
+                    ))}
+                </ul>
+            ) : null}
+
             {readout ? (
                 <>
                     <dl className="viz-debug__grid">
@@ -82,6 +102,11 @@ export default function AudioDebugPanel() {
                         <Row label="latency" value={`${(readout.latencySeconds * 1000).toFixed(1)}ms`} />
                         <Row label="frame" value={`${readout.frameTimeMs.toFixed(1)}ms`} />
                         <Row label="analysis" value={readout.flatlined ? 'flatlined' : 'live'} />
+                        <Row label="passes" value={String(readout.render?.passesExecuted ?? 0)} />
+                        <Row label="targets" value={String(readout.render?.targetsAllocated ?? 0)} />
+                        {readout.render && readout.render.skippedPasses > 0 ? (
+                            <Row label="skipped" value={String(readout.render.skippedPasses)} />
+                        ) : null}
                     </dl>
 
                     <div className="viz-debug__meters">
@@ -97,6 +122,17 @@ export default function AudioDebugPanel() {
             ) : null}
         </aside>
     );
+}
+
+function describeRenderFailure(failure: RendererFailure): string {
+    switch (failure) {
+        case 'no-webgl2':
+            return 'The canvas could not provide a WebGL2 context.';
+        case 'no-float-render-targets':
+            return 'Floating-point render targets are unavailable.';
+        case 'invalid-scene':
+            return 'The scene graph failed validation; see the console for details.';
+    }
 }
 
 function Row({ label, value }: { label: string; value: string }) {

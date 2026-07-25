@@ -22,6 +22,7 @@ import {
 } from '../core/features';
 import { acquireTap, type AudioTap } from './audio-tap';
 import { initialMediaEvents, subscribeMediaEvents } from './media-events';
+import { createRenderer, type Renderer, type RendererFailure } from './renderer';
 
 export interface KernelReadout {
     clock: PlaybackClock;
@@ -32,6 +33,14 @@ export interface KernelReadout {
     flatlined: boolean;
     /** Wall-clock milliseconds for the last frame, for the performance controller in M2. */
     frameTimeMs: number;
+    /** Absent when no canvas was supplied or the renderer could not start. */
+    render?: {
+        passesExecuted: number;
+        targetsAllocated: number;
+        skippedPasses: number;
+        problems: string[];
+    };
+    renderFailure?: RendererFailure;
 }
 
 export interface KernelOptions {
@@ -39,6 +48,8 @@ export interface KernelOptions {
     /** Current track identity. Changing it is what bumps the clock's generation. */
     trackId: string | null;
     trackDurationSeconds: number;
+    /** Omit to run analysis only, with no rendering. */
+    canvas?: HTMLCanvasElement;
     /** Called at a throttled rate for display; never once per frame. */
     onReadout: (readout: KernelReadout) => void;
 }
@@ -75,6 +86,20 @@ export function startKernel(options: KernelOptions): KernelHandle {
     let frameHandle = 0;
     let lastFrameTime = 0;
     let lastReadoutTime = 0;
+
+    let renderer: Renderer | undefined;
+    let renderFailure: RendererFailure | undefined;
+    let renderStats: KernelReadout['render'];
+
+    if (options.canvas) {
+        const result = createRenderer(options.canvas);
+        if (result.ok) {
+            renderer = result.renderer;
+        } else {
+            renderFailure = result.failure;
+            console.warn('[visualizer] renderer unavailable', result.failure, result.detail ?? '');
+        }
+    }
 
     void acquireTap(element)
         .then(async (acquired) => {
@@ -137,6 +162,17 @@ export function startKernel(options: KernelOptions): KernelHandle {
             deltaSeconds,
         });
 
+        if (renderer) {
+            // Quality is fixed at full until the performance controller lands in M2.
+            const stats = renderer.renderFrame({
+                clock,
+                features: features.bus,
+                deltaSeconds,
+                qualityScale: 1,
+            });
+            renderStats = { ...stats, problems: renderer.problems() };
+        }
+
         if (now - lastReadoutTime >= 1000 / READOUT_HZ) {
             lastReadoutTime = now;
             onReadout({
@@ -147,6 +183,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 contextState,
                 flatlined: tap?.isFlatlined() ?? false,
                 frameTimeMs: wallDelta * 1000,
+                render: renderStats,
+                renderFailure,
             });
         }
 
@@ -170,6 +208,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
             running = false;
             cancelAnimationFrame(frameHandle);
             unsubscribe();
+            renderer?.dispose();
             // The tap's media-element source is never detached; only the analysis branch is released.
             tap?.dispose();
         },

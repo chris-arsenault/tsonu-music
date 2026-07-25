@@ -2112,3 +2112,13 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
     text-align: right;
     font-variant-numeric: tabular-nums;
 }
+
+.viz-debug__canvas {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    margin: 0 0 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 0.35rem;
+    background: #000;
+}

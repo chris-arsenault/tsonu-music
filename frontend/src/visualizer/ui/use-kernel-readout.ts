@@ -11,6 +11,8 @@ export interface KernelSubject {
     getAudioElement: () => HTMLAudioElement | null;
     trackId: string | null;
     trackDurationSeconds: number;
+    /** Omit to run analysis without rendering. */
+    canvas?: HTMLCanvasElement | null;
 }
 
 export interface KernelState {
@@ -47,6 +49,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
         setAvailability(resolveAvailability(resolved));
     }, []);
 
+    const canvas = subject.canvas ?? undefined;
     const canRun = active && element !== null && availability?.available === true;
 
     useEffect(() => {
@@ -56,6 +59,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
 
         const handle = startKernel({
             element,
+            canvas,
             trackId: trackIdRef.current,
             trackDurationSeconds: durationRef.current,
             onReadout: setReadout,
@@ -67,7 +71,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
             handle.stop();
             setReadout(undefined);
         };
-    }, [canRun, element]);
+    }, [canRun, element, canvas]);
 
     useEffect(() => {
         handleRef.current?.setTrack(subject.trackId, subject.trackDurationSeconds);
