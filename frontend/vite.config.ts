@@ -8,6 +8,12 @@ export default defineConfig({
     port: 3000,
     open: true,
   },
+  // The visualizer's analysis processor is bundled through `?worker&url` and loaded with
+  // `audioWorklet.addModule`, which fetches a module script. Declaring the format explicitly keeps
+  // dev and build agreeing on module semantics.
+  worker: {
+    format: 'es',
+  },
   build: {
     outDir: 'build',
     sourcemap: true,

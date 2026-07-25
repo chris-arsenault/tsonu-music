@@ -20,6 +20,7 @@ import { getArtworkUrl } from './catalog/catalog-client';
 import type { CatalogReleaseSummary } from './catalog/media-catalog';
 import { useDocumentMetadata } from './document-metadata';
 import { recordSitePageView } from './player-analytics';
+import { isVisualizerDebugEnabled } from './visualizer/ui/debug-flag';
 import {
     decodePathPart,
     handleInternalLink,
@@ -34,6 +35,8 @@ import albumCover from './assets/so-we-sleep-front-no-text.jpg';
 
 const LAUNCH_ALBUM_SLUG = 'so-we-sleep';
 const AdminRoute = lazy(() => import('./admin/AdminRoute').then((module) => ({ default: module.AdminRoute })));
+// Lazy so the visualizer stays out of the initial player bundle.
+const AudioDebugPanel = lazy(() => import('./visualizer/ui/AudioDebugPanel'));
 
 function renderPublicRoute(route: string) {
     const pathname = route.split(/[?#]/)[0] || '/';
@@ -664,6 +667,11 @@ function PublicApp() {
                     </a>
                 </footer>
                 <StickyPlayer />
+                {isVisualizerDebugEnabled() ? (
+                    <Suspense fallback={null}>
+                        <AudioDebugPanel />
+                    </Suspense>
+                ) : null}
             </div>
         </MusicPlayerProvider>
     );

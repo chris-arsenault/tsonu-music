@@ -1,0 +1,151 @@
+/**
+ * The audio tap (ADR-0001).
+ *
+ * `createMediaElementSource` permanently reroutes an element's output through the Web Audio graph,
+ * and the player's element lives for the whole page. So: one tap, created on first activation, and
+ * audio wired `source -> gain(1.0) -> destination` unconditionally with the analysis worklet hanging
+ * off a parallel branch that terminates in nothing. Nothing on the analysis side can reach output.
+ */
+
+import type { FeatureSnapshot } from '../core/features';
+import type { AnalysisCommand } from './analysis-worklet';
+// Bundled as its own graph so the worklet module is self-contained at `addModule` time.
+import workletUrl from './analysis-worklet.ts?worker&url';
+
+/** Output latency estimate used when the browser does not report `outputLatency`. */
+const FALLBACK_OUTPUT_LATENCY_SECONDS = 0.02;
+
+/** Consecutive silent frames during unpaused playback before analysis is called dead. */
+const FLATLINE_FRAME_LIMIT = 60;
+
+export interface AudioTap {
+    readonly context: AudioContext;
+    /** Latest snapshot, or undefined if none has arrived since the last read. */
+    takeSnapshot(): FeatureSnapshot | undefined;
+    /** `outputLatency + baseLatency`, with a fallback where `outputLatency` is unreported. */
+    latencySeconds(): number;
+    /** Drops the worklet's short-term history. Called on seek and track change. */
+    reset(): void;
+    /** True once analysis has been silent for long enough to be considered dead. */
+    isFlatlined(): boolean;
+    resume(): Promise<void>;
+    dispose(): void;
+}
+
+/** One tap per element, for the element's lifetime. */
+const taps = new WeakMap<HTMLMediaElement, Promise<AudioTap>>();
+
+export function existingTap(element: HTMLMediaElement): Promise<AudioTap> | undefined {
+    return taps.get(element);
+}
+
+/**
+ * Creates the tap, or returns the one this element already has.
+ *
+ * Must be called from a user gesture so the context can start. The caller is responsible for having
+ * checked availability first — this function does not gate.
+ */
+export function acquireTap(element: HTMLMediaElement): Promise<AudioTap> {
+    const existing = taps.get(element);
+    if (existing) {
+        return existing;
+    }
+
+    const created = createTap(element);
+    taps.set(element, created);
+
+    return created;
+}
+
+async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
+    const context = new AudioContext();
+
+    // Audio path first, and unconditionally. If anything below this throws, sound still reaches the
+    // speakers through a gain node that no analysis code touches.
+    const source = context.createMediaElementSource(element);
+    const outputGain = context.createGain();
+    outputGain.gain.value = 1;
+    source.connect(outputGain);
+    outputGain.connect(context.destination);
+
+    let latest: FeatureSnapshot | undefined;
+    let silentFrames = 0;
+    let flatlined = false;
+    let analysis: AudioWorkletNode | undefined;
+
+    try {
+        await context.audioWorklet.addModule(workletUrl);
+
+        analysis = new AudioWorkletNode(context, 'tsonu-analysis', {
+            numberOfInputs: 1,
+            numberOfOutputs: 0,
+            channelCount: 2,
+            channelCountMode: 'explicit',
+        });
+
+        analysis.port.onmessage = (event: MessageEvent<FeatureSnapshot>) => {
+            latest = event.data;
+
+            if (event.data.rms === 0 && !element.paused) {
+                silentFrames += 1;
+                if (silentFrames >= FLATLINE_FRAME_LIMIT) {
+                    flatlined = true;
+                }
+            } else {
+                silentFrames = 0;
+                flatlined = false;
+            }
+        };
+
+        // The parallel branch. `numberOfOutputs: 0` is what makes it a dead end: the node consumes
+        // the signal and produces nothing, so it cannot contribute to or interrupt output.
+        source.connect(analysis);
+    } catch (error) {
+        // Analysis failed to start. Audio is unaffected; report as flatlined so the caller falls back.
+        flatlined = true;
+        console.warn('[visualizer] audio analysis unavailable', error);
+    }
+
+    return {
+        context,
+
+        takeSnapshot() {
+            const snapshot = latest;
+            latest = undefined;
+            return snapshot;
+        },
+
+        latencySeconds() {
+            const output = typeof context.outputLatency === 'number' && Number.isFinite(context.outputLatency)
+                ? context.outputLatency
+                : FALLBACK_OUTPUT_LATENCY_SECONDS;
+
+            return output + context.baseLatency;
+        },
+
+        reset() {
+            const command: AnalysisCommand = { kind: 'reset' };
+            analysis?.port.postMessage(command);
+        },
+
+        isFlatlined() {
+            return flatlined;
+        },
+
+        async resume() {
+            if (context.state !== 'running') {
+                await context.resume();
+            }
+        },
+
+        dispose() {
+            // The tap itself is never torn down — the source node cannot be detached from the
+            // element. Only the analysis branch is released; audio keeps flowing through the gain.
+            if (analysis) {
+                analysis.port.onmessage = null;
+                source.disconnect(analysis);
+                analysis = undefined;
+            }
+        },
+    };
+}

@@ -24,6 +24,13 @@ DNS records for the three `tsonu.com` hostnames live in the `tsonu.com.` Route53
 - **Metadata**: shared Ahara RDS. Migrations live in `db/migrations`; runtime catalog rows are not committed to this repo.
 - **Media**: private source-master and generated-media S3 buckets. Public HLS, artwork, and lossless assets are served through CloudFront.
 - **Analytics**: CloudWatch RUM custom player events and an admin dashboard for player stats.
+- **Visualizer**: WebGL2 music visualizer in [`frontend/src/visualizer/`](./frontend/src/visualizer), loaded as a dynamic chunk on activation.
+
+## Documentation
+
+[`docs/README.md`](./docs/README.md) indexes the reference docs.
+[`docs/adr/`](./docs/adr) holds architecture decisions and is the only home for trade-offs.
+[`docs/backlog.md`](./docs/backlog.md) holds planned-but-not-built work.
 
 ## Build and deploy
 
@@ -47,3 +54,21 @@ and Rust Lambda artifacts under `backend/`.
 - **RDS is the catalog source of truth**. Do not commit runtime release, song, recording, track, or job JSON data into this repo.
 - **Vitest is enabled** for frontend catalog and analytics behavior.
 - **Tailwind is loaded via CDN** (`https://cdn.tailwindcss.com`) in `frontend/index.html`, not bundled. This predates the Vite migration and hasn't been untangled.
+
+## Critical rules
+
+- **Playback outranks visualization.** Nothing in the visualizer may degrade audio. The analyser
+  is a parallel dead-end branch; the audio path is `source → gain → destination` unconditionally.
+  See [ADR-0001](./docs/adr/0001-visualizer-audio-tap-policy.md) and
+  [ADR-0004](./docs/adr/0004-visualizer-playback-supremacy.md).
+- **`createMediaElementSource` is irreversible.** The player's audio element is mounted once for
+  the page's lifetime. Tap it lazily on first activation, once, and never on the native-HLS path.
+- **Visualizer decision logic goes in `core/`** as pure modules over plain data, unit-tested in the
+  Node environment. `host/` gathers state and applies decisions; it makes none. See
+  [ADR-0003](./docs/adr/0003-visualizer-pure-core-thin-shell.md).
+- **Visual time comes from the playback clock**, never from `requestAnimationFrame`, track time
+  alone, or a precomputed BPM.
+- **The Vite build publishes one stylesheet** (`cssCodeSplit: false`), because the `website` module
+  is configured with a single `ENTRY_CSS`. Do not add a second entry stylesheet.
+- **Do not commit runtime catalog data.** RDS is the source of truth for releases, songs,
+  recordings, tracks, and jobs.

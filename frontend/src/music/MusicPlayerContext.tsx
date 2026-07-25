@@ -75,6 +75,11 @@ export interface MusicPlayerContextValue {
     artworkAltText: string;
     canGoBack: boolean;
     canGoForward: boolean;
+    /**
+     * The single audio element, for the visualizer's analysis tap. Read at call time rather than
+     * exposed as state, since the element is mounted once and never remounted.
+     */
+    getAudioElement: () => HTMLAudioElement | null;
     playRelease: (releaseId: StableId) => void;
     playTrack: (releaseId: StableId, trackId: StableId) => void;
     selectRelease: (releaseId: StableId) => void;
@@ -807,6 +812,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         artworkAltText,
         canGoBack,
         canGoForward,
+        getAudioElement: () => audioRef.current,
         playRelease,
         playTrack,
         selectRelease,

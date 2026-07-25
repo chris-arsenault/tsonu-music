@@ -2001,3 +2001,114 @@ a:hover, a:focus-visible { color: var(--gold-bright); }
         max-width: 100%;
     }
 }
+
+/* -----------------------------------------------------------------
+ * Visualizer diagnostics (?viz-debug=1)
+ * ----------------------------------------------------------------- */
+.viz-debug {
+    position: fixed;
+    right: 0.75rem;
+    bottom: 8.5rem;
+    z-index: 200;
+    width: min(22rem, calc(100vw - 1.5rem));
+    max-height: 60vh;
+    overflow-y: auto;
+    box-sizing: border-box;
+    padding: 0.75rem 0.85rem;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+    background: rgba(8, 8, 10, 0.94);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+.viz-debug__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 0.6rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.viz-debug__toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.viz-debug__toggle input:disabled {
+    cursor: not-allowed;
+}
+
+.viz-debug__reasons {
+    margin: 0 0 0.6rem;
+    padding-left: 1.1rem;
+    color: var(--muted);
+}
+
+.viz-debug__note {
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+}
+
+.viz-debug__grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.15rem 0.75rem;
+    margin: 0 0 0.7rem;
+}
+
+.viz-debug__grid dt {
+    color: var(--muted);
+}
+
+.viz-debug__grid dd {
+    margin: 0;
+}
+
+.viz-debug__meters {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.viz-debug__meter {
+    display: grid;
+    grid-template-columns: 6.5rem 1fr 2.5rem;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.viz-debug__meter-label {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.viz-debug__meter-track {
+    position: relative;
+    height: 0.45rem;
+    border-radius: 0.25rem;
+    background: var(--panel-soft);
+    overflow: hidden;
+}
+
+.viz-debug__meter-fill {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--line-strong);
+    transition: width 60ms linear, left 60ms linear;
+}
+
+.viz-debug__meter-value {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
