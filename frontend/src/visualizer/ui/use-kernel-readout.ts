@@ -13,6 +13,8 @@ export interface KernelSubject {
     trackDurationSeconds: number;
     /** Omit to run analysis without rendering. */
     canvas?: HTMLCanvasElement | null;
+    /** Omit when buffer telemetry is unavailable; frame time is then the only performance input. */
+    getBufferHealth?: () => { forwardBufferSeconds?: number; stalled?: boolean };
 }
 
 export interface KernelState {
@@ -39,9 +41,11 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
     const getElementRef = useRef(subject.getAudioElement);
     const trackIdRef = useRef(subject.trackId);
     const durationRef = useRef(subject.trackDurationSeconds);
+    const bufferHealthRef = useRef(subject.getBufferHealth);
     getElementRef.current = subject.getAudioElement;
     trackIdRef.current = subject.trackId;
     durationRef.current = subject.trackDurationSeconds;
+    bufferHealthRef.current = subject.getBufferHealth;
 
     useEffect(() => {
         const resolved = getElementRef.current();
@@ -62,6 +66,10 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
             canvas,
             trackId: trackIdRef.current,
             trackDurationSeconds: durationRef.current,
+            prefersReducedMotion: availability?.prefersReducedMotion,
+            bufferHealth: bufferHealthRef.current
+                ? () => bufferHealthRef.current!()
+                : undefined,
             onReadout: setReadout,
         });
         handleRef.current = handle;
@@ -71,7 +79,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
             handle.stop();
             setReadout(undefined);
         };
-    }, [canRun, element, canvas]);
+    }, [canRun, element, canvas, availability?.prefersReducedMotion]);
 
     useEffect(() => {
         handleRef.current?.setTrack(subject.trackId, subject.trackDurationSeconds);

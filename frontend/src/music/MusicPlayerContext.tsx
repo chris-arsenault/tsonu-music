@@ -80,6 +80,12 @@ export interface MusicPlayerContextValue {
      * exposed as state, since the element is mounted once and never remounted.
      */
     getAudioElement: () => HTMLAudioElement | null;
+    /**
+     * HLS forward-buffer health, for the visualizer's performance controller. Playback outranks
+     * visualization, so a starving buffer throttles rendering rather than the reverse.
+     * `forwardBufferSeconds` is undefined on the native path, where no hls.js instance exists.
+     */
+    getBufferHealth: () => { forwardBufferSeconds?: number; stalled?: boolean };
     playRelease: (releaseId: StableId) => void;
     playTrack: (releaseId: StableId, trackId: StableId) => void;
     selectRelease: (releaseId: StableId) => void;
@@ -210,6 +216,8 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
     const mediaBaseUrl = runtimeConfig.mediaBaseUrl;
     const catalogApiBaseUrl = runtimeConfig.adminApiBaseUrl;
     const audioRef = useRef<HTMLAudioElement | null>(null);
+    const hlsRef = useRef<HlsInstance | undefined>(undefined);
+    const stalledRef = useRef(false);
     const pendingRestoreRef = useRef<PendingPlaybackRestore | null>(null);
     const pendingRouteTrackSlugRef = useRef<string | undefined>(undefined);
     const progressMilestonesRef = useRef<Set<string>>(new Set());
@@ -377,6 +385,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         }
 
         let hls: HlsInstance | undefined;
+        // Held so the visualizer can read buffer health without reaching into this closure.
+        hlsRef.current = undefined;
+        stalledRef.current = false;
         let removedNativeListener: (() => void) | undefined;
         let disposed = false;
 
@@ -434,7 +445,14 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
             hls = new Hls({
                 enableWorker: true,
             });
+            hlsRef.current = hls;
             hls.on(Hls.Events.ERROR, (_event, data) => {
+                // A stall is reported whether or not it is fatal, and it is the strongest signal the
+                // visualizer has that it is starving the main thread.
+                if (data.details === Hls.ErrorDetails.BUFFER_STALLED_ERROR) {
+                    stalledRef.current = true;
+                }
+
                 if (!data.fatal) {
                     return;
                 }
@@ -451,6 +469,9 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
                 }
 
                 hls?.destroy();
+            });
+            hls.on(Hls.Events.FRAG_BUFFERED, () => {
+                stalledRef.current = false;
             });
             hls.on(Hls.Events.MANIFEST_PARSED, restorePlayback);
             hls.loadSource(selectedSource.url);
@@ -472,9 +493,33 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         return () => {
             disposed = true;
             removedNativeListener?.();
+            hlsRef.current = undefined;
             hls?.destroy();
         };
     }, [releaseManifest, selectedSource, selectedTrack]);
+
+    function getBufferHealth(): { forwardBufferSeconds?: number; stalled?: boolean } {
+        const stalled = stalledRef.current;
+        const instance = hlsRef.current;
+
+        if (instance) {
+            return { forwardBufferSeconds: instance.mainForwardBufferInfo?.len, stalled };
+        }
+
+        // Native path: no hls.js instance, so derive a coarse equivalent from the element itself.
+        const audio = audioRef.current;
+        if (!audio) {
+            return { stalled };
+        }
+
+        for (let range = 0; range < audio.buffered.length; range += 1) {
+            if (audio.buffered.start(range) <= audio.currentTime && audio.buffered.end(range) >= audio.currentTime) {
+                return { forwardBufferSeconds: audio.buffered.end(range) - audio.currentTime, stalled };
+            }
+        }
+
+        return { stalled };
+    }
 
     function createEventContext(
         positionSeconds = audioRef.current?.currentTime ?? currentTime,
@@ -813,6 +858,7 @@ export function MusicPlayerProvider({ children, fallbackArtworkSrc }: MusicPlaye
         canGoBack,
         canGoForward,
         getAudioElement: () => audioRef.current,
+        getBufferHealth,
         playRelease,
         playTrack,
         selectRelease,

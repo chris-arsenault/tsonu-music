@@ -20,6 +20,15 @@ import {
     createFeatureBusState,
     type AudioFeatureBus,
 } from '../core/features';
+import {
+    advancePerformance,
+    applyReducedMotion,
+    createPerformanceState,
+    profileFor,
+    suspendedProfile,
+    type PerformanceState,
+    type QualityProfile,
+} from '../core/performance';
 import { acquireTap, type AudioTap } from './audio-tap';
 import { initialMediaEvents, subscribeMediaEvents } from './media-events';
 import { createRenderer, type Renderer, type RendererFailure } from './renderer';
@@ -41,6 +50,18 @@ export interface KernelReadout {
         problems: string[];
     };
     renderFailure?: RendererFailure;
+    /** Current quality level and profile, and the scene the scheduler assembled. */
+    performance?: {
+        level: number;
+        downgrades: number;
+        bufferConstrained: boolean;
+        profile: QualityProfile;
+    };
+    scene?: {
+        seed: string;
+        themeId: string;
+        pluginIds: string[];
+    };
 }
 
 export interface KernelOptions {
@@ -50,6 +71,10 @@ export interface KernelOptions {
     trackDurationSeconds: number;
     /** Omit to run analysis only, with no rendering. */
     canvas?: HTMLCanvasElement;
+    /** Honoured as a low-energy profile rather than by slowing everything down. */
+    prefersReducedMotion?: boolean;
+    /** Reports HLS forward-buffer health. Omit when unavailable; frame time is then the only input. */
+    bufferHealth?: () => { forwardBufferSeconds?: number; stalled?: boolean };
     /** Called at a throttled rate for display; never once per frame. */
     onReadout: (readout: KernelReadout) => void;
 }
@@ -91,8 +116,25 @@ export function startKernel(options: KernelOptions): KernelHandle {
     let renderFailure: RendererFailure | undefined;
     let renderStats: KernelReadout['render'];
 
+    let performance: PerformanceState = createPerformanceState();
+    let lastRebuiltGeneration = clock.generation;
+
+    const currentProfile = (): QualityProfile => {
+        if (typeof document !== 'undefined' && document.hidden) {
+            return suspendedProfile();
+        }
+
+        const profile = profileFor(performance.level);
+        return options.prefersReducedMotion ? applyReducedMotion(profile) : profile;
+    };
+
     if (options.canvas) {
-        const result = createRenderer(options.canvas);
+        const result = createRenderer(options.canvas, {
+            trackId,
+            generation: clock.generation,
+            profile: currentProfile(),
+        });
+
         if (result.ok) {
             renderer = result.renderer;
         } else {
@@ -162,13 +204,30 @@ export function startKernel(options: KernelOptions): KernelHandle {
             deltaSeconds,
         });
 
+        const buffer = options.bufferHealth?.();
+        const previousLevel = performance.level;
+        performance = advancePerformance(performance, {
+            frameTimeMs: wallDelta * 1000,
+            forwardBufferSeconds: buffer?.forwardBufferSeconds,
+            bufferStalled: buffer?.stalled,
+        });
+
+        const profile = currentProfile();
+
         if (renderer) {
-            // Quality is fixed at full until the performance controller lands in M2.
+            // A track change reseeds the scene (section 6.4). A quality step that changes the grammar
+            // rebuilds too, since the scene has to be assembled within the new budget.
+            const grammarChanged = profileFor(previousLevel).reducedGrammar !== profile.reducedGrammar;
+            if (clock.generation !== lastRebuiltGeneration || grammarChanged) {
+                lastRebuiltGeneration = clock.generation;
+                renderer.rebuild(clock.trackId, clock.generation, profile);
+            }
+
             const stats = renderer.renderFrame({
                 clock,
                 features: features.bus,
                 deltaSeconds,
-                qualityScale: 1,
+                profile,
             });
             renderStats = { ...stats, problems: renderer.problems() };
         }
@@ -185,6 +244,19 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 frameTimeMs: wallDelta * 1000,
                 render: renderStats,
                 renderFailure,
+                performance: {
+                    level: performance.level,
+                    downgrades: performance.downgrades,
+                    bufferConstrained: performance.bufferConstrained,
+                    profile,
+                },
+                scene: renderer
+                    ? {
+                        seed: renderer.seed(),
+                        themeId: renderer.themeId(),
+                        pluginIds: renderer.activePluginIds(),
+                    }
+                    : undefined,
             });
         }
 

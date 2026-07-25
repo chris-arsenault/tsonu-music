@@ -42,6 +42,7 @@ export default function AudioDebugPanel() {
             trackId: player.selectedTrack?.trackId ?? null,
             trackDurationSeconds: player.selectedTrack?.durationSeconds ?? 0,
             canvas,
+            getBufferHealth: player.getBufferHealth,
         },
         active,
     );
@@ -107,7 +108,33 @@ export default function AudioDebugPanel() {
                         {readout.render && readout.render.skippedPasses > 0 ? (
                             <Row label="skipped" value={String(readout.render.skippedPasses)} />
                         ) : null}
+                        {readout.performance ? (
+                            <>
+                                <Row
+                                    label="quality"
+                                    value={`L${readout.performance.level}${readout.performance.profile.suspended ? ' suspended' : ''}`}
+                                />
+                                <Row label="scale" value={readout.performance.profile.renderScale.toFixed(2)} />
+                                {readout.performance.bufferConstrained ? (
+                                    <Row label="buffer" value="constrained" />
+                                ) : null}
+                            </>
+                        ) : null}
+                        {readout.scene ? (
+                            <>
+                                <Row label="theme" value={readout.scene.themeId} />
+                                <Row label="seed" value={readout.scene.seed} />
+                            </>
+                        ) : null}
                     </dl>
+
+                    {readout.scene && readout.scene.pluginIds.length > 0 ? (
+                        <ul className="viz-debug__plugins">
+                            {readout.scene.pluginIds.map((id) => (
+                                <li key={id}>{id}</li>
+                            ))}
+                        </ul>
+                    ) : null}
 
                     <div className="viz-debug__meters">
                         {CONTINUOUS_ORDER.map((name) => (

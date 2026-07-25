@@ -33,6 +33,10 @@ export interface SceneDefinition {
 /**
  * Trace into feedback into tone mapping — the smallest scene that exercises geometry passes, a
  * declared feedback loop, and the output stage together.
+ *
+ * The renderer assembles scenes through the scheduler rather than using this. It is kept as a fixed
+ * reference scene: a hand-checked graph that must keep compiling, so a change to the plugin contract or
+ * the graph rules fails a test rather than silently producing an unrenderable scene.
  */
 export function firstLightScene(registry: PluginRegistry): SceneDefinition {
     const trace = required(registry, 'SignalTraceSource:circular');
