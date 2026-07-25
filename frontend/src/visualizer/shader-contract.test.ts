@@ -1,0 +1,195 @@
+/**
+ * Static checks on every shader in the catalog.
+ *
+ * WebGL has no binary shader format, so shaders cannot be compiled ahead of deploy — the browser
+ * compiles the source text at runtime. What can be checked without a driver is the contract between a
+ * plugin's declared parameters and the uniforms its shader actually reads. A parameter with no matching
+ * uniform is a dead binding: the scheduler distributes it, the runtime smooths it, and nothing consumes
+ * it. That is the defect class this file exists to catch, because it is invisible at runtime.
+ *
+ * Real GLSL validation needs a compiler and is tracked in docs/backlog.md.
+ */
+
+import { describe, expect, test } from 'vitest';
+import { allDefinitions } from './plugins/registry';
+import { parameterUniformName } from './core/parameters';
+import type { VisualPluginDefinition } from './core/plugin';
+
+/** Every shader source a plugin registers, vertex and fragment together. */
+function shaderSources(definition: VisualPluginDefinition): { id: string; vertex: string; fragment: string }[] {
+    const sources: { id: string; vertex: string; fragment: string }[] = [];
+    const instance = definition.create({
+        instanceId: 'contract-check',
+        seed: 0.5,
+        registerShader: (source) => sources.push(source),
+    });
+
+    instance.initialize();
+    return sources;
+}
+
+function declaresUniform(source: string, name: string): boolean {
+    return new RegExp(`uniform\\s+\\w+\\s+${name}\\b`).test(source);
+}
+
+/**
+ * Parameters a plugin consumes on the CPU rather than through a uniform.
+ *
+ * Listed explicitly with the reason, so a genuinely dead parameter cannot hide behind a blanket
+ * exemption. Each of these is read in the plugin's `update` to shape geometry or simulation.
+ */
+const CPU_SIDE_PARAMETERS: Record<string, string> = {
+    'SignalTraceSource:amplitude': 'scales the waveform when writing trace vertices',
+    'SpectrumGeometrySource:gain': 'scales spectrum magnitudes when writing vertices',
+    'TransientGlyphSource:scale': 'scales glyph reach when writing glyph geometry',
+    'ImpactCascadeSimulator:energyScale': 'scales collision energy in the CPU-side cascade step',
+    'ParticleSimulator:lifetime': 'bounds particle age in the simulation step',
+    'ParticleRenderer:pointSize': 'set as a vertex-stage point size rather than a fragment uniform',
+};
+
+function isCpuSide(definition: VisualPluginDefinition, parameter: string): boolean {
+    const family = definition.id.split(':')[0];
+    return CPU_SIDE_PARAMETERS[`${family}:${parameter}`] !== undefined;
+}
+
+const CATALOG = allDefinitions();
+
+describe('every shader is structurally well formed', () => {
+    test('the catalog registers shaders to check', () => {
+        const total = CATALOG.reduce((count, definition) => count + shaderSources(definition).length, 0);
+
+        expect(total).toBeGreaterThan(0);
+    });
+
+    test('every fragment shader declares a version and an output', () => {
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                expect(source.fragment.startsWith('#version 300 es'), `${definition.id} fragment version`).toBe(true);
+                expect(source.fragment, `${definition.id} fragment output`).toMatch(/out\s+vec4\s+\w+/);
+                expect(source.fragment, `${definition.id} fragment precision`).toMatch(/precision\s+\w+\s+float/);
+            }
+        }
+    });
+
+    test('every vertex shader declares a version', () => {
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                expect(source.vertex.startsWith('#version 300 es'), `${definition.id} vertex version`).toBe(true);
+            }
+        }
+    });
+
+    test('braces balance, so no shader was truncated by a template seam', () => {
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                for (const [stage, text] of [['vertex', source.vertex], ['fragment', source.fragment]] as const) {
+                    const opens = (text.match(/\{/g) ?? []).length;
+                    const closes = (text.match(/\}/g) ?? []).length;
+                    expect(opens, `${definition.id} ${stage} braces`).toBe(closes);
+                }
+            }
+        }
+    });
+
+    test('no shader interpolates an undefined value', () => {
+        // A template literal referencing a missing constant produces the literal text "undefined".
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                expect(source.fragment.includes('undefined'), `${definition.id} fragment`).toBe(false);
+                expect(source.vertex.includes('undefined'), `${definition.id} vertex`).toBe(false);
+            }
+        }
+    });
+});
+
+describe('declared parameters reach a uniform', () => {
+    test('every parameter is either a declared uniform or a listed CPU-side value', () => {
+        const dead: string[] = [];
+
+        for (const definition of CATALOG) {
+            const sources = shaderSources(definition);
+            const combined = sources.map((source) => `${source.vertex}\n${source.fragment}`).join('\n');
+
+            for (const parameter of Object.keys(definition.parameters ?? {})) {
+                if (declaresUniform(combined, parameterUniformName(parameter)) || isCpuSide(definition, parameter)) {
+                    continue;
+                }
+
+                dead.push(`${definition.id}.${parameter} (expected ${parameterUniformName(parameter)})`);
+            }
+        }
+
+        expect(dead, 'parameters nothing consumes').toEqual([]);
+    });
+
+    test('every bound parameter is consumed, so no binding is decorative', () => {
+        // Stricter than the above: an unbound parameter that nothing reads is merely untidy, but a bound
+        // one means the scheduler is distributing reactivity into a void.
+        const dead: string[] = [];
+
+        for (const definition of CATALOG) {
+            const combined = shaderSources(definition)
+                .map((source) => `${source.vertex}\n${source.fragment}`)
+                .join('\n');
+
+            for (const binding of definition.defaultBindings ?? []) {
+                const consumed = declaresUniform(combined, parameterUniformName(binding.parameter))
+                    || isCpuSide(definition, binding.parameter);
+
+                if (!consumed) {
+                    dead.push(`${definition.id}.${binding.parameter} bound to ${binding.feature}`);
+                }
+            }
+        }
+
+        expect(dead, 'bindings driving nothing').toEqual([]);
+    });
+
+    test('every CPU-side exemption still names a declared parameter', () => {
+        // Keeps the allowlist from outliving the parameter it excuses.
+        for (const key of Object.keys(CPU_SIDE_PARAMETERS)) {
+            const [family, parameter] = key.split(':');
+            const matching = CATALOG.filter((definition) => definition.id.split(':')[0] === family);
+
+            expect(matching.length, `${family} is registered`).toBeGreaterThan(0);
+            expect(
+                matching.some((definition) => definition.parameters?.[parameter] !== undefined),
+                `${key} still exists`,
+            ).toBe(true);
+        }
+    });
+
+    test('a uniform the runtime always supplies is declared where it is used', () => {
+        // uResolution is set on every pass; a shader referencing it without declaring it will not compile.
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                if (/\buResolution\b/.test(source.fragment)) {
+                    expect(
+                        declaresUniform(source.fragment, 'uResolution'),
+                        `${definition.id} declares uResolution`,
+                    ).toBe(true);
+                }
+            }
+        }
+    });
+});
+
+describe('impact-driven shaders declare the impact uniforms they are given', () => {
+    test('a plugin reading impacts declares the uniforms the runtime sets', () => {
+        const consumers = CATALOG.filter((definition) =>
+            definition.capabilities.includes('impact-consumer')
+            && !definition.id.startsWith('TransientGlyphSource'));
+
+        expect(consumers.length).toBeGreaterThan(0);
+
+        for (const definition of consumers) {
+            const combined = shaderSources(definition)
+                .map((source) => source.fragment)
+                .join('\n');
+
+            expect(declaresUniform(combined, 'uImpactEnergy'), `${definition.id}`).toBe(true);
+            expect(declaresUniform(combined, 'uImpactRadius'), `${definition.id}`).toBe(true);
+            expect(declaresUniform(combined, 'uImpactCentre'), `${definition.id}`).toBe(true);
+        }
+    });
+});

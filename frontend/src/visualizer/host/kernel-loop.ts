@@ -63,6 +63,9 @@ export interface KernelReadout {
         passesExecuted: number;
         targetsAllocated: number;
         skippedPasses: number;
+        suppressedPlugins: number;
+        /** Programs still linking. Non-zero only briefly after a scene change. */
+        pendingShaders: number;
         problems: string[];
     };
     renderFailure?: RendererFailure;

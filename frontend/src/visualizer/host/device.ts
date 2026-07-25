@@ -13,6 +13,8 @@ import type { BlendMode, GeometryUpload, Primitive, ShaderSource, UniformValue }
 
 export interface DeviceCapabilities {
     floatRenderTargets: boolean;
+    /** True when link status can be polled without blocking on the driver. */
+    parallelShaderCompile: boolean;
     maxTextureSize: number;
     maxRenderbufferSize: number;
     /** Highest device pixel ratio the device will render at, capped to stay off full retina. */
@@ -48,6 +50,10 @@ export interface Device {
     readonly canvas: HTMLCanvasElement;
 
     registerShader(source: ShaderSource): void;
+    /** Promotes programs the driver has finished linking. Call once per frame. */
+    advanceCompilation(): void;
+    /** Programs linked but not yet ready, for the diagnostics overlay. */
+    pendingShaderCount(): number;
     hasShader(id: string): boolean;
     /** Compilation problems collected at registration, for the diagnostics overlay. */
     shaderErrors(): { id: string; message: string }[];
@@ -98,15 +104,22 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
     }
 
     const floatExtension = gl.getExtension('EXT_color_buffer_float');
+    // Lets link status be polled instead of blocking. Without it, a program linked mid-playback stalls
+    // the main thread at the first status check — which is exactly when a mutation swaps a plugin in.
+    const parallelCompile = gl.getExtension('KHR_parallel_shader_compile') as
+        { COMPLETION_STATUS_KHR: number } | null;
 
     const capabilities: DeviceCapabilities = {
         floatRenderTargets: floatExtension !== null,
+        parallelShaderCompile: parallelCompile !== null,
         maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) as number,
         maxRenderbufferSize: gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number,
         maxPixelRatio: Math.min(MAX_PIXEL_RATIO, typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1),
     };
 
     const programs = new Map<string, Program>();
+    /** Linked but not yet validated. Checked without blocking until the driver reports completion. */
+    const pending = new Map<string, { program: WebGLProgram; source: ShaderSource }>();
     const errors: { id: string; message: string }[] = [];
     const targets = new Map<string, RenderTarget>();
     const assetTextures = new Map<string, WebGLTexture>();
@@ -145,6 +158,41 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
         return shader;
     }
 
+    /**
+     * Validates a linked program and records its uniform and attribute locations.
+     *
+     * Reading `LINK_STATUS` is the blocking call, so this runs only once the driver has finished — or, on
+     * a device without the extension, at most once per frame.
+     */
+    function finalizeProgram(id: string, program: WebGLProgram, source: ShaderSource): void {
+        if (!gl!.getProgramParameter(program, gl!.LINK_STATUS)) {
+            errors.push({ id: source.id, message: gl!.getProgramInfoLog(program) ?? 'unknown link error' });
+            gl!.deleteProgram(program);
+            return;
+        }
+
+        const uniforms = new Map<string, WebGLUniformLocation>();
+        const uniformCount = gl!.getProgramParameter(program, gl!.ACTIVE_UNIFORMS) as number;
+        for (let index = 0; index < uniformCount; index += 1) {
+            const info = gl!.getActiveUniform(program, index);
+            const location = info && gl!.getUniformLocation(program, info.name);
+            if (info && location) {
+                uniforms.set(info.name, location);
+            }
+        }
+
+        const attributes = new Map<string, number>();
+        const attributeCount = gl!.getProgramParameter(program, gl!.ACTIVE_ATTRIBUTES) as number;
+        for (let index = 0; index < attributeCount; index += 1) {
+            const info = gl!.getActiveAttrib(program, index);
+            if (info) {
+                attributes.set(info.name, gl!.getAttribLocation(program, info.name));
+            }
+        }
+
+        programs.set(id, { program, uniforms, attributes });
+    }
+
     const device: Device = {
         gl,
         capabilities,
@@ -172,32 +220,41 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             gl.deleteShader(vertex);
             gl.deleteShader(fragment);
 
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                errors.push({ id: source.id, message: gl.getProgramInfoLog(program) ?? 'unknown link error' });
-                gl.deleteProgram(program);
+            // Deferred rather than checked here: reading LINK_STATUS blocks until the driver finishes.
+            // The pass that wants this program is skipped for the frames it takes to become ready.
+            pending.set(source.id, { program, source });
+        },
+
+        /**
+         * Promotes any program the driver has finished linking.
+         *
+         * Called once per frame. With `KHR_parallel_shader_compile` the completion check is free; without
+         * it, the status read blocks — so at most one program is promoted per frame to bound the stall.
+         */
+        advanceCompilation() {
+            if (pending.size === 0) {
                 return;
             }
 
-            const uniforms = new Map<string, WebGLUniformLocation>();
-            const uniformCount = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS) as number;
-            for (let index = 0; index < uniformCount; index += 1) {
-                const info = gl.getActiveUniform(program, index);
-                const location = info && gl.getUniformLocation(program, info.name);
-                if (info && location) {
-                    uniforms.set(info.name, location);
-                }
-            }
+            let promotedThisFrame = 0;
 
-            const attributes = new Map<string, number>();
-            const attributeCount = gl.getProgramParameter(program, gl.ACTIVE_ATTRIBUTES) as number;
-            for (let index = 0; index < attributeCount; index += 1) {
-                const info = gl.getActiveAttrib(program, index);
-                if (info) {
-                    attributes.set(info.name, gl.getAttribLocation(program, info.name));
+            for (const [id, entry] of [...pending]) {
+                if (!capabilities.parallelShaderCompile) {
+                    if (promotedThisFrame >= 1) {
+                        break;
+                    }
+                } else if (!gl.getProgramParameter(entry.program, parallelCompile!.COMPLETION_STATUS_KHR)) {
+                    continue;
                 }
-            }
 
-            programs.set(source.id, { program, uniforms, attributes });
+                pending.delete(id);
+                promotedThisFrame += 1;
+                finalizeProgram(id, entry.program, entry.source);
+            }
+        },
+
+        pendingShaderCount() {
+            return pending.size;
         },
 
         hasShader(id) {
@@ -429,6 +486,11 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
                 gl.deleteVertexArray(entry.vao);
             }
             geometries.clear();
+
+            for (const entry of pending.values()) {
+                gl.deleteProgram(entry.program);
+            }
+            pending.clear();
 
             for (const texture of assetTextures.values()) {
                 gl.deleteTexture(texture);

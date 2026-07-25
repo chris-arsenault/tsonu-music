@@ -71,6 +71,10 @@ export default function DiagnosticsPanel({
                     <Row label="frame" value={`${readout.frameTimeMs.toFixed(1)}ms`} />
                     <Row label="passes" value={String(readout.render?.passesExecuted ?? 0)} />
                     <Row label="skipped" value={String(readout.render?.skippedPasses ?? 0)} />
+                    <Row label="suppressed" value={String(readout.render?.suppressedPlugins ?? 0)} />
+                    <Row label="compiling" value={String(readout.render?.pendingShaders ?? 0)} />
+                    <Row label="layers" value={String(readout.scene?.layerCount ?? 0)} />
+                    <Row label="mutation" value={readout.scene?.lastMutation ?? 'none'} />
                     <Row label="targets" value={String(readout.render?.targetsAllocated ?? 0)} />
                     <Row label="downgrades" value={String(readout.performance?.downgrades ?? 0)} />
                     <Row label="buffer" value={readout.performance?.bufferConstrained ? 'constrained' : 'healthy'} />

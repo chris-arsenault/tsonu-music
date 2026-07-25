@@ -76,6 +76,8 @@ export interface RuntimeStats {
     skippedPasses: number;
     /** Plugins the quality ladder switched off this frame. */
     suppressedPlugins: number;
+    /** Programs still linking. A pass whose program is not ready is skipped, not stalled on. */
+    pendingShaders: number;
 }
 
 export interface Runtime {
@@ -175,7 +177,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         },
 
         renderFrame(frame) {
-            const stats: RuntimeStats = { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
+            const stats: RuntimeStats = { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0, pendingShaders: 0 };
             if (!graph || device.isLost()) {
                 return stats;
             }
@@ -215,6 +217,9 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             if (frame.clearTransients) {
                 impacts = clearImpacts();
             }
+
+            // Programs linked since the last frame become usable here rather than blocking at first use.
+            device.advanceCompilation();
 
             device.releaseUnused(liveKeys(plan));
             for (const target of plan.targets) {
@@ -332,6 +337,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 present(device, plan, frame, presentShaderId, stats);
             }
 
+            stats.pendingShaders = device.pendingShaderCount();
             return stats;
         },
 

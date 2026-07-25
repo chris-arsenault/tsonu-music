@@ -327,7 +327,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             renderFrame(frame) {
                 // Section 21.3: nothing renders when suspended, at the ladder's floor or page-hidden.
                 if (frame.profile.suspended) {
-                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
+                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0, pendingShaders: 0 };
                 }
 
                 if (device.isLost()) {
@@ -338,7 +338,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         runtime.reinitialize();
                         device.registerShader(PRESENT_SHADER);
                     }
-                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0 };
+                    return { passesExecuted: 0, targetsAllocated: 0, skippedPasses: 0, suppressedPlugins: 0, pendingShaders: 0 };
                 }
 
                 lostHandled = false;

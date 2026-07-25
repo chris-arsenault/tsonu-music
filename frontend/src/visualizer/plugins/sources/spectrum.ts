@@ -299,6 +299,15 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         }),
         activationRules: { activationWeight: 1.5, minimumDuration: 6 },
         parameters: { scale: 1 },
+        defaultBindings: [{
+            // Onset strength already sets a glyph's brightness; peak level sets how far it reaches.
+            feature: 'peak',
+            parameter: 'scale',
+            outputRange: [0.6, 1.5],
+            attack: 0.04,
+            release: 0.35,
+            curve: 'sqrt',
+        }],
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
@@ -353,7 +362,14 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                     }
 
                     glyphs = glyphs.slice(-MAX_GLYPHS);
-                    count = writeGlyphs(mode, glyphs, LIFETIME, vertices, POINTS_PER_GLYPH);
+                    count = writeGlyphs(
+                        mode,
+                        glyphs,
+                        LIFETIME,
+                        vertices,
+                        POINTS_PER_GLYPH,
+                        frame.parameters.scale ?? 1,
+                    );
 
                     frame.uploadGeometry({
                         id: GLYPH_GEOMETRY,
@@ -403,6 +419,8 @@ export function writeGlyphs(
     lifetime: number,
     vertices: Float32Array,
     pointsPerGlyph: number,
+    /** How far a glyph reaches at full age. Driven by level, so louder passages throw wider marks. */
+    scale = 1,
 ): number {
     let written = 0;
     const capacity = Math.floor(vertices.length / 3);
@@ -410,7 +428,7 @@ export function writeGlyphs(
     for (const glyph of glyphs) {
         const progress = Math.min(1, glyph.age / lifetime);
         const fade = (1 - progress) * glyph.strength;
-        const radius = 0.05 + progress * 0.45;
+        const radius = (0.05 + progress * 0.45) * scale;
 
         for (let segment = 0; segment < pointsPerGlyph / 2; segment += 1) {
             if (written + 2 > capacity) {
