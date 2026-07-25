@@ -60,7 +60,7 @@ module "ctx" {
 # with tsonu.com, www.tsonu.com, and music.ahara.io as additional aliases.
 # All four hostnames resolve to the same CloudFront distribution.
 module "frontend" {
-  source = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/website"
+  source = "git::https://github.com/chris-arsenault/ahara-tf-patterns.git//modules/website?ref=31cb98dc59826c61824409ac3ff3085abf3e372b"
 
   prefix         = local.prefix
   hostname       = local.frontend_hostname

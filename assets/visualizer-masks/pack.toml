@@ -16,7 +16,7 @@ model = "flux-2-pro"
 #   with-cred -- node dist/cli.js generate ~/repos/tsonu-music/assets/visualizer-masks --and-process
 #
 # Then copy output/processed/masks/*.png into frontend/public/masks/ and add manifest entries.
-# See frontend/public/masks/README.md.
+# See docs/visualizer-masks.md.
 
 [defaults]
 size = "1024x1024"
