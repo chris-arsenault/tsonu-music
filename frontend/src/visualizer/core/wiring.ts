@@ -42,9 +42,9 @@ export function instanceIdFor(definition: VisualPluginDefinition, index: number)
  * parallel off the same input.
  */
 export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScene {
-    const ordered = [...plugins].sort(
+    const ordered = orderByDependency([...plugins].sort(
         (left, right) => CHAIN_ORDER.indexOf(left.category) - CHAIN_ORDER.indexOf(right.category),
-    );
+    ));
 
     const nodes: GraphNode[] = ordered.map((definition, index) => ({
         instanceId: instanceIdFor(definition, index),
@@ -113,6 +113,58 @@ export function wireScene(plugins: readonly VisualPluginDefinition[]): WiredScen
     }
 
     return { nodes, edges, present: resolvePresent(nodes), unsatisfied };
+}
+
+/**
+ * Reorders so a plugin's producers come before it, preserving the category sort otherwise.
+ *
+ * Category order alone is not enough: two plugins in the same category can depend on one another, as a
+ * mask containment field depends on the distance field beside it. Without this, wiring would look for a
+ * producer that has not been registered yet and report the input as unsatisfiable.
+ */
+function orderByDependency(
+    plugins: readonly VisualPluginDefinition[],
+): VisualPluginDefinition[] {
+    const remaining = [...plugins];
+    const ordered: VisualPluginDefinition[] = [];
+    const produced = new Set<PluginPort['type']>();
+
+    while (remaining.length > 0) {
+        const readyIndex = remaining.findIndex((definition) =>
+            definition.inputs
+                .filter((port) => port.required)
+                .every((port) => satisfiedBy(produced, definition, port)));
+
+        // Nothing is ready, so the rest depend on something absent. Emit in place and let wiring
+        // report the unsatisfied inputs rather than looping forever.
+        const index = readyIndex >= 0 ? readyIndex : 0;
+        const next = remaining.splice(index, 1)[0];
+
+        ordered.push(next);
+        for (const port of next.outputs) {
+            produced.add(port.type);
+        }
+    }
+
+    return ordered;
+}
+
+function satisfiedBy(
+    produced: ReadonlySet<PluginPort['type']>,
+    definition: VisualPluginDefinition,
+    port: PluginPort,
+): boolean {
+    if (isFeedbackPort(port) && declaresFeedback(definition)) {
+        return true;
+    }
+
+    for (const type of produced) {
+        if (portsCompatible(type, port.type)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 function findProducer(

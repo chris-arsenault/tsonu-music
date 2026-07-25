@@ -10,8 +10,21 @@ import type { GraphNode, RenderGraphEdge } from '../core/graph';
 import { createSignalTraceSource, SIGNAL_TRACE_MODES } from './sources/signal-trace';
 import { createFeedbackFlowTransform, FEEDBACK_FLOW_MODES } from './transformers/feedback-flow';
 import { createToneMapper } from './postprocess/tone-mapper';
+import {
+    createAlbumArtDisplacement,
+    createAlbumArtEdges,
+    createAlbumArtPalette,
+    createAlbumArtSource,
+    createImageLuminanceField,
+} from './sources/album-art';
+import {
+    createMaskBoundaryField,
+    createMaskContainmentField,
+    createMaskEffectStencil,
+    createMaskSignedDistanceField,
+} from './fields/mask-fields';
 
-/** Every plugin available in M1: each mode of each transformer plus the tone mapper. */
+/** Signal-derived and procedural plugins, available whether or not any asset is loaded. */
 export function m1Definitions(): VisualPluginDefinition[] {
     return [
         ...SIGNAL_TRACE_MODES.map(createSignalTraceSource),
@@ -20,8 +33,30 @@ export function m1Definitions(): VisualPluginDefinition[] {
     ];
 }
 
+/**
+ * Asset-derivation plugins. Registered unconditionally; their `requiredAssets` rules are what keep them
+ * inactive until an asset is actually loaded, so artwork and masks stay optional.
+ */
+export function assetDefinitions(): VisualPluginDefinition[] {
+    return [
+        createAlbumArtSource(),
+        createAlbumArtPalette(),
+        createAlbumArtEdges(),
+        createAlbumArtDisplacement(),
+        createImageLuminanceField(),
+        createMaskSignedDistanceField(),
+        createMaskContainmentField(),
+        createMaskEffectStencil(),
+        createMaskBoundaryField(),
+    ];
+}
+
+export function allDefinitions(): VisualPluginDefinition[] {
+    return [...m1Definitions(), ...assetDefinitions()];
+}
+
 export function createM1Registry(): PluginRegistry {
-    return createPluginRegistry(m1Definitions());
+    return createPluginRegistry(allDefinitions());
 }
 
 export interface SceneDefinition {

@@ -9,6 +9,7 @@ import {
     DEFAULT_MUTATION_POLICY,
     eligiblePlugins,
     ineligibleReason,
+    inputsSatisfiable,
     pickReplacement,
     selectionWeight,
     type ActivePluginRecord,
@@ -226,6 +227,72 @@ describe('character fit', () => {
         const never = plugin('never', 'source', { activationRules: { activationWeight: 0 } });
 
         expect(selectionWeight(never, context())).toBe(0);
+    });
+});
+
+describe('dependency awareness', () => {
+    const producer = plugin('producer', 'field', {
+        outputs: [{ name: 'sdf', type: 'distance-field', required: false }],
+    });
+    const consumer = plugin('consumer', 'field', {
+        inputs: [{ name: 'field', type: 'distance-field', required: true }],
+        outputs: [{ name: 'out', type: 'mask-texture', required: false }],
+    });
+
+    test('a consumer is unsatisfiable with nothing chosen', () => {
+        expect(inputsSatisfiable([], consumer)).toBe(false);
+    });
+
+    test('a consumer becomes satisfiable once its producer is chosen', () => {
+        expect(inputsSatisfiable([producer], consumer)).toBe(true);
+    });
+
+    test('a plugin with no required inputs is always satisfiable', () => {
+        expect(inputsSatisfiable([], producer)).toBe(true);
+    });
+
+    test('an optional input never blocks selection', () => {
+        const optional = plugin('optional', 'transformer', {
+            inputs: [{ name: 'mask', type: 'mask-texture', required: false }],
+        });
+
+        expect(inputsSatisfiable([], optional)).toBe(true);
+    });
+
+    test('a feedback plugin satisfies its own history port', () => {
+        const feedback = plugin('feedback', 'transformer', {
+            capabilities: ['feedback'],
+            inputs: [{ name: 'history', type: 'color-texture', required: true }],
+        });
+
+        expect(inputsSatisfiable([], feedback)).toBe(true);
+    });
+
+    test('compatible substitution counts as satisfaction', () => {
+        const wantsMask = plugin('wants-mask', 'transformer', {
+            inputs: [{ name: 'mask', type: 'mask-texture', required: true }],
+        });
+
+        // A distance field satisfies a mask input, per the graph's compatibility rules.
+        expect(inputsSatisfiable([producer], wantsMask)).toBe(true);
+    });
+
+    test('assembly never selects a consumer without its producer', () => {
+        const catalog = [
+            plugin('src', 'source'),
+            producer,
+            consumer,
+            plugin('post', 'postprocess'),
+        ];
+
+        for (const seed of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6']) {
+            const scene = assembleScene(seed, context({ available: catalog }));
+            const ids = scene.plugins.map((entry) => entry.id);
+
+            if (ids.includes('consumer')) {
+                expect(ids, seed).toContain('producer');
+            }
+        }
     });
 });
 

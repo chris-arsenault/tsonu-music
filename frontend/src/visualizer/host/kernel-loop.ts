@@ -21,6 +21,12 @@ import {
     type AudioFeatureBus,
 } from '../core/features';
 import {
+    albumArtAssetFrom,
+    availableAssetIds,
+    type VisualAsset,
+} from '../core/assets';
+import { loadMaskAssets } from './asset-loader';
+import {
     advancePerformance,
     applyReducedMotion,
     createPerformanceState,
@@ -75,6 +81,8 @@ export interface KernelOptions {
     prefersReducedMotion?: boolean;
     /** Reports HLS forward-buffer health. Omit when unavailable; frame time is then the only input. */
     bufferHealth?: () => { forwardBufferSeconds?: number; stalled?: boolean };
+    /** Album artwork for asset-derivation plugins. Omit to run without artwork. */
+    artworkSrc?: string;
     /** Called at a throttled rate for display; never once per frame. */
     onReadout: (readout: KernelReadout) => void;
 }
@@ -142,6 +150,27 @@ export function startKernel(options: KernelOptions): KernelHandle {
             console.warn('[visualizer] renderer unavailable', result.failure, result.detail ?? '');
         }
     }
+
+    // Masks load asynchronously and are optional, so the scene starts without them and is rebuilt once
+    // they arrive rather than blocking the first frame on a fetch.
+    void loadMaskAssets().then((masks) => {
+        if (!running || !renderer) {
+            return;
+        }
+
+        const assets: VisualAsset[] = [...masks];
+        if (options.artworkSrc) {
+            assets.push(albumArtAssetFrom(options.artworkSrc));
+        }
+
+        const ids = availableAssetIds(assets);
+        if (ids.length === 0) {
+            return;
+        }
+
+        renderer.setAssets(ids);
+        renderer.rebuild(clock.trackId, clock.generation, currentProfile());
+    });
 
     void acquireTap(element)
         .then(async (acquired) => {

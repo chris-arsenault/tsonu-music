@@ -1,0 +1,128 @@
+title = "Tsonu Visualizer Masks"
+preset = "glacial-archive"
+model = "flux-2-pro"
+
+# Spatial-control masks for the tsonu-music visualizer. These are not pictures: the visualizer
+# converts each one into a signed distance field, gradient field, and stencil, so what matters is a
+# clean continuous boundary and nothing else.
+#
+# Generate with:
+#   cd ~/repos/illuminator
+#   with-cred -- node dist/cli.js generate ~/repos/tsonu-music/assets/visualizer-masks --and-process
+#
+# Then copy output/processed/masks/*.png into frontend/public/masks/ and add manifest entries.
+# See frontend/public/masks/README.md.
+
+[defaults]
+size = "1024x1024"
+aspect = "1:1"
+
+# Overrides the preset's art direction entirely. A mask has no palette, no lighting, and no medium:
+# every one of those would put values into the image that the distance field would then misread.
+[style.stencil]
+name = "Stencil"
+artistic = "flat two-tone stencil, pure white shape on pure black field, no shading, no texture, no gradient, no outline, no perspective"
+composition = "single centered shape filling most of the frame with even margins, nothing cropped at the edges"
+medium_notes = "hard-edged vector-like silhouette, uniform fill, maximum contrast between shape and field"
+
+[palette.monochrome]
+name = "Monochrome"
+primary = ["#FFFFFF"]
+secondary = ["#000000"]
+notes = "Two values only. Any third value becomes an ambiguous boundary in the derived distance field."
+
+# --- Rorschach-style organic masks ---
+
+[[section]]
+id = "inkblots"
+title = "Inkblots"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "inkblot-symmetric"
+file = "masks/inkblot-symmetric.png"
+type = "mask"
+prompt_inline = """
+A bilaterally symmetrical inkblot silhouette, wide and rounded, with several soft lobes reaching
+outward from a heavier centre mass and two narrow gaps piercing the interior.
+"""
+
+[[section.asset]]
+id = "inkblot-tall"
+file = "masks/inkblot-tall.png"
+type = "mask"
+prompt_inline = """
+A tall bilaterally symmetrical inkblot silhouette, narrow at the base and spreading into two broad
+upper wings, with a single hollow at its centre.
+"""
+
+[[section.asset]]
+id = "inkblot-scattered"
+file = "masks/inkblot-scattered.png"
+type = "mask"
+prompt_inline = """
+A symmetrical inkblot broken into one large central mass and four smaller detached islands, evenly
+distributed and clearly separated from one another.
+"""
+
+# --- Geometric and architectural masks ---
+
+[[section]]
+id = "geometric"
+title = "Geometric"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "mandala-eightfold"
+file = "masks/mandala-eightfold.png"
+type = "mask"
+prompt_inline = """
+An eightfold rotationally symmetrical mandala silhouette built from interlocking petal shapes around
+an open circular centre, with clear separation between every petal.
+"""
+
+[[section.asset]]
+id = "lattice-hex"
+file = "masks/lattice-hex.png"
+type = "mask"
+prompt_inline = """
+A hexagonal lattice of connected struts filling the frame evenly, with uniform strut thickness and
+regular open cells between them.
+"""
+
+[[section.asset]]
+id = "arch-window"
+file = "masks/arch-window.png"
+type = "mask"
+prompt_inline = """
+A tall pointed arch window silhouette with three vertical lights divided by slender mullions and
+simple tracery filling the head of the arch.
+"""
+
+# --- Organic natural forms ---
+
+[[section]]
+id = "organic"
+title = "Organic"
+style = "stencil"
+palette = "monochrome"
+
+[[section.asset]]
+id = "branch-network"
+file = "masks/branch-network.png"
+type = "mask"
+prompt_inline = """
+A branching network silhouette radiating from a single central trunk, dividing repeatedly into finer
+limbs that reach evenly toward every edge without touching them.
+"""
+
+[[section.asset]]
+id = "wave-crest"
+file = "masks/wave-crest.png"
+type = "mask"
+prompt_inline = """
+A breaking wave silhouette with a long curling crest and scattered droplets above it, reading as one
+continuous mass with a few clearly detached fragments.
+"""

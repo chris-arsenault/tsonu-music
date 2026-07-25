@@ -15,6 +15,8 @@ export interface KernelSubject {
     canvas?: HTMLCanvasElement | null;
     /** Omit when buffer telemetry is unavailable; frame time is then the only performance input. */
     getBufferHealth?: () => { forwardBufferSeconds?: number; stalled?: boolean };
+    /** Album artwork for asset-derivation plugins. Omit to run without artwork. */
+    artworkSrc?: string;
 }
 
 export interface KernelState {
@@ -42,10 +44,12 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
     const trackIdRef = useRef(subject.trackId);
     const durationRef = useRef(subject.trackDurationSeconds);
     const bufferHealthRef = useRef(subject.getBufferHealth);
+    const artworkRef = useRef(subject.artworkSrc);
     getElementRef.current = subject.getAudioElement;
     trackIdRef.current = subject.trackId;
     durationRef.current = subject.trackDurationSeconds;
     bufferHealthRef.current = subject.getBufferHealth;
+    artworkRef.current = subject.artworkSrc;
 
     useEffect(() => {
         const resolved = getElementRef.current();
@@ -67,6 +71,7 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
             trackId: trackIdRef.current,
             trackDurationSeconds: durationRef.current,
             prefersReducedMotion: availability?.prefersReducedMotion,
+            artworkSrc: artworkRef.current,
             bufferHealth: bufferHealthRef.current
                 ? () => bufferHealthRef.current!()
                 : undefined,

@@ -13,8 +13,10 @@ import {
     wouldViolate,
     type SceneGrammar,
 } from './grammar';
+import { portsCompatible } from './graph';
 import type {
     PluginCategory,
+    PortType,
     SelectionCharacter,
     VisualPluginDefinition,
 } from './plugin';
@@ -219,6 +221,34 @@ export interface AssembledScene {
     violations: ReturnType<typeof grammarViolations>;
 }
 
+/**
+ * Whether everything `candidate` requires is produced by something already chosen.
+ *
+ * Without this the scheduler can pick a consumer without its producer — a mask containment field with
+ * no distance field to read — and the scene fails to wire. Selection has to understand dependencies,
+ * not just categories and weights.
+ */
+export function inputsSatisfiable(
+    chosen: readonly VisualPluginDefinition[],
+    candidate: VisualPluginDefinition,
+): boolean {
+    const produced = new Set<PortType>();
+    for (const definition of chosen) {
+        for (const port of definition.outputs) {
+            produced.add(port.type);
+        }
+    }
+
+    // A feedback-capable plugin closes its own history port, so that one needs no upstream producer.
+    const selfSatisfied = candidate.capabilities.includes('feedback')
+        ? new Set(candidate.outputs.map((port) => port.type))
+        : new Set<PortType>();
+
+    return candidate.inputs
+        .filter((port) => port.required)
+        .every((port) => [...produced, ...selfSatisfied].some((type) => portsCompatible(type, port.type)));
+}
+
 /** Category fill order: sources first so later choices have something to work on. */
 const FILL_ORDER: readonly PluginCategory[] = [
     'source',
@@ -263,7 +293,9 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
 
         for (let slot = 0; slot < target; slot += 1) {
             const candidates = pool.filter((definition) =>
-                !conflictsWith(chosen, definition) && !wouldViolate(chosen, definition, grammar));
+                !conflictsWith(chosen, definition)
+                && !wouldViolate(chosen, definition, grammar)
+                && inputsSatisfiable(chosen, definition));
 
             const picked = rng.weighted(candidates, (definition) => selectionWeight(definition, context));
             if (!picked) {
@@ -277,7 +309,9 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
     // A scene requiring a visible source that has none is unusable, so try once to add one.
     if (grammar.requireVisibleSource && !chosen.some(isVisibleSource)) {
         const visible = eligible.filter((definition) =>
-            isVisibleSource(definition) && !conflictsWith(chosen, definition));
+            isVisibleSource(definition)
+            && !conflictsWith(chosen, definition)
+            && inputsSatisfiable(chosen, definition));
         const picked = rng.weighted(visible, (definition) => selectionWeight(definition, context));
         if (picked) {
             chosen.push(picked);

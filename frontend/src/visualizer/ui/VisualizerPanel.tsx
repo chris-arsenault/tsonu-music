@@ -29,6 +29,7 @@ export default function VisualizerPanel() {
             trackDurationSeconds: player.selectedTrack?.durationSeconds ?? 0,
             canvas: glCanvas,
             getBufferHealth: player.getBufferHealth,
+            artworkSrc: player.artworkSrc,
         },
         enabled && expanded,
     );

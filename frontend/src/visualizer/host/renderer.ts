@@ -32,6 +32,9 @@ export interface Renderer {
     problems(): string[];
     /** Rebuilds the scene for a new seed, on track change or scene mutation. */
     rebuild(trackId: string | null, generation: number, profile: QualityProfile): boolean;
+    /** Replaces the resolvable asset set. Takes effect on the next rebuild. */
+    setAssets(ids: readonly string[]): void;
+    availableAssets(): readonly string[];
     /** Ids of the active plugins, for the diagnostics overlay. */
     activePluginIds(): string[];
     themeId(): string;
@@ -53,7 +56,10 @@ export interface RendererOptions {
     trackId: string | null;
     generation: number;
     profile: QualityProfile;
-    /** Asset ids currently resolvable, for plugins that require them. */
+    /**
+     * Asset ids currently resolvable, for plugins declaring `requiredAssets`. An empty list is normal
+     * and is what keeps artwork and masks optional rather than required.
+     */
     assets?: readonly string[];
 }
 
@@ -73,13 +79,15 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     const themes = satisfiableThemes(categories);
     const deviceCapabilities = ['float-textures', 'webgl2'];
 
+    let assetIds: readonly string[] = options.assets ?? [];
+
     function build(trackId: string | null, generation: number, profile: QualityProfile) {
         return buildFirstViableScene(
             sceneSeed(trackId, generation),
             themes,
             {
                 available: registry.all(),
-                assets: options.assets ?? [],
+                assets: assetIds,
                 capabilities: deviceCapabilities,
                 history: {},
                 playbackTime: 0,
@@ -171,6 +179,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 runtime.setGraph(scene.graph, instances);
 
                 return true;
+            },
+
+            setAssets(ids) {
+                assetIds = ids;
+            },
+
+            availableAssets() {
+                return assetIds;
             },
 
             activePluginIds() {
