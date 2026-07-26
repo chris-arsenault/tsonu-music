@@ -52,9 +52,29 @@ export interface ResourceDescriptor {
     port: string;
 }
 
+/**
+ * One reason a graph did not compile, attributed to whatever caused it.
+ *
+ * A flat list of strings is enough to log and not enough to show: an editor has to put the message
+ * on the node or the edge at fault, and recovering that from prose is guesswork. `errors` remains
+ * the same list of strings it always was, projected from these.
+ */
+export interface CompileProblem {
+    detail: string;
+    /** The node at fault, when one node is. */
+    instanceId?: string;
+    /** The port on that node, when the fault is about a port. */
+    port?: string;
+    /** Both endpoints, when the fault is about a connection rather than a node. */
+    edge?: {
+        from: { instanceId: string; port: string };
+        to: { instanceId: string; port: string };
+    };
+}
+
 export type CompileResult =
     | { ok: true; graph: CompiledGraph }
-    | { ok: false; errors: string[] };
+    | { ok: false; errors: string[]; problems: CompileProblem[] };
 
 /**
  * Types that may be substituted for one another. A distance field is a single-channel texture, so a
@@ -90,12 +110,15 @@ export function compileGraph(
      */
     assetBindings: readonly { instanceId: string; port: string; resource: ResourceId }[] = [],
 ): CompileResult {
-    const errors: string[] = [];
+    const problems: CompileProblem[] = [];
     const byInstance = new Map<string, GraphNode>();
 
     for (const node of nodes) {
         if (byInstance.has(node.instanceId)) {
-            errors.push(`duplicate instance ${node.instanceId}`);
+            problems.push({
+                detail: `duplicate instance ${node.instanceId}`,
+                instanceId: node.instanceId,
+            });
         }
         byInstance.set(node.instanceId, node);
     }
@@ -112,21 +135,23 @@ export function compileGraph(
         }
     }
 
-    errors.push(...validateEdges(byInstance, edges));
-    if (errors.length > 0) {
-        return { ok: false, errors };
+    problems.push(...validateEdges(byInstance, edges));
+    if (problems.length > 0) {
+        return failed(problems);
     }
 
-    errors.push(...validateRequiredInputs(nodes, edges, assetBindings));
+    problems.push(...validateRequiredInputs(nodes, edges, assetBindings));
 
     const forward = edges.filter((edge) => !edge.feedback);
     const ordered = topologicalOrder(nodes, forward);
     if (!ordered) {
-        errors.push('graph contains an undeclared cycle; mark the closing edge as feedback');
+        problems.push({
+            detail: 'graph contains an undeclared cycle; mark the closing edge as feedback',
+        });
     }
 
-    if (errors.length > 0 || !ordered) {
-        return { ok: false, errors };
+    if (problems.length > 0 || !ordered) {
+        return failed(problems);
     }
 
     const pingPong = [
@@ -170,29 +195,39 @@ export function compileGraph(
 
     const present = resolvePresent(compiled, presentFrom);
     if (presentFrom && !present) {
-        return { ok: false, errors: [`present target ${presentFrom.instanceId}.${presentFrom.port} does not exist`] };
+        return failed([{
+            detail: `present target ${presentFrom.instanceId}.${presentFrom.port} does not exist`,
+            instanceId: presentFrom.instanceId,
+            port: presentFrom.port,
+        }]);
     }
 
     return { ok: true, graph: { order: compiled, resources, pingPong, present } };
 }
 
+function failed(problems: CompileProblem[]): CompileResult {
+    return { ok: false, errors: problems.map((problem) => problem.detail), problems };
+}
+
 function validateEdges(
     byInstance: Map<string, GraphNode>,
     edges: readonly RenderGraphEdge[],
-): string[] {
-    const errors: string[] = [];
+): CompileProblem[] {
+    const problems: CompileProblem[] = [];
     const occupied = new Map<string, number>();
 
     for (const edge of edges) {
         const source = byInstance.get(edge.from.instanceId);
         const target = byInstance.get(edge.to.instanceId);
 
+        const at = { from: edge.from, to: edge.to };
+
         if (!source) {
-            errors.push(`edge from unknown instance ${edge.from.instanceId}`);
+            problems.push({ detail: `edge from unknown instance ${edge.from.instanceId}`, edge: at });
             continue;
         }
         if (!target) {
-            errors.push(`edge to unknown instance ${edge.to.instanceId}`);
+            problems.push({ detail: `edge to unknown instance ${edge.to.instanceId}`, edge: at });
             continue;
         }
 
@@ -200,19 +235,31 @@ function validateEdges(
         const inputPort = findPort(target.definition.inputs, edge.to.port);
 
         if (!outputPort) {
-            errors.push(`${edge.from.instanceId} has no output port ${edge.from.port}`);
+            problems.push({
+                detail: `${edge.from.instanceId} has no output port ${edge.from.port}`,
+                instanceId: edge.from.instanceId,
+                port: edge.from.port,
+                edge: at,
+            });
             continue;
         }
         if (!inputPort) {
-            errors.push(`${edge.to.instanceId} has no input port ${edge.to.port}`);
+            problems.push({
+                detail: `${edge.to.instanceId} has no input port ${edge.to.port}`,
+                instanceId: edge.to.instanceId,
+                port: edge.to.port,
+                edge: at,
+            });
             continue;
         }
 
         if (!portsCompatible(outputPort.type, inputPort.type)) {
-            errors.push(
-                `cannot connect ${edge.from.instanceId}.${edge.from.port} (${outputPort.type}) ` +
-                `to ${edge.to.instanceId}.${edge.to.port} (${inputPort.type})`,
-            );
+            problems.push({
+                detail:
+                    `cannot connect ${edge.from.instanceId}.${edge.from.port} (${outputPort.type}) ` +
+                    `to ${edge.to.instanceId}.${edge.to.port} (${inputPort.type})`,
+                edge: at,
+            });
             continue;
         }
 
@@ -221,19 +268,24 @@ function validateEdges(
         occupied.set(key, count);
 
         if (count > 1 && !inputPort.multiple) {
-            errors.push(`${key} accepts one connection but received ${count}`);
+            problems.push({
+                detail: `${key} accepts one connection but received ${count}`,
+                instanceId: edge.to.instanceId,
+                port: edge.to.port,
+                edge: at,
+            });
         }
     }
 
-    return errors;
+    return problems;
 }
 
 function validateRequiredInputs(
     nodes: readonly GraphNode[],
     edges: readonly RenderGraphEdge[],
     assetBindings: readonly { instanceId: string; port: string }[],
-): string[] {
-    const errors: string[] = [];
+): CompileProblem[] {
+    const problems: CompileProblem[] = [];
     const connected = new Set([
         ...edges.map((edge) => `${edge.to.instanceId}.${edge.to.port}`),
         ...assetBindings.map((binding) => `${binding.instanceId}.${binding.port}`),
@@ -242,12 +294,16 @@ function validateRequiredInputs(
     for (const node of nodes) {
         for (const port of node.definition.inputs) {
             if (port.required && !connected.has(`${node.instanceId}.${port.name}`)) {
-                errors.push(`${node.instanceId}.${port.name} is required but unconnected`);
+                problems.push({
+                    detail: `${node.instanceId}.${port.name} is required but unconnected`,
+                    instanceId: node.instanceId,
+                    port: port.name,
+                });
             }
         }
     }
 
-    return errors;
+    return problems;
 }
 
 /** Kahn's algorithm. Returns undefined when a cycle remains among forward edges. */

@@ -36,6 +36,17 @@ export function hashSeed(seed: string): number {
     return hash >>> 0;
 }
 
+/**
+ * A stable identity in `[0, 1)` for one instance within one scene.
+ *
+ * Derived rather than drawn, so the same instance in the same scene gets the same value however many
+ * times the scene is rebuilt — which is what keeps a plugin's oscillator phases and spatial offsets
+ * still across a rebuild that did not touch it.
+ */
+export function instanceSeed(entropy: string, instanceId: string): number {
+    return hashSeed(`${entropy}:${instanceId}`) / 4294967295;
+}
+
 export function createRng(seed: string): Rng {
     // mulberry32: small, fast, and good enough for visual selection.
     let state = hashSeed(seed) || 1;

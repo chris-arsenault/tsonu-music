@@ -100,9 +100,10 @@ The pure half of the feature, complete and tested before any pixel is drawn.
   set constant, bind feature, unbind, promote widget, mute, reseed. Snapshot-based undo and redo.
 - `core/graph-layout.ts` — deterministic layered layout for documents carrying no positions, by
   longest-path depth over forward edges.
-- **[DECISION]** Does the document capture the scene's palette and theme, or is colour left to the
-  kernel? Capturing pins a colour bug for study and grows the schema; leaving it means a reopened
-  document renders in a different scheme than it was saved in.
+- Settled: the document carries the scene's entropy and theme id. Two fields, and everything the
+  scene derives rather than states — the colour scheme and every instance seed — comes back with it,
+  so a reopened document renders in the palette it was captured in. A document that rendered in a
+  different scheme could not be used to study a colour fault, which is most of what the tail is for.
 - Exit: `make ci` green; a captured generated scene resolves to a `CompiledGraph` identical to the one
   the scheduler compiled, and every edit operation has a test.
 
@@ -169,6 +170,5 @@ editable yet.
 
 | Where | Decision you own |
 | ----- | ---------------- |
-| M1 | Whether the document captures the scene's palette and theme, or leaves colour to the kernel |
 | M3 | Whether muting a node also stops everything it leaves unreachable downstream |
 | M4 | Whether a newly added node starts at plugin defaults or at the theme's parameter overrides |
