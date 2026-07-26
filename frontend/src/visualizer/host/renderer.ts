@@ -14,7 +14,8 @@ import {
     type PersistenceSettings,
 } from '../core/persistence';
 import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from '../core/composite-grade';
-import { buildScenePalette, rotatePalette, type ScenePalette } from '../core/palette';
+import { buildScenePalette, driftPalette, type ScenePalette } from '../core/palette';
+import type { PaletteCharacter } from '../core/palettes';
 import { resolveParameters } from '../core/parameters';
 import { modulateParameters } from '../core/modulation';
 import {
@@ -216,15 +217,44 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * new colour scheme, and these are the values grading it.
      */
     let gradeParameters: Record<string, number> = { ...COMPOSITE_PARAMETERS };
-    let basePalette: ScenePalette = buildScenePalette(scene.entropy, colourStrength(scene.theme));
+    let basePalette: ScenePalette = drawPalette();
 
     function colourStrength(theme: typeof scene.theme): number {
         return theme.colorPolicy?.strength ?? 0.75;
     }
 
-    /** Rebuilds the scheme when the scene changes, so a new composition arrives in new colours. */
+    /**
+     * Which family of schemes the theme's colour policy admits.
+     *
+     * Section 16 gives a theme a colour source, and it was recorded and unread. A policy naming
+     * complementary colour should not draw the same schemes as one naming a curated palette.
+     */
+    function paletteCharacter(): PaletteCharacter | undefined {
+        switch (scene.theme.colorPolicy?.source) {
+            case 'complementary':
+                return 'high-contrast';
+            case 'curated':
+                return 'hue-anchored';
+            case 'album-palette':
+                // Artwork brings its own colour, so the scheme around it stays dark and lets it read.
+                return 'dark-dominant';
+            default:
+                return undefined;
+        }
+    }
+
+    function drawPalette(): ScenePalette {
+        return buildScenePalette(
+            scene.entropy,
+            colourStrength(scene.theme),
+            4,
+            paletteCharacter(),
+        );
+    }
+
+    /** Redraws the scheme when the scene changes, so a new composition arrives in new colours. */
     function refreshPalette(): void {
-        basePalette = buildScenePalette(scene.entropy, colourStrength(scene.theme));
+        basePalette = drawPalette();
         gradeParameters = { ...COMPOSITE_PARAMETERS };
     }
     // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
@@ -485,13 +515,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     // the compositor's duty. The weights were computed and consumed by nothing; this is
                     // where they finally decide how strongly the scene accumulates.
                     persistence: lastPersistence,
-                    // Rotated by the integrated hue drift, so the scheme turns as a scheme and its
-                    // entries keep their relationships to one another.
-                    palette: rotatePalette(
-                        basePalette,
-                        grade.hueDrift ?? 0,
-                        colourStrength(scene.theme),
-                    ),
+                    // Walked along the scheme's own colours by the integrated drift, rather than
+                    // hue-rotated: rotating a designed palette destroys the relationships that made
+                    // it designed within a few seconds.
+                    palette: driftPalette(basePalette, grade.hueDrift ?? 0),
                     grade,
                     // A seek or a new track lands on unrelated material; keeping the old image in the
                     // accumulation would drag the previous passage across the new one.

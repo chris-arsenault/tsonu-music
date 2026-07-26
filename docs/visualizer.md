@@ -170,20 +170,35 @@ monopolize every track.
 
 ## Colour
 
-A scene draws a small set of harmonically related colours — analogous, complementary,
-split-complementary, triadic, or monochromatic — from its own entropy and its theme's colour policy.
-Each material branch takes one entry, so branches are chromatically distinct by construction.
+A scene draws one curated scheme from `core/palettes.ts` — nineteen hand-designed palettes ported
+from the-canonry, where they steer image generation. Nothing generates a colour: the library decides
+which of a designed set each part of the frame gets. A scheme is a colour that dominates, one
+supporting it, and an accent used sparingly, which is a set of decisions no offset table encodes.
 
-Within a branch, luminance runs along a three-stop ramp: a deep cool shadow, the branch's hue at full
-chroma, and a warm highlight. Neither end is neutral, because a ramp that ends at black loses its hue
-in the darks and one that ends at white loses it in the lights. Material that already carries colour
-is pulled toward its branch hue in proportion to how much chroma it has, rather than being excluded
-from grading — a continuous relationship instead of a threshold the material can cross mid-gradient.
+Each scheme is tagged `hue-anchored`, `dark-dominant`, `high-contrast`, or `natural`, and a theme's
+colour policy selects on that: a complementary policy draws high-contrast pairs, a curated policy
+draws hue-anchored schemes, and an album-palette policy draws dark-dominant ones so artwork reads
+against them.
 
-The scheme rotates as a scheme, at a rate the midrange sets, so its entries keep their relationships
-while the whole thing turns. Grading itself is not a hard-coded feature mapping: the compositor
-declares parameters in `core/composite-grade.ts` and binds them through the same roles, modes, and
-role dynamics as any plugin, so exposure lifts on a transient and saturation follows intensity.
+Each material branch takes one of the scheme's colours, in the order the scheme itself leads with, and
+the most chromatic is held back for the last branch — which is how "accents sparingly" survives
+contact with a renderer. Within a branch, luminance runs a three-stop ramp between the scheme's own
+dark and light ends, shared across every branch so separately coloured branches read as one
+composition. The dark end is pulled down to near-black while keeping its hue, since a frame that is
+mostly unlit needs the unlit part to be dark *in the scheme*. The light end is the scheme's brightest
+**coloured** swatch rather than its brightest: several carry an ivory as paper, and taking that sends
+every lit pixel toward white.
+
+Material that already carries colour is pulled toward its branch colour in proportion to how much
+chroma it has, rather than being excluded from grading — continuous, with no threshold to cross
+mid-gradient.
+
+The scheme drifts by walking its own colours, crossfading each branch from one to the next, rather
+than by rotating hue: rotating a designed palette destroys the relationships that made it designed.
+Grading itself is not a hard-coded feature mapping — the compositor declares parameters in
+`core/composite-grade.ts` and binds them through the same roles, modes, and role dynamics as any
+plugin, so hue drift is a rate binding, exposure lifts on a transient, and saturation follows
+intensity.
 
 Every modal opening, track change, explicit **New scene**, and full scene mutation selects from fresh
 entropy. Tracks do not map to repeatable scenes, and diagnostics do not expose a reproduction control.

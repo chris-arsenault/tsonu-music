@@ -1,59 +1,34 @@
 /**
- * Scene colour (spec section 19.9's colour policy, and section 16's theme colour source).
+ * Scene colour (spec section 19.9's colour policy, section 16's theme colour source).
  *
- * The previous approach graded at the composition boundary by asking each pixel whether it looked
- * monochrome, and if so replacing its colour from a cosine ramp indexed by its own luminance. Three
- * things were wrong with that, and they compound:
+ * A scene takes one curated scheme from `palettes.ts` and every branch is coloured from it. Nothing
+ * here invents a colour; it decides which of a designed set each part of the frame gets, and how
+ * material travels between the scheme's dark and light ends.
  *
- * Indexing hue by luminance welds brightness to hue. Every bright pixel in a scene is the same
- * colour as every other bright pixel, so the image reads as one rainbow gradient repeated wherever
- * something is lit — mechanical, and the same mechanical in every scene.
+ * Two earlier attempts are worth recording, because both failed in ways that looked fine in code.
  *
- * Testing whether a pixel "is monochrome" splits the frame into two colour regimes that do not agree.
- * Grey material gets a palette, slightly-tinted material keeps whatever it had, and the boundary
- * between them moves with the material rather than with the composition.
+ * The first indexed hue by luminance from a cosine ramp. That welds brightness to hue — every lit
+ * pixel of a given brightness is the same colour as every other — and a ramp spanning the whole hue
+ * circle contains every hue, so no scene could have a colour and consecutive scenes could not differ
+ * in one.
  *
- * A cosine ramp over the full hue circle is not a palette. It contains every hue, so no scene can
- * have a colour, and consecutive scenes cannot differ in one.
- *
- * This replaces all of it. A scene draws a small set of harmonically related colours; each material
- * branch takes one; and within a branch, luminance runs along a three-stop ramp — a deep cool
- * shadow, the branch's own hue at full chroma, and a warm highlight. That is a colour scheme rather
- * than a hue lookup, and it is what gives an image depth instead of a flat wash.
+ * The second generated a base hue at random and placed the rest at fixed offsets: analogous,
+ * triadic, and so on. Better, but still an algorithm wearing a different rotation each scene. Hues at
+ * intervals are not a scheme. A scheme has a colour that dominates, one supporting it, and an accent
+ * that appears rarely — decisions about weight and scarcity that no offset table encodes.
  */
 
 import { clamp01 } from './bindings';
 import { createRng } from './random';
+import { CURATED_PALETTES, parseHex, type CuratedPalette, type PaletteCharacter } from './palettes';
 
 export type Rgb = readonly [number, number, number];
 
 /**
- * How a scene's colours relate to one another.
- *
- * Named rather than free-form, because "related" is the whole point: a set of unrelated hues is
- * exactly the rainbow this exists to avoid.
- */
-export type Harmony =
-    | 'analogous'
-    | 'complementary'
-    | 'split-complementary'
-    | 'triadic'
-    | 'monochromatic';
-
-export const HARMONIES: readonly Harmony[] = [
-    'analogous',
-    'complementary',
-    'split-complementary',
-    'triadic',
-    'monochromatic',
-];
-
-/**
  * One branch's colour, as the three stops its luminance runs between.
  *
- * Shadow is not black and highlight is not white. A ramp that ends at pure black loses its hue in
- * the darks, and one that ends at pure white loses it in the lights — which is how a saturated
- * palette still arrives on screen looking washed out.
+ * Shadow and highlight come from the scheme itself rather than being synthesised per branch, which is
+ * what makes separately coloured branches read as one composition instead of as several.
  */
 export interface PaletteEntry {
     shadow: Rgb;
@@ -62,94 +37,156 @@ export interface PaletteEntry {
 }
 
 export interface ScenePalette {
-    /** The hue every entry is derived from, in turns. Rotating this moves the whole scheme together. */
-    baseHue: number;
-    harmony: Harmony;
+    /** Which curated scheme this scene drew. Carried for diagnostics. */
+    id: string;
+    name: string;
+    character: PaletteCharacter;
     entries: readonly PaletteEntry[];
 }
 
-/** Hue offsets in turns that each harmony places its entries at, relative to the base. */
-const HARMONY_OFFSETS: Record<Harmony, readonly number[]> = {
-    analogous: [0, 0.083, -0.083, 0.166],
-    complementary: [0, 0.5, 0.042, 0.458],
-    'split-complementary': [0, 0.417, 0.583, 0.083],
-    triadic: [0, 0.333, 0.667, 0.166],
-    // Not hueless: one hue at several chroma and lightness levels, which is a scheme in itself.
-    monochromatic: [0, 0.02, -0.02, 0.04],
-};
+/**
+ * Luminance the scheme's darkest colour is pulled down to.
+ *
+ * Several schemes are entirely light — gilded sunlight has no dark at all — and a visualizer whose
+ * frame is mostly unlit needs somewhere for the unlit part to sit. Pulling the darkest swatch down
+ * rather than substituting black keeps the scheme's hue in the shadows, which is the difference
+ * between a dark scene that has a colour and one that is merely dim.
+ */
+const SHADOW_LUMINANCE = 0.045;
+
+/** Chroma below which a swatch is a neutral rather than a colour, and cannot serve as a branch ink. */
+const NEUTRAL_CHROMA = 0.06;
+
+export function luminanceOf(colour: Rgb): number {
+    return 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2];
+}
+
+export function chromaOf(colour: Rgb): number {
+    return Math.max(...colour) - Math.min(...colour);
+}
+
+/** Schemes a theme's colour policy admits. */
+export function palettesFor(character?: PaletteCharacter): readonly CuratedPalette[] {
+    if (!character) {
+        return CURATED_PALETTES;
+    }
+
+    const matching = CURATED_PALETTES.filter((palette) => palette.character === character);
+    return matching.length > 0 ? matching : CURATED_PALETTES;
+}
 
 /**
- * Warm and cool shifts applied to the ends of a ramp.
+ * Draws a scheme for a scene and assigns its colours to branches.
  *
- * Shifting shadows toward the cool side and highlights toward the warm side is what makes a gradient
- * read as light falling on something rather than as one colour getting darker. Small: enough to see,
- * not enough to leave the scheme.
+ * Branch order is the composition's order, so the first material branch takes what the scheme leads
+ * with and later branches take what supports it. The most chromatic swatch is held back for the last
+ * branch, which is how "accents sparingly" survives contact with a renderer: the accent colours the
+ * branch least likely to fill the frame.
  */
-const SHADOW_HUE_SHIFT = -0.045;
-const HIGHLIGHT_HUE_SHIFT = 0.035;
-
-/** Builds a scene's colour scheme. Pure, so what a scene looks like is testable without a GPU. */
 export function buildScenePalette(
     entropy: string,
-    /** How strongly the scheme should commit, from the theme's colour policy. 0 to 1. */
+    /** How strongly the scheme commits, from the theme's colour policy. 0 to 1. */
+    strength: number,
+    count = 4,
+    character?: PaletteCharacter,
+): ScenePalette {
+    const candidates = palettesFor(character);
+    const palette = createRng(`${entropy}:palette`).pick(candidates) ?? CURATED_PALETTES[0];
+
+    return scenePaletteFrom(palette, strength, count);
+}
+
+/** Builds the branch entries for a named scheme. Separated so a chosen scheme can be rebuilt. */
+export function scenePaletteFrom(
+    palette: CuratedPalette,
     strength: number,
     count = 4,
 ): ScenePalette {
-    const rng = createRng(`${entropy}:palette`);
-    const baseHue = rng.next();
-    const harmony = rng.pick(HARMONIES) ?? 'analogous';
-    const offsets = HARMONY_OFFSETS[harmony];
+    const swatches = palette.swatches.map(parseHex);
     const commit = clamp01(strength);
+
+    const byLuminance = [...swatches].sort((a, b) => luminanceOf(a) - luminanceOf(b));
+    const shadow = anchorShadow(byLuminance[0]);
+
+    // The brightest *coloured* swatch, not simply the brightest. Several schemes carry an ivory or
+    // bone as their paper — the ground a subject is drawn on — and taking that as the highlight sends
+    // every lit pixel toward white, which is the wash this whole model exists to avoid. Where a
+    // scheme has no colour bright enough to serve, its brightest neutral is pulled down instead.
+    const brightestInk = byLuminance
+        .filter((colour) => chromaOf(colour) >= NEUTRAL_CHROMA)
+        .pop();
+    const highlight = brightestInk ?? capLuminance(byLuminance[byLuminance.length - 1], 0.78);
+
+    // Inks are the scheme's colours in its own order, neutrals dropped: a grey is what the shadow and
+    // highlight are for, and colouring a branch with it wastes the branch.
+    const inks = swatches.filter((colour) => chromaOf(colour) >= NEUTRAL_CHROMA);
+    const ordered = inks.length > 0 ? inks : swatches;
+
+    // The most chromatic ink is the accent. Moved to the end so it lands on the last branch.
+    const accentIndex = ordered.reduce(
+        (best, colour, index) => (chromaOf(colour) > chromaOf(ordered[best]) ? index : best),
+        0,
+    );
+    const accent = ordered[accentIndex];
+    const supporting = ordered.filter((_, index) => index !== accentIndex);
+    const assignment = supporting.length > 0 ? [...supporting, accent] : [accent];
 
     const entries: PaletteEntry[] = [];
     for (let index = 0; index < count; index += 1) {
-        const hue = wrapTurns(baseHue + (offsets[index % offsets.length] ?? 0));
-        // Monochromatic separates its entries by lightness instead of by hue, or every branch would
-        // arrive the same colour.
-        const level = harmony === 'monochromatic' ? 1 - (index % offsets.length) * 0.18 : 1;
+        const ink = assignment[index % assignment.length];
 
-        entries.push(rampFor(hue, commit, level));
+        entries.push({
+            shadow,
+            // Commit pulls toward the scheme's own colour; below full it relaxes toward a neutral of
+            // the same luminance, which desaturates without changing how bright the branch reads.
+            // Relaxing toward the highlight instead would *raise* chroma on any scheme whose
+            // highlight is itself a colour, and several of them are — the gold in crimson dynasty.
+            mid: mixRgb(neutralOf(ink), ink, 0.35 + 0.65 * commit),
+            highlight,
+        });
     }
 
-    return { baseHue, harmony, entries };
-}
-
-/** The three stops for one hue. */
-export function rampFor(hue: number, strength: number, level = 1): PaletteEntry {
-    const chroma = 0.35 + 0.6 * strength;
-
-    return {
-        shadow: hsl(wrapTurns(hue + SHADOW_HUE_SHIFT), chroma * 0.85, 0.06 * level),
-        mid: hsl(hue, chroma, 0.42 * level),
-        highlight: hsl(wrapTurns(hue + HIGHLIGHT_HUE_SHIFT), chroma * 0.55, 0.86),
-    };
+    return { id: palette.id, name: palette.name, character: palette.character, entries };
 }
 
 /**
- * Rotates a whole scheme, keeping the relationships between its entries.
+ * Advances a scheme without leaving it.
  *
- * This is what a hue-drift parameter drives. Rotating the base rather than each entry is why the
- * scheme stays a scheme while it moves.
+ * Hue-rotating a designed palette destroys the thing that made it designed — a few seconds in, the
+ * relationships its author chose are gone. Drift instead walks each branch along the scheme's own
+ * colours, crossfading from one to the next, so the frame keeps changing and every colour in it was
+ * still chosen by a person.
  */
-export function rotatePalette(palette: ScenePalette, turns: number, strength: number): ScenePalette {
-    const baseHue = wrapTurns(palette.baseHue + turns);
-    const offsets = HARMONY_OFFSETS[palette.harmony];
+export function driftPalette(
+    palette: ScenePalette,
+    /** Turns through the scheme's colours. One whole turn returns every branch to where it began. */
+    turns: number,
+): ScenePalette {
+    const count = palette.entries.length;
+    if (count === 0) {
+        return palette;
+    }
+
+    const position = wrapTurns(turns) * count;
+    const step = Math.floor(position);
+    const blend = position - step;
 
     return {
         ...palette,
-        baseHue,
         entries: palette.entries.map((entry, index) => {
-            const hue = wrapTurns(baseHue + (offsets[index % offsets.length] ?? 0));
-            const level = palette.harmony === 'monochromatic'
-                ? 1 - (index % offsets.length) * 0.18
-                : 1;
+            const next = palette.entries[(index + step + 1) % count];
+            const current = palette.entries[(index + step) % count];
 
-            return rampFor(hue, strength, level);
+            return {
+                shadow: entry.shadow,
+                mid: mixRgb(current.mid, next.mid, blend),
+                highlight: entry.highlight,
+            };
         }),
     };
 }
 
-/** Where along a ramp a luminance sits. Mirrors the grade shader's interpolation. */
+/** Where along a ramp a luminance sits. Mirrors the composite shader's interpolation. */
 export function rampAt(entry: PaletteEntry, luminance: number): Rgb {
     const light = clamp01(luminance);
 
@@ -160,6 +197,34 @@ export function rampAt(entry: PaletteEntry, luminance: number): Rgb {
     return mixRgb(entry.mid, entry.highlight, (light - 0.5) * 2);
 }
 
+/** Pulls a colour down to at most `ceiling` luminance, keeping its hue. */
+function capLuminance(colour: Rgb, ceiling: number): Rgb {
+    const light = luminanceOf(colour);
+    if (light <= ceiling) {
+        return colour;
+    }
+
+    const scale = ceiling / Math.max(light, 1e-4);
+    return [colour[0] * scale, colour[1] * scale, colour[2] * scale];
+}
+
+/** The grey a colour would be with its chroma removed, at the same brightness. */
+function neutralOf(colour: Rgb): Rgb {
+    const light = luminanceOf(colour);
+    return [light, light, light];
+}
+
+/** Pulls a colour down to the shadow anchor, keeping its hue. */
+function anchorShadow(colour: Rgb): Rgb {
+    const light = luminanceOf(colour);
+    if (light <= SHADOW_LUMINANCE) {
+        return colour;
+    }
+
+    const scale = SHADOW_LUMINANCE / Math.max(light, 1e-4);
+    return [colour[0] * scale, colour[1] * scale, colour[2] * scale];
+}
+
 export function wrapTurns(value: number): number {
     const wrapped = value % 1;
     return wrapped < 0 ? wrapped + 1 : wrapped;
@@ -167,28 +232,10 @@ export function wrapTurns(value: number): number {
 
 function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
     const t = clamp01(amount);
+
     return [
         from[0] + (to[0] - from[0]) * t,
         from[1] + (to[1] - from[1]) * t,
         from[2] + (to[2] - from[2]) * t,
     ];
-}
-
-/** Hue in turns, saturation and lightness 0 to 1. */
-export function hsl(hue: number, saturation: number, lightness: number): Rgb {
-    const s = clamp01(saturation);
-    const l = clamp01(lightness);
-    const c = (1 - Math.abs(2 * l - 1)) * s;
-    const h = wrapTurns(hue) * 6;
-    const x = c * (1 - Math.abs((h % 2) - 1));
-    const m = l - c / 2;
-
-    const [r, g, b] = h < 1 ? [c, x, 0]
-        : h < 2 ? [x, c, 0]
-            : h < 3 ? [0, c, x]
-                : h < 4 ? [0, x, c]
-                    : h < 5 ? [x, 0, c]
-                        : [c, 0, x];
-
-    return [r + m, g + m, b + m];
 }

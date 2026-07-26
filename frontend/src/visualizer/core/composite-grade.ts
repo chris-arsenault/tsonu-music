@@ -81,10 +81,12 @@ export const COMPOSITE_BINDINGS: readonly ParameterBinding[] = [
         curve: 'smooth',
     },
     {
+        // Deepens as the bass moves. The range ran the other way, so the frame carried its heaviest
+        // contrast at rest — which on top of a ramp is where an image goes to die.
         feature: 'bassExcite',
         role: 'large-scale-force',
         parameter: 'contrast',
-        outputRange: [1.5, 1.1],
+        outputRange: [1.1, 1.45],
         attack: 0.15,
         release: 0.8,
         curve: 'smooth',

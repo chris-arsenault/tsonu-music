@@ -160,9 +160,10 @@ void main() {
         ? mix(uShadow, uMid, light * 2.0)
         : mix(uMid, uHighlight, (light - 0.5) * 2.0);
 
-    // Scaled by the material's own luminance, so unlit pixels stay unlit rather than being painted
-    // with the scheme — an empty pixel tinted is a coloured fog with no structure in it.
-    ramp *= light;
+    // Gated, not scaled. Unlit pixels must stay unlit — painting them leaves a coloured fog with no
+    // structure in it — but the ramp already encodes brightness across its three stops, so scaling it
+    // by luminance a second time squares the darkness and the whole frame collapses to black.
+    ramp *= smoothstep(0.0, 0.06, light);
 
     // Already-coloured material keeps its identity by being pulled toward the branch hue rather than
     // excluded from grading. Its own chroma decides how far it travels, which is a continuous
