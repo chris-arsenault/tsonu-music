@@ -9,6 +9,7 @@ import {
     type FeatureSnapshot,
 } from './features';
 import { initialClock, type ClockEffect, type PlaybackClock } from './clock';
+import { PINK_BAND_WEIGHTS, SPECTRAL_BANDS, type BandName } from './analysis';
 
 const LATENCY = 0.02;
 
@@ -20,12 +21,35 @@ const playing: PlaybackClock = {
     duration: 200,
 };
 
+/**
+ * Raw band means that produce a given perceived balance.
+ *
+ * `bandEnergy` reports a mean per bin, and those are not comparable across bands: the spectrum rolls
+ * off, so a wide high band averages many small bins where a narrow low band averages a few large
+ * ones. Writing `{ bass: 0.9, treble: 0.05 }` as a raw fixture therefore does not describe a
+ * bass-heavy mix — measured against real material, raw treble runs three orders of magnitude below
+ * raw bass, so 0.05 against 0.9 is extremely treble-heavy.
+ *
+ * These fixtures state the balance they mean and divide back through the pink weights to get the raw
+ * means that would produce it. Before this helper existed they asserted the balance the old shared
+ * ceiling happened to produce, which is why they passed while four of six channels were pinned at
+ * their floor in production.
+ */
+function rawBands(balance: Record<BandName, number>): Record<BandName, number> {
+    const raw = {} as Record<BandName, number>;
+    for (const band of SPECTRAL_BANDS) {
+        raw[band.name] = balance[band.name] / PINK_BAND_WEIGHTS[band.name];
+    }
+
+    return raw;
+}
+
 function snapshot(overrides: Partial<FeatureSnapshot> = {}): FeatureSnapshot {
     return {
         audioTime: 100,
         rms: 0.5,
         peak: 0.8,
-        bands: { subBass: 0.4, bass: 0.6, lowMid: 0.3, mid: 0.2, highMid: 0.1, treble: 0.05 },
+        bands: rawBands({ subBass: 0.4, bass: 0.6, lowMid: 0.3, mid: 0.2, highMid: 0.1, treble: 0.05 }),
         spectralCentroidHz: 2000,
         spectralFlux: 0.1,
         leftLevel: 0.5,
@@ -92,7 +116,7 @@ describe('feature bus normalization', () => {
             createFeatureBusState(),
             input({
                 snapshot: snapshot({
-                    bands: { subBass: 0.5, bass: 0.9, lowMid: 0.3, mid: 0.2, highMid: 0.1, treble: 0.05 },
+                    bands: rawBands({ subBass: 0.5, bass: 0.9, lowMid: 0.3, mid: 0.2, highMid: 0.1, treble: 0.05 }),
                 }),
             }),
         );
@@ -100,7 +124,7 @@ describe('feature bus normalization', () => {
             createFeatureBusState(),
             input({
                 snapshot: snapshot({
-                    bands: { subBass: 0.05, bass: 0.1, lowMid: 0.2, mid: 0.3, highMid: 0.6, treble: 0.9 },
+                    bands: rawBands({ subBass: 0.05, bass: 0.1, lowMid: 0.2, mid: 0.3, highMid: 0.6, treble: 0.9 }),
                 }),
             }),
         );
@@ -340,7 +364,7 @@ describe('beat presentation', () => {
 describe('band excitation', () => {
     /** A bass-dominant mix, as almost all mastered music is. */
     const mix = (treble: number) => snapshot({
-        bands: { subBass: 0.5, bass: 0.9, lowMid: 0.3, mid: 0.2, highMid: 0.06, treble },
+        bands: rawBands({ subBass: 0.5, bass: 0.9, lowMid: 0.3, mid: 0.2, highMid: 0.06, treble }),
     });
 
     /** Settles the bus on a steady mix, then reports the frame after `final` arrives. */

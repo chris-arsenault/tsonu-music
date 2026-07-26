@@ -17,6 +17,7 @@ import {
     type BandName,
     type ExcitationFollower,
     type PeakFollower,
+    PINK_BAND_WEIGHTS,
     SPECTRAL_BANDS,
 } from './analysis';
 import { clamp01 } from './bindings';
@@ -141,6 +142,11 @@ export interface FeatureBusInput {
  * `bands` is deliberately one shared ceiling for all six bands rather than one each. Per-band
  * ceilings would make every band read full scale on sustained content, erasing the relative balance
  * that section 20 depends on to give bass, midrange, and treble different jobs.
+ *
+ * A shared ceiling only works over quantities that are comparable to begin with, which raw band means
+ * are not — see PINK_BAND_WEIGHTS, which is applied before the ceiling is taken. Without it the
+ * ceiling was always set by the low bands and the high ones sat in the bottom one percent of their
+ * range for the length of a track.
  */
 export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands';
 
@@ -300,16 +306,24 @@ function absorbSnapshot(
 
     // One shared ceiling, driven by the loudest band, then every band divided by it. Dynamics still
     // come from the ceiling's decay; relative balance between bands survives.
+    //
+    // Weighted to the pink reference first. Raw band means are not comparable to one another — a wide
+    // high band averages many small bins where a narrow low band averages a few large ones — so a
+    // shared ceiling over raw values is set by the low bands and leaves the high ones at a few
+    // thousandths of full scale forever. See PINK_BAND_WEIGHTS.
+    const weighted = {} as Record<BandName, number>;
     let loudestBand = 0;
     for (const band of SPECTRAL_BANDS) {
-        const energy = snapshot.bands[band.name];
+        const energy = snapshot.bands[band.name] * PINK_BAND_WEIGHTS[band.name];
+        weighted[band.name] = energy;
         if (energy > loudestBand) {
             loudestBand = energy;
         }
     }
     normalizeWith('bands', loudestBand);
     const bandCeiling = followers.bands.peak;
-    const scaleBand = (value: number): number => clamp01(bandCeiling > 0 ? value / bandCeiling : 0);
+    const scaleBand = (band: BandName): number =>
+        clamp01(bandCeiling > 0 ? weighted[band] / bandCeiling : 0);
 
     // Measured from raw energy, never from the scaled level. Running it on scaled values would put
     // every band back under one ceiling and reintroduce exactly the coupling excitation exists to
@@ -325,12 +339,12 @@ function absorbSnapshot(
         ...state.bus.continuous,
         rms: normalizeWith('rms', snapshot.rms),
         peak: normalizeWith('peak', snapshot.peak),
-        subBass: scaleBand(snapshot.bands.subBass),
-        bass: scaleBand(snapshot.bands.bass),
-        lowMid: scaleBand(snapshot.bands.lowMid),
-        mid: scaleBand(snapshot.bands.mid),
-        highMid: scaleBand(snapshot.bands.highMid),
-        treble: scaleBand(snapshot.bands.treble),
+        subBass: scaleBand('subBass'),
+        bass: scaleBand('bass'),
+        lowMid: scaleBand('lowMid'),
+        mid: scaleBand('mid'),
+        highMid: scaleBand('highMid'),
+        treble: scaleBand('treble'),
         rmsExcite: excite('rms', snapshot.rms),
         subBassExcite: excite('subBass', snapshot.bands.subBass),
         bassExcite: excite('bass', snapshot.bands.bass),

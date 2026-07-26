@@ -12,6 +12,7 @@ import {
     invalidateTempo,
     observeOnset,
     peak,
+    PINK_BAND_WEIGHTS,
     resetOnsetDetector,
     rms,
     SPECTRAL_BANDS,
@@ -65,6 +66,71 @@ describe('level measures', () => {
 
     test('rms of an empty buffer is zero rather than NaN', () => {
         expect(rms(new Float32Array(0))).toBe(0);
+    });
+});
+
+describe('band boundaries', () => {
+    /** Which bins a band would sum, recovered by probing one bin at a time. */
+    function binsOf(band: { lowHz: number; highHz: number }): number[] {
+        const bins: number[] = [];
+
+        for (let bin = 0; bin < FFT_SIZE / 2; bin += 1) {
+            const spectrum = new Float32Array(FFT_SIZE / 2);
+            spectrum[bin] = 1;
+            if (bandEnergy(spectrum, FFT_SIZE, SAMPLE_RATE, band.lowHz, band.highHz) > 0) {
+                bins.push(bin);
+            }
+        }
+
+        return bins;
+    }
+
+    test('adjacent bands share no bins', () => {
+        const claimed = new Map<number, string>();
+
+        for (const band of SPECTRAL_BANDS) {
+            for (const bin of binsOf(band)) {
+                expect(claimed.get(bin), `bin ${bin} claimed by both ${claimed.get(bin)} and ${band.name}`)
+                    .toBeUndefined();
+                claimed.set(bin, band.name);
+            }
+        }
+    });
+
+    test('no band includes DC, so a signal offset cannot read as sub-bass', () => {
+        for (const band of SPECTRAL_BANDS) {
+            expect(binsOf(band)).not.toContain(0);
+        }
+    });
+});
+
+describe('pink band weights', () => {
+    test('a pink spectrum reads level across all six bands', () => {
+        // Magnitude falling as 1/f is pink: equal energy per octave, the neutral reference.
+        const spectrum = new Float32Array(FFT_SIZE / 2);
+        for (let bin = 1; bin < spectrum.length; bin += 1) {
+            spectrum[bin] = 1 / ((bin * SAMPLE_RATE) / FFT_SIZE);
+        }
+
+        const weighted = SPECTRAL_BANDS.map((band) =>
+            bandEnergy(spectrum, FFT_SIZE, SAMPLE_RATE, band.lowHz, band.highHz)
+            * PINK_BAND_WEIGHTS[band.name]);
+
+        // Within a factor of two across nearly three decades of bandwidth. Raw, the same six values
+        // span a factor of roughly two thousand, which is what pinned four of them at their floor.
+        const low = Math.min(...weighted);
+        const high = Math.max(...weighted);
+        expect(high / low).toBeLessThan(2);
+    });
+
+    test('weights are derived from the band table, not tuned', () => {
+        for (const band of SPECTRAL_BANDS) {
+            const reference = Math.log(band.highHz / band.lowHz) / (band.highHz - band.lowHz);
+            const bass = SPECTRAL_BANDS.find((candidate) => candidate.name === 'bass')!;
+            const anchor = Math.log(bass.highHz / bass.lowHz) / (bass.highHz - bass.lowHz);
+
+            expect(PINK_BAND_WEIGHTS[band.name]).toBeCloseTo(anchor / reference, 10);
+        }
     });
 });
 

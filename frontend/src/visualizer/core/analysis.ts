@@ -58,7 +58,18 @@ export function peak(samples: Float32Array): number {
     return highest;
 }
 
-/** Mean magnitude across the bins covering [lowHz, highHz]. */
+/**
+ * Mean magnitude across the bins whose centre frequency falls in [lowHz, highHz).
+ *
+ * Half-open, and rounded outward at neither end. Widening with `floor` below and `ceil` above put
+ * every band's edge bins in its neighbour as well: at 48 kHz with a 1024-point FFT that gave subBass
+ * bins {0,1,2} and bass bins {1..6}, so two of subBass's three bins were also bass bins and the two
+ * were near-duplicates — while being offered as distinct alternatives within the same binding role
+ * pool. Bin 0 is DC, so including it also let any signal offset read as sub-bass energy.
+ *
+ * A band narrower than one bin collapses to the single bin nearest its centre rather than reporting
+ * nothing, which is what the low band does at small FFT sizes.
+ */
 export function bandEnergy(
     magnitude: Float32Array,
     fftSize: number,
@@ -66,11 +77,17 @@ export function bandEnergy(
     lowHz: number,
     highHz: number,
 ): number {
-    const lowBin = Math.max(0, Math.floor((lowHz * fftSize) / sampleRate));
-    const highBin = Math.min(magnitude.length - 1, Math.ceil((highHz * fftSize) / sampleRate));
+    const limit = magnitude.length - 1;
+    if (limit < 1 || highHz <= lowHz) {
+        return 0;
+    }
+
+    const lowBin = Math.min(limit, Math.max(1, Math.ceil((lowHz * fftSize) / sampleRate)));
+    const highBin = Math.min(limit, Math.ceil((highHz * fftSize) / sampleRate) - 1);
 
     if (highBin < lowBin) {
-        return 0;
+        const centre = Math.round(((lowHz + highHz) * 0.5 * fftSize) / sampleRate);
+        return magnitude[Math.min(limit, Math.max(1, centre))];
     }
 
     let sum = 0;
@@ -80,6 +97,39 @@ export function bandEnergy(
 
     return sum / (highBin - lowBin + 1);
 }
+
+/**
+ * Per-band gain that makes the six bands read alike on a neutral spectrum.
+ *
+ * `bandEnergy` reports a mean per bin, and the bands span from tens of hertz to twelve kilohertz.
+ * Music rolls off with frequency, so a wide high band averages a great many small bins while a narrow
+ * low band averages a few large ones. Feeding those raw into one shared ceiling meant the loudest
+ * band set the ceiling and the rest were divided by a number they could not approach: measured over
+ * real material, treble sat at a median of 0.0002 and highMid at 0.0016, against subBass at 0.355.
+ * Four of six channels never left the bottom one percent of their range, so every parameter bound to
+ * one was pinned at its output floor for the length of a track.
+ *
+ * Pink noise — equal energy per octave, magnitude falling as 1/f — is the reference. Its mean over a
+ * band works out to `ln(high/low) / (high - low)`, so dividing each band by its own pink reference
+ * makes all six read equal on pink and lets genuine spectral balance show as departure from it. The
+ * weights are derived from the band table rather than tuned, so changing a band edge cannot leave a
+ * stale constant behind.
+ */
+export const PINK_BAND_WEIGHTS: Readonly<Record<BandName, number>> = (() => {
+    const reference = (band: BandRange): number =>
+        Math.log(band.highHz / band.lowHz) / (band.highHz - band.lowHz);
+
+    // Normalized so bass reads 1. The absolute scale cancels in the shared ceiling; only the ratios
+    // between bands carry meaning.
+    const anchor = reference(SPECTRAL_BANDS.find((band) => band.name === 'bass') ?? SPECTRAL_BANDS[0]);
+
+    const weights = {} as Record<BandName, number>;
+    for (const band of SPECTRAL_BANDS) {
+        weights[band.name] = anchor / reference(band);
+    }
+
+    return weights;
+})();
 
 /**
  * Spectral centroid in Hz — the magnitude-weighted mean frequency. Rises with brightness and
