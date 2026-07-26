@@ -137,6 +137,31 @@ void main() {
     fragColor = vec4(displacement, scalar, 1.0);
 }`;
 
+/**
+ * Luminance as a mask.
+ *
+ * `ImageLuminanceField` declares a `mask-texture` output but reused the displacement fragment above,
+ * whose red channel is the horizontal luminance gradient — the actual luminance sits in blue. Every
+ * mask consumer reads red, so wiring this into a signed distance field gave `step(0.5, ~0)`: a mask
+ * identically zero, no boundary anywhere, and a constant distance field. Only the shader *id*
+ * differed from `AlbumArtDisplacement`, so the two plugins were the same pass under two names.
+ */
+const LUMINANCE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uArt;
+uniform vec2 uResolution;
+uniform float uScale;
+
+void main() {
+    float luminance = dot(texture(uArt, vUv).rgb, vec3(0.299, 0.587, 0.114));
+    float masked = clamp(luminance * uScale, 0.0, 1.0);
+
+    fragColor = vec4(vec3(masked), 1.0);
+}`;
+
 interface DerivationConfig {
     shaderId: string;
     fragment: string;
@@ -393,7 +418,7 @@ export function createImageLuminanceField(): VisualPluginDefinition {
         deactivationPolicy: 'immediate',
         create: derivation({
             shaderId: LUMINANCE_SHADER,
-            fragment: DISPLACEMENT_FRAGMENT,
+            fragment: LUMINANCE_FRAGMENT,
             sampler: 'uArt',
             outputPort: 'luminance',
             uniforms: { uScale: 1 },

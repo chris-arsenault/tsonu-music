@@ -211,15 +211,22 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         device.beginPass(target, pass.blend ?? 'none', pass.clear ?? true);
 
         let unit = 0;
+        const bound = new Set<string>();
         for (const [sampler, resource] of Object.entries(pass.inputs ?? {})) {
             // A resource read through a feedback edge resolves to the previous frame's slot.
             const isPrevious = Object.values(node.previous).includes(resource);
             const texture = resolveTexture(plan, resource, isPrevious);
             if (texture) {
                 device.bindTexture(program, sampler, texture, unit);
+                bound.add(sampler);
                 unit += 1;
             }
         }
+
+        // Anything the shader declares and this pass did not supply. An unbound sampler reads unit
+        // zero, which holds whichever texture was bound there last — in practice the pass's first
+        // input — so an unconnected optional port silently aliased a required one.
+        device.bindEmptySamplers(program, bound, unit);
 
         // Live bound parameters override the pass's static defaults. Applied here so every plugin gets
         // its bindings for free and none can silently render at fixed values.

@@ -85,6 +85,19 @@ export interface Device {
     useProgram(id: string): Program | undefined;
     setUniforms(program: Program, uniforms: Readonly<Record<string, UniformValue>>): void;
     bindTexture(program: Program, sampler: string, texture: WebGLTexture, unit: number): void;
+    /**
+     * Points every sampler the program declares but nothing supplied at a one-by-one zero texture.
+     *
+     * An unbound sampler is not undefined behaviour — it reads texture unit 0, which is whichever
+     * texture was bound there last. In practice that is the pass's first input, so an optional port
+     * left unconnected silently aliased a required one: the reaction-diffusion simulator's `seed`
+     * sampler read chemical A, primed to 1.0, making its `seed > 0.7` test true across the whole
+     * field and flooring chemical B at the impulse floor everywhere, every frame. Gray-Scott cannot
+     * form spots or stripes when B is replenished globally, so the plugin produced flat mush whenever
+     * no mask was supplied — which is always, before the mask manifest resolves, and permanently if
+     * that fetch fails.
+     */
+    bindEmptySamplers(program: Program, bound: ReadonlySet<string>, startUnit: number): void;
 
     drawFullscreen(): void;
     drawGeometry(program: Program, geometryId: string, primitive: Primitive, vertexCount: number): void;
@@ -154,6 +167,27 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
         event.preventDefault();
         lost = true;
     });
+
+    /** One-by-one transparent black, shared by every sampler nothing supplied. See bindEmptySamplers. */
+    let empty: WebGLTexture | null = null;
+    function emptyTexture(): WebGLTexture {
+        if (empty) {
+            return empty;
+        }
+
+        empty = gl!.createTexture();
+        gl!.bindTexture(gl!.TEXTURE_2D, empty);
+        gl!.texImage2D(
+            gl!.TEXTURE_2D, 0, gl!.RGBA, 1, 1, 0, gl!.RGBA, gl!.UNSIGNED_BYTE,
+            new Uint8Array([0, 0, 0, 0]),
+        );
+        gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.NEAREST);
+        gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.NEAREST);
+        gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE);
+        gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
+
+        return empty;
+    }
 
     function compile(type: number, source: string, id: string): WebGLShader | undefined {
         const shader = gl!.createShader(type);
@@ -480,6 +514,21 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             gl.activeTexture(gl.TEXTURE0 + unit);
             gl.bindTexture(gl.TEXTURE_2D, texture);
             gl.uniform1i(location, unit);
+        },
+
+        bindEmptySamplers(program, bound, startUnit) {
+            let unit = startUnit;
+
+            for (const [name, slot] of program.uniforms) {
+                if (slot.type !== gl.SAMPLER_2D || bound.has(name)) {
+                    continue;
+                }
+
+                gl.activeTexture(gl.TEXTURE0 + unit);
+                gl.bindTexture(gl.TEXTURE_2D, emptyTexture());
+                gl.uniform1i(slot.location, unit);
+                unit += 1;
+            }
         },
 
         drawFullscreen() {

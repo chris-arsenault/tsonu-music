@@ -50,7 +50,11 @@ void main() {
 
         for (int step_index = 1; step_index <= 12; step_index += 1) {
             float distance = float(step_index) / 12.0 * uSearchRadius;
-            if (distance >= nearest) {
+            // Strictly greater: at the last step the sample distance equals the search radius
+            // exactly, and the running minimum starts there, so a non-strict test broke out before
+            // ever sampling the outermost ring. The measurable distance stopped at eleven twelfths
+            // of the declared radius.
+            if (distance > nearest) {
                 break;
             }
             if (maskAt(vUv + direction * distance) != inside) {

@@ -201,7 +201,11 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                             ...(spec.uniforms ?? {}),
                             ...(spec.impactDriven
                                 ? {
-                                    uCentre: impact.centre,
+                                    // No `uCentre`: that is a plugin's own static, and writing the
+                                    // impact centre over it made every `hasImpact ? uImpactCentre :
+                                    // uCentre` a no-op, since the two held the same value and the
+                                    // last centre is retained after the energy decays. The
+                                    // shockwave's audio-driven fallback centre never reached GL.
                                     uImpactCentre: impact.centre,
                                     uImpactRadius: impact.radius,
                                     uImpactEnergy: impact.energy,
