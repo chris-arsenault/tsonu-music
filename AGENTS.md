@@ -70,5 +70,10 @@ and Rust Lambda artifacts under `backend/`.
   alone, or a precomputed BPM.
 - **The Vite build publishes one stylesheet** (`cssCodeSplit: false`), because the `website` module
   is configured with a single `ENTRY_CSS`. Do not add a second entry stylesheet.
+- **Every scene reaches the screen through `compileGraph`.** An authored graph may skip the scene
+  grammar; it may not skip port typing, required inputs, or cycle declaration. The graph editor is
+  development-only, gated on `?viz-debug=1`, and never enters an ordinary playback session. See
+  [ADR-0010](./docs/adr/0010-visualizer-authored-scene-graphs.md) and
+  [ADR-0011](./docs/adr/0011-visualizer-graph-editor-canvas.md).
 - **Do not commit runtime catalog data.** RDS is the source of truth for releases, songs,
   recordings, tracks, and jobs.

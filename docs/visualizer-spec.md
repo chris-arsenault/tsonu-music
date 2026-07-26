@@ -2128,6 +2128,40 @@ Debug controls should support:
 * Generate a fresh random scene
 * Display masks, fields, depth, and motion textures
 
+## 23.1 Scene Graph Editor
+
+A development-only node editor, reached through the debug flag, docked below the visualizer surface
+and driving the running kernel.
+
+The editor presents a scene as a node graph following ComfyUI conventions: typed sockets, dragged
+links, widgets that promote to inputs, and a searchable node catalog. It should show:
+
+* One node per plugin instance, with its typed inputs, typed outputs, and parameters
+* The layer stack, as edges from every unconsumed colour output into the composite stage
+* The motion bus, as edges from every motion-typed resource into the motion stage
+* The kernel stages between the graph and the canvas: composite, motion, accumulation, meter, grade
+* Host assets as producer nodes
+* Live resolved values for every parameter, alongside the constant or binding driving it
+* Resolution problems against the node or edge that caused them
+
+The editor should support:
+
+* Capturing the scene the scheduler is currently rendering into an editable document
+* Adding, removing, cloning, and muting nodes
+* Connecting and disconnecting ports, with connection validity matching the graph compiler's
+* Setting a parameter to a constant
+* Binding an audio feature to a parameter, with mode, range, curve, attack, release, and polarity
+* Pinning or rerolling a node's seed
+* Pinning the kernel stages' own parameters, which otherwise follow the theme and the audio
+* Overriding a layer's blend mode and opacity
+* Applying edits to the running kernel without recreating the instances an edit did not touch
+* Exporting and importing a scene document, and emitting one as a test fixture
+
+An authored graph is validated by the render graph compiler alone. Scene grammar constraints —
+category counts, minimum scene size, minimum material branches, dominance limits — do not apply, so
+the editor can express scenes assembly would reject. While a document is in control, the scheduler
+neither mutates nor rebuilds, and the quality ladder does not suppress plugins.
+
 ---
 
 # 24. Initial Production Scope
