@@ -19,9 +19,19 @@ const SIMULATOR_SHADER = 'particle-simulator';
 const RENDERER_SHADER = 'particle-renderer';
 
 /**
- * Each texel is one particle: xy position in clip space, zw velocity. Age rides in the alpha of a
- * second channel set, packed by reusing the same texture at a lower precision than a separate buffer
- * would need.
+ * Each texel is one particle: xy position in clip space, zw velocity.
+ *
+ * There is no room left for age — all four channels are spent — so age is not stored. It is derived
+ * from playback time and a per-particle birth offset, which costs one hash and behaves identically:
+ * every particle runs a cycle of `uLifetime` seconds, and the offsets stagger them so the field does
+ * not blink as one.
+ *
+ * The header here used to claim age rode in "the alpha of a second channel set", describing storage
+ * that does not exist. `uLifetime` was declared, supplied twice, and read nowhere, so particles were
+ * immortal: the respawn test was position and velocity both exactly zero, true only on the first
+ * frame or two. Everything downstream of that followed — a `ParticleEmitter`'s shape, ring, and line
+ * patterns were sampled once and never again, its rate binding did nothing, and a field that decayed
+ * into a corner had no mechanism to refill.
  */
 const SIMULATOR_FRAGMENT = `#version 300 es
 precision highp float;
@@ -36,6 +46,7 @@ uniform vec2 uResolution;
 uniform float uDelta;
 uniform float uDrag;
 uniform float uLifetime;
+uniform float uTime;
 uniform float uSeed;
 uniform bool uHasBoundary;
 uniform bool uHasSpawn;
@@ -46,14 +57,23 @@ void main() {
     vec2 position = state.xy;
     vec2 velocity = state.zw;
 
+    // Age without storing it: the particle's own cycle position, offset per particle so respawns are
+    // spread evenly through the lifetime rather than the whole field turning over at once. A cycle
+    // completed within this frame is a rebirth. Playback time is the clock, so a paused track ages
+    // nothing.
+    float lifetime = max(uLifetime, 0.05);
+    float birth = hash(vUv + uSeed + 19.7);
+    float cycles = uTime / lifetime + birth;
+    bool reborn = floor(cycles) > floor((uTime - uDelta) / lifetime + birth);
+
     // An uninitialized texel starts as a seeded position rather than at the origin, so the first frame
     // does not show every particle stacked in one place.
-    if (position == vec2(0.0) && velocity == vec2(0.0)) {
+    if (reborn || (position == vec2(0.0) && velocity == vec2(0.0))) {
         vec4 spawn = uHasSpawn ? texture(uSpawn, vUv) : vec4(0.0);
         position = uHasSpawn && spawn.a > 0.0
             ? spawn.xy
-            : vec2(hash(vUv + uSeed), hash(vUv + uSeed + 3.7)) * 2.0 - 1.0;
-        velocity = vec2(hash(vUv + 7.1) - 0.5, hash(vUv + 11.3) - 0.5) * 0.1;
+            : vec2(hash(vUv + uSeed + cycles), hash(vUv + uSeed + 3.7 + cycles)) * 2.0 - 1.0;
+        velocity = vec2(hash(vUv + 7.1 + cycles) - 0.5, hash(vUv + 11.3 + cycles) - 0.5) * 0.1;
     }
 
     // The force field is sampled in field space, which is the same 0..1 domain as the screen.
@@ -273,6 +293,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
+            let playbackTime = 0;
+
             return {
                 initialize() {
                     context.registerShader({
@@ -286,9 +308,9 @@ export function createParticleSimulator(): VisualPluginDefinition {
                     // The simulation state lives in the ping-ponged target, not here.
                 },
 
-                update() {
-                    // Stateless: the frame's delta reaches the shader from the kernel, which passes
-                    // zero on a frozen clock so the simulation holds rather than drifting while paused.
+                update(frame) {
+                    // Playback time, so lifetimes advance with the music and hold when it does.
+                    playbackTime = frame.clock.playbackTime;
                 },
 
                 render(render): RenderPass[] {
@@ -316,6 +338,7 @@ export function createParticleSimulator(): VisualPluginDefinition {
                             // against the long steps a hidden tab or a stall produces.
                             uDrag: 0.4,
                             uLifetime: 4,
+                            uTime: playbackTime,
                             uSeed: context.seed,
                             uHasBoundary: boundary !== undefined,
                             uHasSpawn: spawn !== undefined,

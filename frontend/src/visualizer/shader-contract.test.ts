@@ -43,7 +43,6 @@ const CPU_SIDE_PARAMETERS: Record<string, string> = {
     'SpectrumGeometrySource:gain': 'scales spectrum magnitudes when writing vertices',
     'TransientGlyphSource:scale': 'scales glyph reach when writing glyph geometry',
     'ImpactCascadeSimulator:energyScale': 'scales collision energy in the CPU-side cascade step',
-    'ParticleSimulator:lifetime': 'bounds particle age in the simulation step',
     'ParticleRenderer:pointSize': 'set as a vertex-stage point size rather than a fragment uniform',
     'SymmetryTransform:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
     'SDFShapeSource:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
