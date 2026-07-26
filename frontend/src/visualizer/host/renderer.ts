@@ -9,11 +9,11 @@
 import type { CompiledGraph } from '../core/graph';
 import {
     advanceCrossfade,
-    blendForCharacter,
     composeLayers,
     createLayer,
     crossfadesBetween,
     isCrossfadeComplete,
+    layersForGraph,
     type Crossfade,
     type VisualLayer,
 } from '../core/layers';
@@ -98,6 +98,13 @@ export interface Renderer {
     captureCurrentScene(): AuthoredScene;
     /** Why the last document did not resolve. Empty when it did. */
     sceneProblems(): AuthoredProblem[];
+    /**
+     * Every live instance's resolved parameters, by node id.
+     *
+     * A snapshot rather than a stream: the readout is throttled, and a value the editor shows moving
+     * is worth far more than one it shows exactly.
+     */
+    liveParameters(): Record<string, Record<string, number>>;
     /**
      * Writes one parameter on one live instance.
      *
@@ -249,7 +256,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         scene.parameterOverrides,
         scene.entropy,
     ).instances;
-    let layers = buildLayers(scene.graph);
+    let layers = layersForGraph(scene.graph);
     let crossfades: readonly Crossfade[] = [];
     runtime.setGraph(scene.graph, instances);
 
@@ -519,7 +526,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         // drains a plugin's own simulation but does nothing about a new branch appearing at full
         // opacity in a single frame.
         const departingLayers = layers;
-        layers = buildLayers(scene.graph);
+        layers = layersForGraph(scene.graph);
         crossfades = crossfadesBetween(departingLayers, layers);
         runtime.setGraph(scene.graph, instances);
 
@@ -729,6 +736,12 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
             sceneProblems() {
                 return sceneProblems;
+            },
+
+            liveParameters() {
+                return Object.fromEntries(
+                    instances.map((entry) => [entry.instanceId, { ...entry.parameters }]),
+                );
             },
 
             setNodeParameter(nodeId, parameter, value) {
@@ -1048,56 +1061,5 @@ function bindingsFor(
 ): readonly ParameterBinding[] | undefined {
     return distributed.find((entry) => entry.instanceId === instanceId)?.bindings
         ?? definition.defaultBindings;
-}
-
-/**
- * The layer stack the compositor blends.
- *
- * Every plugin producing a colour output that nothing else consumes becomes a layer, so a scene with two
- * parallel visual branches genuinely composites rather than presenting only the last one. Order follows
- * graph order, and a plugin whose material is meant to persist contributes to feedback in proportion to
- * its declared persistence.
- */
-function buildLayers(graph: CompiledGraph): VisualLayer[] {
-    const consumed = new Set<string>();
-    for (const node of graph.order) {
-        for (const resource of Object.values(node.inputs)) {
-            consumed.add(resource);
-        }
-    }
-
-    const layers: VisualLayer[] = [];
-
-    graph.order.forEach((node, index) => {
-        for (const port of node.definition.outputs) {
-            if (port.type !== 'color-texture') {
-                continue;
-            }
-
-            const resource = node.outputs[port.name];
-            // A resource something downstream reads is an intermediate, not a layer.
-            if (!resource || consumed.has(resource)) {
-                continue;
-            }
-
-            layers.push(createLayer(node.instanceId, resource, {
-                order: index,
-                // Chosen from what the plugin says it produces. Every layer above the base used to
-                // blend with `screen`, which is a lighten operator: parallel branches accumulated
-                // toward white and read as superposition rather than as interaction.
-                blendMode: layers.length === 0
-                    ? 'normal'
-                    : blendForCharacter(node.definition.character),
-                feedbackParticipation: node.definition.character.persistence,
-            }));
-        }
-    });
-
-    if (layers.length === 0 && graph.present) {
-        // Everything was consumed by something, so present the graph's own output.
-        layers.push(createLayer('output', graph.present, { order: 0 }));
-    }
-
-    return layers;
 }
 

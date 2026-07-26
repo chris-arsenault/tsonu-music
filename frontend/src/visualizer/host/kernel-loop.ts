@@ -104,6 +104,12 @@ export interface KernelReadout {
         survivalPerSecond: number;
         /** UV per second the accumulation is dragged through the scene's motion field. */
         motionScale: number;
+        /** Every live instance's resolved parameters, so the editor can show them moving. */
+        parameters: Record<string, Record<string, number>>;
+        /** The document in control, if one is. */
+        authored?: AuthoredScene;
+        /** Why the last document did not resolve, anchored to its nodes and edges. */
+        problems: readonly AuthoredProblem[];
     };
     gpu?: {
         floatRenderTargets: boolean;
@@ -468,6 +474,9 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         activeModulatorCount: renderer.activeModulatorCount(),
                         survivalPerSecond: renderer.persistence().survivalPerSecond,
                         motionScale: renderer.persistence().motionScale,
+                        parameters: renderer.liveParameters(),
+                        authored: renderer.authoredScene(),
+                        problems: renderer.sceneProblems(),
                     }
                     : undefined,
                 gpu: renderer

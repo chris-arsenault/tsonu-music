@@ -14,7 +14,7 @@ initial player bundle.
 | [`core/`](./core) | Pure decision logic over plain data — clock, features, graph, scheduler, performance |
 | [`host/`](./host) | Web Audio, WebGL2 device, and frame loop; gathers host state, applies core decisions |
 | [`plugins/`](./plugins) | Plugin catalog, one directory per category |
-| [`ui/`](./ui) | React surface in the player, plus the diagnostics overlay |
+| [`ui/`](./ui) | React surface in the player, plus the graph editor dock in [`ui/editor/`](./ui/editor) |
 
 ## Rules
 

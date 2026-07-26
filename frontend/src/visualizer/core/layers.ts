@@ -6,6 +6,7 @@
  */
 
 import { clamp01 } from './bindings';
+import type { CompiledGraph } from './graph';
 import type { BlendMode, ResourceId } from './passes';
 import type { SelectionCharacter } from './plugin';
 
@@ -74,6 +75,61 @@ export function blendForCharacter(character: SelectionCharacter): BlendMode {
     }
 
     return 'screen';
+}
+
+/**
+ * The layer stack a compiled graph produces.
+ *
+ * Every plugin whose colour output nothing else consumes becomes a layer, so a scene with two
+ * parallel branches genuinely composites rather than presenting only the last one. Order follows
+ * graph order, and a plugin whose material is meant to persist contributes to feedback in proportion
+ * to its declared persistence.
+ *
+ * This is the second of the two structures that decide what reaches the screen and appear in no edge
+ * list — `present` is nearly vestigial beside it. It lives in core rather than in the renderer so the
+ * editor can draw the real stack instead of a copy that might disagree with it.
+ */
+export function layersForGraph(graph: CompiledGraph): VisualLayer[] {
+    const consumed = new Set<ResourceId>();
+    for (const node of graph.order) {
+        for (const resource of Object.values(node.inputs)) {
+            consumed.add(resource);
+        }
+    }
+
+    const layers: VisualLayer[] = [];
+
+    graph.order.forEach((node, index) => {
+        for (const port of node.definition.outputs) {
+            if (port.type !== 'color-texture') {
+                continue;
+            }
+
+            const resource = node.outputs[port.name];
+            // A resource something downstream reads is an intermediate, not a layer.
+            if (!resource || consumed.has(resource)) {
+                continue;
+            }
+
+            layers.push(createLayer(node.instanceId, resource, {
+                order: index,
+                // Chosen from what the plugin says it produces. Every layer above the base used to
+                // blend with `screen`, which is a lighten operator: parallel branches accumulated
+                // toward white and read as superposition rather than as interaction.
+                blendMode: layers.length === 0
+                    ? 'normal'
+                    : blendForCharacter(node.definition.character),
+                feedbackParticipation: node.definition.character.persistence,
+            }));
+        }
+    });
+
+    if (layers.length === 0 && graph.present) {
+        // Everything was consumed by something, so present the graph's own output.
+        layers.push(createLayer('output', graph.present, { order: 0 }));
+    }
+
+    return layers;
 }
 
 /**

@@ -133,9 +133,11 @@ editable yet.
 - Capture the running scene and draw it: plugin nodes, asset nodes, the implicit layer edges, the
   implicit motion edges, and the kernel tail, each node showing its live resolved values.
 - Click a node to inspect its resource; mute a node.
-- **[DECISION]** Does muting keep the existing `disabledPlugins` semantics, where everything left
-  unreachable downstream also stops? Faithful to how suppression already behaves, but muting one
-  source can blank half the graph, which may not be what you want while bisecting.
+- **[DECISION]** Muting currently keeps the existing `disabledPlugins` semantics: `unreachableInstances`
+  stops everything the mute leaves stranded, so muting a source can blank half the graph. That is
+  faithful to how quality suppression already behaves and it is what shipped, but bisecting may want
+  the opposite — mute one node and leave the rest running against whatever remains. Changing it means
+  a second exclusion mode rather than a change to this one.
 - Exit: `make ci` green; the dock shows the running scene including both implicit buses and the
   kernel tail; node bodies are covered by `renderToStaticMarkup`.
 
@@ -161,8 +163,9 @@ editable yet.
   migration hook for a format that will change.
 - "Copy as fixture" — emit a compiling `AuthoredScene` literal that pastes straight into a vitest
   file, so a fault found by watching becomes a regression test.
-- Document the editor as current state in `docs/visualizer.md`, `frontend/src/visualizer/README.md`,
-  and `ui/README.md`. Deferred to here deliberately: those documents assert what exists.
+- Document persistence and export as current state. The dock itself is already documented: it landed
+  in M3 and replaced the diagnostics panel, so leaving those documents describing the old surface
+  would have left them asserting something untrue.
 - Exit: `make ci` green; a document exported, reimported, and resolved yields an identical compiled
   graph; a pasted fixture compiles and asserts in a test file.
 

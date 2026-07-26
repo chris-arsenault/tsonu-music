@@ -14,9 +14,23 @@ artwork remains the only album thumbnail. Opening the modal starts the kernel; c
 kernel. Chromium and Firefox show the button because they can switch to the required hls.js playback
 path. Safari remains on native HLS and does not offer the visualizer.
 
-Diagnostics are a **Diagnostics** button in the modal's top-right corner, opening a panel over the
-right-hand side. `?viz-debug=1` opens it immediately on load. It reports on the kernel the modal is
-running rather than starting one of its own.
+An **Editor** button in the modal's top-right corner opens a dock below the canvas, which shrinks to
+make room for it. `?viz-debug=1` opens the dock immediately on load. It reports on the kernel the
+modal is running rather than starting one of its own, and it carries three tabs: the scene graph,
+the audio feature meters, and the playback, performance and GPU readouts.
+
+**Capture scene** freezes what is rendering into a scene document and hands the graph to it. While a
+document is in control the scene holds still — the scheduler neither mutates nor rebuilds it, and the
+quality ladder does not suppress plugins out of it — so a composition can be examined a node at a
+time. **Release to scheduler** hands it back and starts a fresh scene. Selecting a node routes its
+output to the whole canvas; selecting a muted one excludes it from the graph along with anything it
+leaves unreachable.
+
+The graph shows more than the document's own edges. The layer stack — every colour output nothing
+else consumes, which is what actually reaches the screen — and the motion bus, summed from every
+motion-typed resource whether or not the graph reads it, are drawn as dashed edges into the kernel
+stages that consume them. Composite, motion sum, accumulation and grade appear as nodes, each
+inspectable, and each showing the values it is running with.
 
 ## Layout
 
@@ -28,7 +42,7 @@ running rather than starting one of its own.
 | `core/` | Pure decision logic over plain data, unit-tested in the Node environment |
 | `host/` | Web Audio, WebGL2 device, frame loop; gathers state and applies core decisions |
 | `plugins/` | The plugin catalog, one directory per category |
-| `ui/` | React surface in the player, plus the diagnostics overlay |
+| `ui/` | React surface in the player, plus the graph editor dock in `ui/editor/` |
 
 The whole subsystem loads as a dynamic chunk on first activation and is absent from the initial
 player bundle.
