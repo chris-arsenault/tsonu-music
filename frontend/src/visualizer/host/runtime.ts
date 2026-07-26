@@ -11,6 +11,7 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { CompiledGraph, CompiledNode } from '../core/graph';
 import { composeLayers, type Crossfade, type VisualLayer } from '../core/layers';
+import { selectKernelInputs } from '../core/kernel-inputs';
 import {
     isPluginDisabled,
     simulationDelta,
@@ -99,6 +100,8 @@ export interface RuntimeFrame {
     renderWidth: number;
     renderHeight: number;
     layers: readonly VisualLayer[];
+    /** Explicit Motion sum membership. Undefined uses every motion-compatible graph resource. */
+    motionInputs?: readonly ResourceId[];
     crossfades?: readonly Crossfade[];
     /** Set on the frame a seek or track change lands, to drop stale impacts alongside audio events. */
     clearTransients?: boolean;
@@ -178,6 +181,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
     device.registerShader(PERSISTENCE_SHADER);
     device.registerShader(GRADE_SHADER);
     device.registerShader(METER_SHADER);
+    const values = new Map<ResourceId, unknown>();
 
     function resolveTexture(plan: RenderPlan, resource: ResourceId | undefined, previous: boolean): WebGLTexture | undefined {
         if (!resource) {
@@ -356,6 +360,11 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 stats.targetsAllocated += 1;
             }
 
+            // Semantic values describe this frame's authored graph. Keeping a value from a previous
+            // frame after its producer is muted or quality-suppressed would leave a hidden emitter,
+            // force, or collider influencing the simulator even though its node is no longer running.
+            values.clear();
+
             const byInstance = new Map(instances.map((entry) => [entry.instanceId, entry]));
 
             // Simulation freeze applies here rather than inside each plugin, since zero delta is a
@@ -435,6 +444,9 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     inputs: node.inputs,
                     parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
+                    publishValue: (resource, value) => values.set(resource, value),
+                    readValue: <T>(resource: ResourceId | undefined) =>
+                        resource ? values.get(resource) as T | undefined : undefined,
                     particleScale: frame.profile?.particleScale,
                     historyDepth: frame.profile?.historyDepth,
                     impacts,
@@ -478,6 +490,9 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     inputs: active.node.inputs,
                     parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
+                    publishValue: (resource, value) => values.set(resource, value),
+                    readValue: <T>(resource: ResourceId | undefined) =>
+                        resource ? values.get(resource) as T | undefined : undefined,
                     // A draining plugin keeps simulating but stops emitting new material.
                     particleScale: entry.emitting ? frame.profile?.particleScale : 0,
                     historyDepth: frame.profile?.historyDepth,
@@ -521,7 +536,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 }
 
                 composite(device, plan, frame, presentShaderId, stats);
-                const hasMotion = sumMotion(device, graph, plan, stats);
+                const hasMotion = sumMotion(device, graph, plan, stats, frame.motionInputs);
 
                 // A frozen clock advances nothing, so the accumulation holds exactly rather than
                 // screening the same frame into itself and brightening while paused.
@@ -739,8 +754,12 @@ function sumMotion(
     graph: CompiledGraph,
     plan: RenderPlan,
     stats: RuntimeStats,
+    selected: readonly ResourceId[] | undefined,
 ): boolean {
-    const sources = graph.resources.filter((resource) => isMotionSource(resource.type));
+    const sources = selectKernelInputs(
+        graph.resources.filter((resource) => isMotionSource(resource.type)),
+        selected,
+    );
     const width = Math.max(1, Math.round(plan.width * MOTION_SCALE));
     const height = Math.max(1, Math.round(plan.height * MOTION_SCALE));
     const target = device.acquireTarget(MOTION_KEY, width, height);

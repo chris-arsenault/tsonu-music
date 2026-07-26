@@ -108,10 +108,27 @@ export interface AuthoredAssetBinding {
  * Every member is optional. Absent means the kernel decides, as it does with no document at all.
  */
 export interface AuthoredKernel {
+    /**
+     * Explicit layer membership for Composite. Undefined keeps automatic membership; an empty array
+     * deliberately gives the stage no inputs.
+     */
+    compositeInputs?: string[];
+    /** Explicit resource membership for Motion sum, with the same automatic/empty distinction. */
+    motionInputs?: string[];
     /** The grade's own parameters and what drives them, resolved exactly as a plugin's are. */
     grade?: {
         parameters?: Record<string, number>;
         bindings?: ParameterBinding[];
+    };
+    /**
+     * The scheme used to colour otherwise-neutral material at Composite.
+     *
+     * Undefined members retain the theme/entropy-derived choice. An explicit id and strength make the
+     * colour transformation reproducible and editable instead of leaving it as hidden kernel state.
+     */
+    palette?: {
+        id?: string;
+        strength?: number;
     };
     /** Pinned accumulation values. Absent members keep following the theme and the audio. */
     persistence?: PersistenceOverrides;
@@ -175,8 +192,14 @@ export interface ResolvedAuthoredScene {
 }
 
 export interface ResolvedKernel {
+    compositeInputs?: readonly string[];
+    motionInputs?: readonly string[];
     gradeParameters: Record<string, number>;
     gradeBindings: readonly ParameterBinding[];
+    palette?: {
+        id?: string;
+        strength?: number;
+    };
     persistence?: PersistenceOverrides;
     layers?: Record<string, LayerOverride>;
 }
@@ -375,8 +398,13 @@ export function resolveAuthoredScene(
 /** The tail's settings over the kernel's own, so an absent section behaves as no document at all. */
 export function resolveKernel(kernel: AuthoredKernel | undefined): ResolvedKernel {
     return {
+        ...(kernel?.compositeInputs !== undefined
+            ? { compositeInputs: [...kernel.compositeInputs] }
+            : {}),
+        ...(kernel?.motionInputs !== undefined ? { motionInputs: [...kernel.motionInputs] } : {}),
         gradeParameters: { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) },
         gradeBindings: kernel?.grade?.bindings ?? COMPOSITE_BINDINGS,
+        ...(kernel?.palette ? { palette: { ...kernel.palette } } : {}),
         ...(kernel?.persistence ? { persistence: { ...kernel.persistence } } : {}),
         ...(kernel?.layers ? { layers: { ...kernel.layers } } : {}),
     };

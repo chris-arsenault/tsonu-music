@@ -8,7 +8,7 @@
  * rejected. See ADR-0011.
  */
 
-import { useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
     Background,
     Controls,
@@ -21,7 +21,9 @@ import {
     type Node,
     type NodeProps,
     type OnConnectEnd,
-    type OnConnectStart,
+    useEdgesState,
+    useNodesState,
+    useUpdateNodeInternals,
 } from '@xyflow/react';
 import { connectionAllowed, type CanvasEndpoint } from '../../core/editor-actions';
 import type { EditorEdge, EditorNode, EditorView } from '../../core/editor-view';
@@ -30,7 +32,32 @@ import GraphNodeBody, { PORT_ROW_HEIGHT, portColour } from './GraphNodeBody';
 /** Distance from a node's top to the first port row, in step with the title bar in the stylesheet. */
 const PORTS_TOP = 28;
 
-type FlowNode = Node<{ node: EditorNode }, 'viz'>;
+type FlowNode = Node<{
+    node: EditorNode;
+    /** Excludes live parameter samples, which must not churn React Flow's controlled node array. */
+    signature: string;
+}, 'viz'>;
+
+function nodeSignature(node: EditorNode): string {
+    return JSON.stringify(node, (key, value) => (key === 'live' ? undefined : value));
+}
+
+function sameNodeProjection(current: readonly FlowNode[], next: readonly FlowNode[]): boolean {
+    return current.length === next.length && current.every((node, index) => {
+        const candidate = next[index];
+        return node.id === candidate.id
+            && node.type === candidate.type
+            && node.position.x === candidate.position.x
+            && node.position.y === candidate.position.y
+            && node.selected === candidate.selected
+            && node.draggable === candidate.draggable
+            && node.data.signature === candidate.data.signature;
+    });
+}
+
+function sameEdgeProjection(current: readonly Edge[], next: readonly Edge[]): boolean {
+    return JSON.stringify(current) === JSON.stringify(next);
+}
 
 /**
  * One node type for everything.
@@ -38,8 +65,24 @@ type FlowNode = Node<{ node: EditorNode }, 'viz'>;
  * Plugins, assets, drivers and kernel stages differ in what they contain rather than in how they
  * behave on the canvas, and the body already varies its appearance from `kind`.
  */
-function VizNode({ data, selected }: NodeProps<FlowNode>) {
+const VizNode = memo(function VizNode({
+    id,
+    data,
+    selected,
+    isConnectable,
+}: NodeProps<FlowNode>) {
     const { node } = data;
+    const updateNodeInternals = useUpdateNodeInternals();
+    const handleLayout = [
+        node.inputs.map((port) => port.name).join('\u001f'),
+        node.outputs.map((port) => port.name).join('\u001f'),
+    ].join('\u001e');
+
+    // Port membership and ordering are authored data. React Flow does not rediscover dynamically
+    // changed handles by itself, so refresh its measured handle bounds after the new DOM is committed.
+    useEffect(() => {
+        updateNodeInternals(id);
+    }, [handleLayout, id, updateNodeInternals]);
 
     return (
         <>
@@ -49,6 +92,7 @@ function VizNode({ data, selected }: NodeProps<FlowNode>) {
                     id={port.name}
                     type="target"
                     position={Position.Left}
+                    isConnectable={isConnectable}
                     className={port.parameter ? 'is-parameter' : undefined}
                     style={{
                         top: PORTS_TOP + index * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT / 2,
@@ -65,6 +109,7 @@ function VizNode({ data, selected }: NodeProps<FlowNode>) {
                     id={port.name}
                     type="source"
                     position={Position.Right}
+                    isConnectable={isConnectable}
                     style={{
                         top: PORTS_TOP + index * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT / 2,
                         background: portColour(port.type),
@@ -73,7 +118,7 @@ function VizNode({ data, selected }: NodeProps<FlowNode>) {
             ))}
         </>
     );
-}
+});
 
 const NODE_TYPES = { viz: VizNode };
 
@@ -130,11 +175,15 @@ export interface GraphCanvasProps {
     selectedId?: string;
     editable: boolean;
     onSelect: (node: EditorNode | undefined) => void;
-    onMove: (nodeId: string, position: { x: number; y: number }, settled: boolean) => void;
+    onMove: (nodeId: string, position: { x: number; y: number }) => void;
     onConnect: (from: CanvasEndpoint, to: CanvasEndpoint) => void;
     onDisconnect: (edgeId: string) => void;
-    /** A link dropped on empty canvas, at the position it was dropped. */
-    onDropOnPane: (from: CanvasEndpoint, at: { x: number; y: number }) => void;
+    /** A link dropped on empty canvas, including which side of the new node must satisfy it. */
+    onDropOnPane: (
+        from: CanvasEndpoint,
+        handleType: 'source' | 'target',
+        at: { x: number; y: number },
+    ) => void;
     onAddAt: (at: { x: number; y: number }) => void;
     /** Hands back the screen-to-canvas projection, so a drop point becomes a node position. */
     onReady?: (project: (point: { x: number; y: number }) => { x: number; y: number }) => void;
@@ -152,13 +201,22 @@ export default function GraphCanvas({
     onAddAt,
     onReady,
 }: GraphCanvasProps) {
-    const dragging = useRef<CanvasEndpoint | undefined>(undefined);
+    const draggingNode = useRef<string | undefined>(undefined);
+    const viewRef = useRef(view);
+    const editableRef = useRef(editable);
+    const connectRef = useRef(onConnect);
+    const dropOnPaneRef = useRef(onDropOnPane);
 
-    const nodes = useMemo<FlowNode[]>(() => view.nodes.map((node) => ({
+    viewRef.current = view;
+    editableRef.current = editable;
+    connectRef.current = onConnect;
+    dropOnPaneRef.current = onDropOnPane;
+
+    const projectedNodes = useMemo<FlowNode[]>(() => view.nodes.map((node) => ({
         id: node.id,
         type: 'viz',
         position: node.position,
-        data: { node },
+        data: { node, signature: nodeSignature(node) },
         selected: node.id === selectedId,
         draggable: editable,
         // A driver is a picture of a binding rather than something stored, so it has no position of
@@ -166,7 +224,25 @@ export default function GraphCanvas({
         ...(node.kind === 'feature' || node.kind === 'constant' ? { draggable: false } : {}),
     })), [view.nodes, selectedId, editable]);
 
-    const edges = useMemo<Edge[]>(() => view.edges.map(edgeStyle), [view.edges]);
+    const projectedEdges = useMemo<Edge[]>(() => view.edges.map(edgeStyle), [view.edges]);
+    const [nodes, setNodes, onNodesChange] = useNodesState(projectedNodes);
+    const [edges, setEdges, onEdgesChange] = useEdgesState(projectedEdges);
+
+    // Live values arrive at 20 Hz, but they do not change React Flow's geometry or interaction state.
+    // Preserve the controlled arrays unless their structural projection changed; replacing them for
+    // every sample interrupts React Flow's own click, drag and connection state machines.
+    useEffect(() => {
+        if (draggingNode.current) {
+            return;
+        }
+
+        setNodes((current) => sameNodeProjection(current, projectedNodes)
+            ? current
+            : projectedNodes);
+        setEdges((current) => sameEdgeProjection(current, projectedEdges)
+            ? current
+            : projectedEdges);
+    }, [projectedNodes, projectedEdges, setNodes]);
 
     const isValid = useCallback<IsValidConnection>((connection) => {
         if (!connection.source || !connection.target
@@ -175,23 +251,16 @@ export default function GraphCanvas({
         }
 
         return connectionAllowed(
-            view,
+            viewRef.current,
             { node: connection.source, port: connection.sourceHandle },
             { node: connection.target, port: connection.targetHandle },
         ).ok;
-    }, [view]);
-
-    const onConnectStart = useCallback<OnConnectStart>((_, params) => {
-        dragging.current = params.nodeId && params.handleId
-            ? { node: params.nodeId, port: params.handleId }
-            : undefined;
     }, []);
 
-    const onConnectEnd = useCallback<OnConnectEnd>((event) => {
-        const from = dragging.current;
-        dragging.current = undefined;
+    const onConnectEnd = useCallback<OnConnectEnd>((event, state) => {
+        const handle = state.fromHandle;
 
-        if (!from || !editable) {
+        if (!handle?.id || !editableRef.current) {
             return;
         }
 
@@ -206,8 +275,22 @@ export default function GraphCanvas({
             ? { x: event.clientX, y: event.clientY }
             : { x: event.changedTouches[0]?.clientX ?? 0, y: event.changedTouches[0]?.clientY ?? 0 };
 
-        onDropOnPane(from, point);
-    }, [editable, onDropOnPane]);
+        dropOnPaneRef.current(
+            { node: handle.nodeId, port: handle.id },
+            handle.type,
+            point,
+        );
+    }, []);
+
+    const commitConnection = useCallback((connection: Connection) => {
+        if (connection.source && connection.target
+            && connection.sourceHandle && connection.targetHandle) {
+            connectRef.current(
+                { node: connection.source, port: connection.sourceHandle },
+                { node: connection.target, port: connection.targetHandle },
+            );
+        }
+    }, []);
 
     return (
         <ReactFlow
@@ -215,6 +298,8 @@ export default function GraphCanvas({
             edges={edges}
             nodeTypes={NODE_TYPES}
             onInit={(instance) => onReady?.(instance.screenToFlowPosition)}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
             onNodeClick={(_, node) => onSelect(node.data.node)}
             onPaneClick={() => onSelect(undefined)}
             onDoubleClick={(event) => {
@@ -224,18 +309,14 @@ export default function GraphCanvas({
                     onAddAt({ x: event.clientX, y: event.clientY });
                 }
             }}
-            onNodeDrag={(_, node) => onMove(node.id, node.position, false)}
-            onNodeDragStop={(_, node) => onMove(node.id, node.position, true)}
-            onConnect={(connection: Connection) => {
-                if (connection.source && connection.target
-                    && connection.sourceHandle && connection.targetHandle) {
-                    onConnect(
-                        { node: connection.source, port: connection.sourceHandle },
-                        { node: connection.target, port: connection.targetHandle },
-                    );
-                }
+            onNodeDragStart={(_, node) => {
+                draggingNode.current = node.id;
             }}
-            onConnectStart={onConnectStart}
+            onNodeDragStop={(_, node) => {
+                draggingNode.current = undefined;
+                onMove(node.id, node.position);
+            }}
+            onConnect={commitConnection}
             onConnectEnd={onConnectEnd}
             onEdgesDelete={(deleted) => deleted.forEach((edge) => onDisconnect(edge.id))}
             isValidConnection={isValid}

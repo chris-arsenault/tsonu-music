@@ -77,6 +77,27 @@ export async function copyFixture(
     }
 }
 
+/**
+ * Copies the canonical scene JSON for pasting into an analysis conversation.
+ *
+ * Unlike the fixture action, this has no TypeScript wrapper: the payload is the exact importable
+ * graph document, including parameters, bindings, assets, presentation target and kernel settings.
+ */
+export type CopyGraphResult =
+    | { where: 'clipboard' }
+    | { where: 'manual'; text: string };
+
+export async function copyGraph(scene: AuthoredScene): Promise<CopyGraphResult> {
+    const text = serializeScene(scene);
+
+    try {
+        await navigator.clipboard.writeText(text);
+        return { where: 'clipboard' };
+    } catch {
+        return { where: 'manual', text };
+    }
+}
+
 export type SceneFileResult =
     | { ok: true; scene: AuthoredScene; warnings: AuthoredProblem[] }
     | { ok: false; problems: AuthoredProblem[] };

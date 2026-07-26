@@ -7,7 +7,7 @@
  */
 
 import type { CompiledGraph, CompiledNode } from './graph';
-import type { PortType } from './plugin';
+import { isValuePortType, type PortType } from './plugin';
 import type { ResourceId } from './passes';
 
 export interface TargetPlanEntry {
@@ -148,6 +148,10 @@ export function planTargets(
     const readSlot: 0 | 1 = writeSlot === 0 ? 1 : 0;
 
     for (const resource of graph.resources) {
+        if (isValuePortType(resource.type)) {
+            continue;
+        }
+
         // Sized by what the resource is for, so a field or particle buffer is not needlessly allocated at
         // full viewport resolution — and so the size is stable across frames rather than recomputed per
         // pass, which is what previously caused a delete-and-recreate every frame.

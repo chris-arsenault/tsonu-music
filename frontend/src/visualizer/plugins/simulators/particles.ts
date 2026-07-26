@@ -1,321 +1,193 @@
 /**
- * Particle system (spec section 19.5).
+ * Physical particle system.
  *
- * State lives in a ping-ponged float texture rather than on the CPU: position, velocity, and age per
- * particle, advanced by a shader each frame. That is what `EXT_color_buffer_float` is required for.
- *
- * Split across plugins as the spec describes, so an emitter or a force field can be replaced without
- * resetting the particle state the simulator holds.
+ * Emitters, forces, and colliders publish synchronous authored data. The simulator owns the only
+ * mutable particle world, and the renderer projects that exact state into matching mask and colour
+ * textures. No texture is used as a substitute for an emitter or a force configuration.
  */
 
 import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
-import type { FieldSample, VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
+import { resourceIdFor } from '../../core/graph';
+import type {
+    FieldSample,
+    VisualPluginDefinition,
+    VisualPluginInstance,
+} from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
-import { createParticleWorld, stepParticles } from '../../core/particle-physics';
+import {
+    activeParticleCount,
+    createParticleWorld,
+    emitParticle,
+    resetParticleWorld,
+    stepParticles,
+    type ParticleCollider,
+    type ParticleForce,
+    type ParticleWorld,
+} from '../../core/particle-physics';
 
-// Only the two hand-written plugins need explicit shader ids; the rest go through
-// `defineShaderPlugin`, which derives the id from the plugin's own id.
-const RENDERER_SHADER = 'particle-renderer';
-const STATE_SHADER = 'particle-state-upload';
-const STATE_GEOMETRY_ID = 'particle-bodies';
+const STATE_OUTPUT = 'state';
+const EMITTER_OUTPUT = 'emitters';
+const FORCE_OUTPUT = 'forces';
+const COLLIDER_OUTPUT = 'colliders';
+const PARTICLE_CAPACITY = 4096;
+const FIXED_STEP = 1 / 120;
+const MAX_CATCH_UP = 0.1;
 
-/**
- * Each texel is one particle: xy position in clip space, zw velocity.
- *
- * There is no room left for age — all four channels are spent — so age is not stored. It is derived
- * from playback time and a per-particle birth offset, which costs one hash and behaves identically:
- * every particle runs a cycle of `uLifetime` seconds, and the offsets stagger them so the field does
- * not blink as one.
- *
- * The header here used to claim age rode in "the alpha of a second channel set", describing storage
- * that does not exist. `uLifetime` was declared, supplied twice, and read nowhere, so particles were
- * immortal: the respawn test was position and velocity both exactly zero, true only on the first
- * frame or two. Everything downstream of that followed — a `ParticleEmitter`'s shape, ring, and line
- * patterns were sampled once and never again, its rate binding did nothing, and a field that decayed
- * into a corner had no mechanism to refill.
- */
-const STATE_VERTEX = `#version 300 es
-in vec2 aSlot;
-in vec4 aBody;
-out vec4 vBody;
+export const PARTICLE_RENDER_MODES = ['points', 'discs', 'sparks', 'comets'] as const;
+export const EMITTER_MODES = ['point', 'region', 'line', 'ring', 'shape'] as const;
+export const FORCE_MODES = ['attract', 'repel', 'vortex', 'gravity', 'wind', 'curl'] as const;
+export const COLLIDER_MODES = ['frame', 'segment', 'circle', 'mask'] as const;
+
+type EmitterMode = typeof EMITTER_MODES[number];
+type ForceMode = typeof FORCE_MODES[number];
+type ColliderMode = typeof COLLIDER_MODES[number];
+
+export interface ParticleEmitterConfig {
+    id: string;
+    mode: EmitterMode;
+    seed: number;
+    origin: readonly [number, number];
+    emissionRadius: number;
+    directionDegrees: number;
+    spreadDegrees: number;
+    speed: number;
+    radius: number;
+    radiusJitter: number;
+    rate: number;
+    mass: number;
+    elasticity: number;
+    friction: number;
+    lifetime: number;
+    color: readonly [number, number, number];
+    shape?: FieldSample;
+}
+
+export type ParticleForceConfig =
+    | {
+        id: string;
+        kind: 'uniform';
+        acceleration: readonly [number, number];
+    }
+    | {
+        id: string;
+        kind: 'well';
+        position: readonly [number, number];
+        radius: number;
+        strength: number;
+        repel: boolean;
+    }
+    | {
+        id: string;
+        kind: 'vortex';
+        position: readonly [number, number];
+        radius: number;
+        tangentialStrength: number;
+        inwardStrength: number;
+    }
+    | {
+        id: string;
+        kind: 'field';
+        strength: number;
+        field?: FieldSample;
+    };
+
+export type ParticleColliderConfig =
+    | Exclude<ParticleCollider, { kind: 'mask' }>
+    | ({
+        kind: 'mask';
+        field?: FieldSample;
+        containInside: boolean;
+        elasticity: number;
+        friction: number;
+    });
+
+export interface ParticleState {
+    world: ParticleWorld;
+    activeCount: number;
+    emitters: EmitterList;
+    forces: ForceList;
+    colliders: readonly ParticleCollider[];
+}
+
+type EmitterList = readonly ParticleEmitterConfig[];
+type ForceList = readonly ParticleForceConfig[];
+type ColliderList = readonly ParticleColliderConfig[];
+
+const PARTICLE_VERTEX = `#version 300 es
+in vec2 aPosition;
+in float aRadius;
+in vec3 aColor;
+out vec3 vColor;
+
+uniform vec2 uWorldSize;
 
 void main() {
-    vBody = aBody;
-    gl_PointSize = 1.0;
-    // One point per particle, landing on that particle's own texel of the state texture.
-    gl_Position = vec4(aSlot * 2.0 - 1.0, 0.0, 1.0);
+    vColor = aColor;
+    gl_PointSize = max(1.0, aRadius * 2.0);
+    gl_Position = vec4(aPosition / max(vec2(1.0), uWorldSize * 0.5), 0.0, 1.0);
 }`;
 
-const STATE_FRAGMENT = `#version 300 es
+const PARTICLE_MASK_FRAGMENT = `#version 300 es
 precision highp float;
-in vec4 vBody;
 out vec4 fragColor;
 
 void main() {
-    fragColor = vBody;
+    float distanceFromCentre = length(gl_PointCoord - 0.5);
+    float coverage = 1.0 - smoothstep(0.47, 0.5, distanceFromCentre);
+    if (coverage <= 0.0) {
+        discard;
+    }
+    fragColor = vec4(vec3(coverage), coverage);
 }`;
 
-
-/** Clip units per second per unit of field magnitude. */
-const FORCE_SCALE = 2.4;
-
-/** Collision-field proximity below which a point counts as clear of the surface. */
-const SURFACE_THRESHOLD = 0.04;
-
-/** Scratch for one field read, so sampling allocates nothing per particle. */
-const sampled: [number, number, number] = [0, 0, 0];
-
-/**
- * A bilinear sampler over a field read back from the GPU, in clip coordinates.
- *
- * Bilinear rather than nearest because the field is a fraction of the screen resolution and a body
- * crosses several texels a second; nearest sampling makes a smooth field into a staircase and the
- * whole ensemble twitches on texel boundaries.
- */
-function sampleField(
-    field: FieldSample | undefined,
-): ((x: number, y: number, out: [number, number, number]) => void) | undefined {
-    if (!field || field.width < 2 || field.height < 2) {
-        return undefined;
-    }
-
-    const { width, height, data } = field;
-
-    return (x, y, out) => {
-        const u = Math.min(width - 1.001, Math.max(0, (x * 0.5 + 0.5) * (width - 1)));
-        const v = Math.min(height - 1.001, Math.max(0, (y * 0.5 + 0.5) * (height - 1)));
-        const x0 = Math.floor(u);
-        const y0 = Math.floor(v);
-        const fx = u - x0;
-        const fy = v - y0;
-
-        for (let channel = 0; channel < 3; channel += 1) {
-            const a = data[(y0 * width + x0) * 4 + channel];
-            const b = data[(y0 * width + x0 + 1) * 4 + channel];
-            const c = data[((y0 + 1) * width + x0) * 4 + channel];
-            const d = data[((y0 + 1) * width + x0 + 1) * 4 + channel];
-            out[channel] = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
-        }
-    };
-}
-
-/**
- * Where bodies are born: from an emitter's buffer when one is wired, otherwise in clusters.
- *
- * Clustered rather than uniform because motion is only legible against structure. Sixteen thousand
- * independent uniform-random dots are statistically identical to sixteen thousand others, so a field
- * of them reshuffling has nothing in it to track — captures four hundred milliseconds apart were
- * indistinguishable. Bodies born in groups get carried, folded and pulled apart as recognisable
- * things.
- */
-function createSpawner(seed: number) {
-    const CLUSTERS = 7;
-    let emitter: ((x: number, y: number, out: [number, number, number]) => void) | undefined;
-    let generation = 0;
-    let centres = clusterCentres(seed, generation);
-
-    function clusterCentres(base: number, turn: number): number[] {
-        const out: number[] = [];
-        for (let index = 0; index < CLUSTERS; index += 1) {
-            out.push(
-                Math.sin((base + turn * 0.618 + index) * 12.9898) * 0.8,
-                Math.cos((base + turn * 0.618 + index) * 78.233) * 0.8,
-            );
-        }
-
-        return out;
-    }
-
-    return {
-        setEmitter(field: ((x: number, y: number, out: [number, number, number]) => void) | undefined) {
-            emitter = field;
-        },
-
-        /** Advances to a new arrangement of clusters, so the composition keeps changing. */
-        turnOver() {
-            generation += 1;
-            centres = clusterCentres(seed, generation);
-        },
-
-        place(index: number, total: number, out: [number, number]) {
-            if (emitter) {
-                // The emitter buffer is indexed by particle, so read it at this body's own texel.
-                const u = ((index % PARTICLE_TEXTURE_SIDE) + 0.5) / PARTICLE_TEXTURE_SIDE;
-                const v = (Math.floor(index / PARTICLE_TEXTURE_SIDE) + 0.5) / PARTICLE_TEXTURE_SIDE;
-                emitter(u * 2 - 1, v * 2 - 1, sampled);
-
-                if (Math.abs(sampled[0]) <= 1 && Math.abs(sampled[1]) <= 1) {
-                    // Displaced by a hair, unique per body. A point emitter hands every particle the
-                    // identical position, and bodies at exactly the same place have no direction to
-                    // separate along — the case that used to weld them together permanently.
-                    out[0] = sampled[0] + ((index % 97) / 97 - 0.5) * CONTACT_RADIUS;
-                    out[1] = sampled[1] + ((index % 89) / 89 - 0.5) * CONTACT_RADIUS;
-                    return;
-                }
-            }
-
-            const cluster = index % CLUSTERS;
-            const angle = (index / total) * Math.PI * 2 + cluster;
-            const radius = ((index * 37) % 101) / 101 * 0.26;
-
-            out[0] = centres[cluster * 2] + Math.cos(angle) * radius;
-            out[1] = centres[cluster * 2 + 1] + Math.sin(angle) * radius;
-        },
-    };
-}
-
-/** Draws the state texture as points, one vertex per particle. */
-const RENDERER_VERTEX = `#version 300 es
-in vec2 aIndex;
-out float vSpeed;
-
-uniform sampler2D uState;
-uniform float uPointSize;
-
-void main() {
-    vec4 state = texture(uState, aIndex);
-    vSpeed = length(state.zw);
-
-    // Size carries speed. At a fixed size the only cue that a particle is moving is that it is
-    // somewhere else next frame, which at these speeds — eight to thirty pixels between frames, with
-    // no trail — reads as a different particle rather than the same one having travelled.
-    //
-    // A floor of three device pixels regardless: below that a particle is a fleck whatever else is
-    // true of it, and the whole field reads as grain.
-    gl_PointSize = max(3.0, uPointSize * (0.55 + min(vSpeed * 2.6, 1.75)));
-    gl_Position = vec4(state.xy, 0.0, 1.0);
-}`;
-
-const RENDERER_FRAGMENT = `#version 300 es
+const PARTICLE_COLOR_FRAGMENT = `#version 300 es
 precision highp float;
-in float vSpeed;
+in vec3 vColor;
 out vec4 fragColor;
 
-uniform float uMode;
 uniform float uBrightness;
 
 void main() {
-    vec2 offset = gl_PointCoord - 0.5;
-    float distance = length(offset);
-    float shape;
-
-    if (uMode < 0.5) {                       // points
-        shape = 1.0;
-    } else if (uMode < 1.5) {                // discs
-        shape = 1.0 - smoothstep(0.35, 0.5, distance);
-    } else if (uMode < 2.5) {                // sparks
-        shape = (1.0 - smoothstep(0.0, 0.5, distance)) * (0.4 + vSpeed * 3.0);
-    } else {                                 // comets
-        shape = (1.0 - smoothstep(0.0, 0.5, distance)) * exp(-abs(offset.y) * 8.0);
+    float distanceFromCentre = length(gl_PointCoord - 0.5);
+    float coverage = 1.0 - smoothstep(0.47, 0.5, distanceFromCentre);
+    if (coverage <= 0.0) {
+        discard;
     }
-
-    float energy = clamp(shape * uBrightness * (0.3 + vSpeed * 2.0), 0.0, 1.0);
-    fragColor = vec4(vec3(energy), energy);
+    fragColor = vec4(vColor * uBrightness * coverage, coverage);
 }`;
 
-// A pair of shaders that binned particles into a texture-backed spatial grid stood here. The grid
-// itself was right — a uniform grid is the standard broad phase — but a texel holds four floats and
-// four floats is one particle, so a cell could only ever remember one occupant, and a fragment shader
-// cannot write to another particle, so a contact could never be resolved once with both bodies
-// moving. Both limits belonged to the container rather than to the algorithm. See
-// `core/particle-physics.ts`.
-
-const EMITTER_FRAGMENT = `#version 300 es
+const PARTICLE_DEBUG_FRAGMENT = `#version 300 es
 precision highp float;
-in vec2 vUv;
 out vec4 fragColor;
 
-uniform sampler2D uShape;
-uniform vec2 uResolution;
-uniform float uMode;
-uniform float uRate;
-uniform float uTime;
-uniform float uSeed;
-${GLSL_COMMON}
-
-/**
- * Where this emitter sits.
- *
- * Every mode used to be centred on the origin — a point emitter at exactly the middle of the frame, a
- * ring concentric with it, a line straight through it. Dead centre is the one position that reads as
- * a diagram rather than as something happening somewhere, and with the frame symmetric about it there
- * is nowhere for the eye to travel. Placed off centre from the instance seed and drifting slowly, so
- * two emitters in a scene are in different places and neither stays put.
- */
-vec2 emitterOrigin() {
-    vec2 base = vec2(hash(vec2(uSeed, 3.1)), hash(vec2(uSeed, 7.7))) * 1.2 - 0.6;
-    vec2 drift = vec2(
-        sin(uTime * 0.07 + uSeed * 6.28),
-        cos(uTime * 0.053 + uSeed * 12.9)
-    ) * 0.22;
-
-    return clamp(base + drift, vec2(-0.85), vec2(0.85));
-}
-
 void main() {
-    vec2 origin = emitterOrigin();
-    vec2 spawn;
-
-    if (uMode < 0.5) {                       // point
-        spawn = origin;
-    } else if (uMode < 1.5) {                // region
-        spawn = origin + (vec2(hash(vUv + uSeed), hash(vUv + uSeed + 1.7)) * 2.0 - 1.0) * 0.45;
-    } else if (uMode < 2.5) {                // line
-        float along = hash(vUv + uSeed) * 2.0 - 1.0;
-        float tilt = uSeed * 3.1415926;
-        spawn = origin + vec2(cos(tilt), sin(tilt)) * along * 0.8;
-    } else if (uMode < 3.5) {                // ring
-        float angle = hash(vUv + uSeed) * 6.2831853;
-        spawn = origin + vec2(cos(angle), sin(angle)) * 0.45;
-    } else {
-        // Shape interior or edge: rejection-sampled against the supplied mask, so a mask or album-art
-        // edge can seed particles without the emitter knowing which it was given.
-        vec2 candidate = vec2(hash(vUv + uSeed), hash(vUv + uSeed + 5.3));
-        float weight = texture(uShape, candidate).r;
-        spawn = weight > 0.4 ? candidate * 2.0 - 1.0 : vec2(2.0);
+    float distanceFromCentre = length(gl_PointCoord - 0.5);
+    float ring = 1.0 - smoothstep(0.015, 0.03, abs(distanceFromCentre - 0.47));
+    if (ring <= 0.0) {
+        discard;
     }
-
-    // Rate gates emission, and the gate moves.
-    //
-    // Hashed on the texel alone, it was a fixed subset: a given particle either always came from the
-    // emitter or never did, for the life of the scene, so the emitter fed a static fraction of the
-    // field instead of streaming. Advancing the hash with time makes every particle pass through the
-    // emitter sooner or later, which is what makes it read as a source rather than a stencil.
-    float gate = step(hash(vUv + uSeed + 13.1 + floor(uTime * 7.0) * 0.37), uRate);
-    fragColor = vec4(spawn, 0.0, gate);
+    fragColor = vec4(1.0, 0.25, 0.08, ring);
 }`;
 
-const FORCE_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
+const DEBUG_LINE_VERTEX = `#version 300 es
+in vec2 aPosition;
+in vec3 aColor;
+out vec3 vColor;
 
-uniform sampler2D uField;
-uniform vec2 uResolution;
-uniform float uMode;
-uniform float uStrength;
-${GLSL_COMMON}
+uniform vec2 uWorldSize;
 
 void main() {
-    vec2 field = texture(uField, vUv).xy;
-    vec2 p = (vUv - 0.5) * 2.0;
-    vec2 force;
+    vColor = aColor;
+    gl_Position = vec4(aPosition / max(vec2(1.0), uWorldSize * 0.5), 0.0, 1.0);
+}`;
 
-    if (uMode < 0.5) {                       // attraction
-        force = -normalize(p + 1e-5) * uStrength;
-    } else if (uMode < 1.5) {                // repulsion
-        force = normalize(p + 1e-5) * uStrength;
-    } else if (uMode < 2.5) {                // vortex
-        force = vec2(-p.y, p.x) * uStrength;
-    } else if (uMode < 3.5) {                // gravity
-        force = vec2(0.0, -uStrength);
-    } else if (uMode < 4.5) {                // wind
-        force = vec2(uStrength, 0.0);
-    } else {                                 // curl from the supplied field
-        force = field * uStrength;
-    }
+const DEBUG_LINE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec3 vColor;
+out vec4 fragColor;
 
-    fragColor = vec4(force + field * 0.5, 0.0, 1.0);
+void main() {
+    fragColor = vec4(vColor, 0.9);
 }`;
 
 const TRAIL_FRAGMENT = `#version 300 es
@@ -325,440 +197,558 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform sampler2D uHistory;
-uniform vec2 uResolution;
 uniform float uDecay;
 uniform float uAmount;
 uniform float uDelta;
 ${GLSL_COMMON}
 
 void main() {
-    // Particle motion accumulates into a dedicated trail texture rather than the main feedback buffer,
-    // so trails can persist at a different rate from the rest of the scene. Decay is per frame and
-    // corrected to the frame this is, so trail length is a duration rather than a frame count.
     vec4 history = texture(uHistory, vUv) * pow(uDecay, max(uDelta, 0.0) * 60.0);
     vec4 incoming = texture(uSource, vUv) * uAmount;
-
     fragColor = max(history, incoming);
 }`;
 
-export const PARTICLE_RENDER_MODES = ['points', 'discs', 'sparks', 'comets'] as const;
-export const EMITTER_MODES = ['point', 'region', 'line', 'ring', 'shape'] as const;
-export const FORCE_MODES = ['attract', 'repel', 'vortex', 'gravity', 'wind', 'curl'] as const;
+export function createParticleEmitter(mode: EmitterMode = 'point'): VisualPluginDefinition {
+    const id = `ParticleEmitter:${mode}`;
 
-/**
- * Particle count at full quality. The performance ladder's particle scale multiplies this.
- *
- * Four thousand rather than sixteen. Solid contact and a large drawn particle put a ceiling on how
- * many can share a frame: at sixteen thousand, discs of one contact diameter cover seventy-eight
- * percent of it, which is past the density at which discs can be packed without crystallising, so
- * most overlaps could not be resolved and the field went back to being a haze. At four thousand the
- * same discs cover a fifth of the frame — dense enough to collide constantly, loose enough that every
- * collision can actually be answered.
- */
-export const PARTICLE_TEXTURE_SIDE = 64;
+    return {
+        id,
+        version: 1,
+        category: 'field',
+        inputs: [
+            { name: 'previous', type: 'particle-emitter', required: false },
+            ...(mode === 'shape'
+                ? [{ name: 'shape', type: 'mask-texture' as const, required: true }]
+                : []),
+        ],
+        outputs: [{ name: EMITTER_OUTPUT, type: 'particle-emitter', required: false }],
+        capabilities: ['particle-emission'],
+        cost: { gpu: 0, cpu: 0, memory: 0, renderPasses: 0, qualityScalable: true, dominant: false },
+        character: character({ visualDensity: 0, motionEnergy: 0, brightness: 0, dominance: 'supporting' }),
+        activationRules: {
+            activationWeight: 5,
+            prefersWith: ['ParticleSimulator'],
+        },
+        parameters: {
+            originX: 0,
+            originY: 0,
+            emissionRadius: mode === 'point' ? 0 : 60,
+            direction: 0,
+            spread: 20,
+            speed: 160,
+            radius: 5,
+            radiusJitter: 0,
+            rate: 24,
+            mass: 1,
+            elasticity: 0.9,
+            friction: 0.1,
+            lifetime: 6,
+            colorR: 1,
+            colorG: 1,
+            colorB: 1,
+        },
+        defaultBindings: [],
+        deactivationPolicy: 'immediate',
 
-/**
- * Side of the spatial grid particles are binned into for contact.
- *
- * Matched to the particle count, so a fully packed field has about one particle per cell. The cell
- * size is then the contact diameter, which is what makes a three-by-three neighbourhood sufficient:
- * anything close enough to touch is in it.
- */
-export const BIN_SIDE = 128;
+        create(context): VisualPluginInstance {
+            const resource = resourceIdFor(context.instanceId, EMITTER_OUTPUT);
 
-/**
- * Contact radius in clip units — half a cell, so two touching bodies span exactly one.
- *
- * A cell equal to one diameter is what makes a three-by-three neighbourhood provably sufficient: a
- * body anywhere in its cell can only reach into the cells adjacent to it. Halving the cell was tried,
- * on the reasoning that one particle per cell cannot represent a pile — but a body then spans two
- * cells and a two-cell search covers only three quarters of a diameter, so mid-range contacts go
- * missing. Measured, that took overlaps from forty-seven percent to seventy-four.
- */
-export const CONTACT_RADIUS = 1 / BIN_SIDE;
+            return semanticInstance((frame) => {
+                const previous = frame.readValue?.<EmitterList>(frame.inputs.previous) ?? [];
+                const shape = mode === 'shape' ? frame.readField(frame.inputs.shape) : undefined;
+                const own: ParticleEmitterConfig = {
+                    id: context.instanceId,
+                    mode,
+                    seed: context.seed,
+                    origin: [frame.parameters.originX ?? 0, frame.parameters.originY ?? 0],
+                    emissionRadius: Math.max(0, frame.parameters.emissionRadius ?? 0),
+                    directionDegrees: frame.parameters.direction ?? 0,
+                    spreadDegrees: Math.max(0, frame.parameters.spread ?? 0),
+                    speed: frame.parameters.speed ?? 160,
+                    radius: Math.max(0.5, frame.parameters.radius ?? 5),
+                    radiusJitter: clamp(frame.parameters.radiusJitter ?? 0, 0, 1),
+                    rate: Math.max(0, frame.parameters.rate ?? 24),
+                    mass: Math.max(1e-3, frame.parameters.mass ?? 1),
+                    elasticity: clamp01(frame.parameters.elasticity ?? 0.9),
+                    friction: clamp01(frame.parameters.friction ?? 0.1),
+                    lifetime: Math.max(0.05, frame.parameters.lifetime ?? 6),
+                    color: [
+                        clamp01(frame.parameters.colorR ?? 1),
+                        clamp01(frame.parameters.colorG ?? 1),
+                        clamp01(frame.parameters.colorB ?? 1),
+                    ],
+                    shape,
+                };
+                frame.publishValue?.(resource, [...previous, own]);
+            });
+        },
+    };
+}
 
-/**
- * Cells searched either side of a body's own.
- *
- * Mirrored by `CONTACT_SEARCH` in the simulation shader, which cannot read this because the shader
- * source is declared above it. The static shader test catches interpolation failing; it cannot catch
- * the two disagreeing, so any change here has to be made in both.
- */
-export const CONTACT_SEARCH = 1;
+export function createParticleForceField(mode: ForceMode = 'vortex'): VisualPluginDefinition {
+    const id = `ParticleForceField:${mode}`;
 
-/**
- * Holds particle state across frames in a ping-ponged float texture.
- *
- * The only plugin here that carries state, which is why it drains rather than cutting: existing particles
- * finish their motion while emission stops.
- */
+    return {
+        id,
+        version: 1,
+        category: 'field',
+        inputs: [
+            { name: 'previous', type: 'particle-force', required: false },
+            ...(mode === 'curl'
+                ? [{ name: 'field', type: 'vector-field' as const, required: true }]
+                : []),
+        ],
+        outputs: [{ name: FORCE_OUTPUT, type: 'particle-force', required: false }],
+        capabilities: ['particle-force'],
+        cost: { gpu: 0, cpu: 0, memory: 0, renderPasses: 0, qualityScalable: true, dominant: false },
+        character: character({ visualDensity: 0, motionEnergy: 0, brightness: 0, dominance: 'supporting' }),
+        activationRules: {
+            activationWeight: 4,
+            prefersWith: ['ParticleSimulator'],
+        },
+        parameters: forceParameters(mode),
+        defaultBindings: [],
+        deactivationPolicy: 'immediate',
+
+        create(context): VisualPluginInstance {
+            const resource = resourceIdFor(context.instanceId, FORCE_OUTPUT);
+
+            return semanticInstance((frame) => {
+                const previous = frame.readValue?.<ForceList>(frame.inputs.previous) ?? [];
+                const position = [
+                    frame.parameters.x ?? 0,
+                    frame.parameters.y ?? 0,
+                ] as const;
+                const strength = frame.parameters.strength ?? 0;
+                let own: ParticleForceConfig;
+
+                if (mode === 'attract' || mode === 'repel') {
+                    own = {
+                        id: context.instanceId,
+                        kind: 'well',
+                        position,
+                        radius: Math.max(1, frame.parameters.radius ?? 180),
+                        strength,
+                        repel: mode === 'repel',
+                    };
+                } else if (mode === 'vortex') {
+                    own = {
+                        id: context.instanceId,
+                        kind: 'vortex',
+                        position,
+                        radius: Math.max(1, frame.parameters.radius ?? 180),
+                        tangentialStrength: strength,
+                        inwardStrength: frame.parameters.inwardStrength ?? 0,
+                    };
+                } else if (mode === 'gravity') {
+                    own = {
+                        id: context.instanceId,
+                        kind: 'uniform',
+                        acceleration: [0, -strength],
+                    };
+                } else if (mode === 'wind') {
+                    const direction = degrees(frame.parameters.direction ?? 0);
+                    own = {
+                        id: context.instanceId,
+                        kind: 'uniform',
+                        acceleration: [Math.cos(direction) * strength, Math.sin(direction) * strength],
+                    };
+                } else {
+                    own = {
+                        id: context.instanceId,
+                        kind: 'field',
+                        strength,
+                        field: frame.readField(frame.inputs.field),
+                    };
+                }
+
+                frame.publishValue?.(resource, [...previous, own]);
+            });
+        },
+    };
+}
+
+export function createParticleCollider(mode: ColliderMode = 'frame'): VisualPluginDefinition {
+    const id = `ParticleCollider:${mode}`;
+
+    return {
+        id,
+        version: 1,
+        category: 'field',
+        inputs: [
+            { name: 'previous', type: 'particle-collider', required: false },
+            ...(mode === 'mask'
+                ? [{ name: 'field', type: 'distance-field' as const, required: true }]
+                : []),
+        ],
+        outputs: [{ name: COLLIDER_OUTPUT, type: 'particle-collider', required: false }],
+        capabilities: ['particle-collision'],
+        cost: { gpu: 0, cpu: 0, memory: 0, renderPasses: 0, qualityScalable: true, dominant: false },
+        character: character({ visualDensity: 0, motionEnergy: 0, brightness: 0, dominance: 'supporting' }),
+        activationRules: {
+            activationWeight: 4,
+            prefersWith: ['ParticleSimulator'],
+        },
+        parameters: colliderParameters(mode),
+        defaultBindings: [],
+        deactivationPolicy: 'immediate',
+
+        create(context): VisualPluginInstance {
+            const resource = resourceIdFor(context.instanceId, COLLIDER_OUTPUT);
+
+            return semanticInstance((frame) => {
+                const previous = frame.readValue?.<ColliderList>(frame.inputs.previous) ?? [];
+                const elasticity = clamp01(frame.parameters.elasticity ?? 0.9);
+                const friction = clamp01(frame.parameters.friction ?? 0.1);
+                let own: ParticleColliderConfig;
+
+                if (mode === 'frame') {
+                    own = { kind: 'frame', elasticity, friction };
+                } else if (mode === 'segment') {
+                    own = {
+                        kind: 'segment',
+                        start: [frame.parameters.x1 ?? -100, frame.parameters.y1 ?? 0],
+                        end: [frame.parameters.x2 ?? 100, frame.parameters.y2 ?? 0],
+                        elasticity,
+                        friction,
+                    };
+                } else if (mode === 'circle') {
+                    own = {
+                        kind: 'circle',
+                        position: [frame.parameters.x ?? 0, frame.parameters.y ?? 0],
+                        radius: Math.max(1, frame.parameters.radius ?? 80),
+                        elasticity,
+                        friction,
+                    };
+                } else {
+                    own = {
+                        kind: 'mask',
+                        field: frame.readField(frame.inputs.field),
+                        containInside: (frame.parameters.containInside ?? 1) > 0.5,
+                        elasticity,
+                        friction,
+                    };
+                }
+
+                frame.publishValue?.(resource, [...previous, own]);
+            });
+        },
+    };
+}
+
 export function createParticleSimulator(): VisualPluginDefinition {
     return {
         id: 'ParticleSimulator',
         version: 1,
         category: 'simulator',
         inputs: [
-            { name: 'force', type: 'vector-field', required: true },
-            { name: 'boundary', type: 'collision-field', required: false },
-            { name: 'spawn', type: 'particle-buffer', required: false },
+            { name: EMITTER_OUTPUT, type: 'particle-emitter', required: true },
+            { name: FORCE_OUTPUT, type: 'particle-force', required: false },
+            { name: COLLIDER_OUTPUT, type: 'particle-collider', required: false },
         ],
-        outputs: [
-            { name: 'state', type: 'particle-buffer', required: false },
-        ],
+        outputs: [{ name: STATE_OUTPUT, type: 'particle-state', required: false }],
         capabilities: ['particles'],
-        requiredCapabilities: ['float-textures'],
-        // One pass, and it only uploads: the simulation is CPU work, so the cost is in `cpu`.
-        cost: { gpu: 1, cpu: 2, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+        cost: { gpu: 0, cpu: 3, memory: 1, renderPasses: 0, qualityScalable: true, dominant: false },
         character: character({
-            visualDensity: 0.7,
+            visualDensity: 0,
             motionEnergy: 0.8,
-            geometricOrder: 0.2,
+            geometricOrder: 0.4,
             persistence: 0.7,
             dominance: 'either',
         }),
         activationRules: {
             activationWeight: 6,
             minimumDuration: 16,
-            // The chain has to assemble as a chain: a simulator with no renderer shows nothing,
-            // and a mask boundary is what gives it a surface to collide with.
-            prefersWith: ['ParticleRenderer', 'ParticleEmitter', 'ProceduralVectorField', 'MaskBoundaryField'],
+            prefersWith: ['ParticleRenderer', 'ParticleEmitter'],
         },
-        parameters: { drag: 0.4, lifetime: 4 },
-        defaultBindings: [{
-            feature: 'bass',
-            parameter: 'drag',
-            outputRange: [0.15, 0.9],
-            attack: 0.15,
-            release: 0.6,
-            curve: 'smooth',
-        }],
+        parameters: {
+            particleCount: 512,
+            drag: 0,
+            collisionIterations: 4,
+        },
+        defaultBindings: [],
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
-            const count = PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE;
-            const world = createParticleWorld(count);
-            const spawner = createSpawner(context.seed);
-
-            // Interleaved per particle: the texel it owns, then its position and velocity. Uploaded
-            // every frame, which is the whole GPU cost of the simulation now — 4096 points into a
-            // 64-square target.
-            const bodies = new Float32Array(count * 6);
-            for (let y = 0; y < PARTICLE_TEXTURE_SIDE; y += 1) {
-                for (let x = 0; x < PARTICLE_TEXTURE_SIDE; x += 1) {
-                    const offset = (y * PARTICLE_TEXTURE_SIDE + x) * 6;
-                    bodies[offset] = (x + 0.5) / PARTICLE_TEXTURE_SIDE;
-                    bodies[offset + 1] = (y + 0.5) / PARTICLE_TEXTURE_SIDE;
-                }
-            }
-
-            let active = count;
+            const resource = resourceIdFor(context.instanceId, STATE_OUTPUT);
+            const world = createParticleWorld(PARTICLE_CAPACITY);
+            const emissionCredit = new Map<string, number>();
+            const randomState = new Map<string, number>();
+            let accumulator = 0;
 
             return {
                 initialize() {
-                    context.registerShader({
-                        id: STATE_SHADER,
-                        vertex: STATE_VERTEX,
-                        fragment: STATE_FRAGMENT,
-                    });
+                    // CPU simulation; no shader.
                 },
 
                 activate() {
-                    world.positions.fill(0);
-                    world.velocities.fill(0);
-                    world.ages.fill(0);
+                    resetParticleWorld(world);
+                    emissionCredit.clear();
+                    randomState.clear();
+                    accumulator = 0;
                 },
 
                 update(frame) {
-                    // The ladder's particle scale thins the field by simulating and drawing fewer
-                    // bodies, which reduces the contact work quadratically rather than turning the
-                    // physics off.
-                    active = Math.max(0, Math.min(count, Math.round(count * (frame.particleScale ?? 1))));
+                    world.width = Math.max(1, frame.renderWidth);
+                    world.height = Math.max(1, frame.renderHeight);
+                    const emitters = frame.readValue?.<EmitterList>(frame.inputs.emitters) ?? [];
+                    const forceConfigs = frame.readValue?.<ForceList>(frame.inputs.forces) ?? [];
+                    const colliderConfigs = frame.readValue?.<ColliderList>(frame.inputs.colliders) ?? [];
+                    const maximum = clamp(
+                        Math.round(
+                            (frame.parameters.particleCount ?? 512)
+                            * (frame.particleScale ?? 1),
+                        ),
+                        0,
+                        PARTICLE_CAPACITY,
+                    );
+                    const forces = materializeForces(forceConfigs, world);
+                    const colliders = materializeColliders(colliderConfigs);
 
-                    const force = sampleField(frame.readField(frame.inputs?.force));
-                    const boundary = sampleField(frame.readField(frame.inputs?.boundary));
-                    const emitted = sampleField(frame.readField(frame.inputs?.spawn));
-
-                    spawner.setEmitter(emitted);
-
-                    stepParticles(world, {
-                        deltaSeconds: frame.deltaSeconds,
-                        radius: CONTACT_RADIUS,
-                        restitution: 0.45,
-                        drag: frame.parameters.drag ?? 0.4,
-                        lifetimeSeconds: Math.max(0.4, frame.parameters.lifetime ?? 4),
-                        iterations: 4,
-                        force: force
-                            // A vector field carries its direction in red and green, over the same
-                            // zero-to-one domain as the screen.
-                            ? (x, y, out) => {
-                                force(x, y, sampled);
-                                out[0] = sampled[0] * FORCE_SCALE;
-                                out[1] = sampled[1] * FORCE_SCALE;
-                            }
-                            // No field read back yet, which is the state for the first frames of a
-                            // scene. A gentle drift beats standing still.
-                            : (_x, _y, out) => { out[0] = 0; out[1] = 0; },
-                        spawn: (index, out) => spawner.place(index, count, out),
-                        // Collision fields carry an outward normal in red and green and how far inside
-                        // the surface a point is in blue. That is exactly a penetration depth and a
-                        // normal, which is what a solid surface is.
-                        surface: boundary
-                            ? (x, y, out) => {
-                                boundary(x, y, sampled);
-                                const length = Math.hypot(sampled[0], sampled[1]);
-                                if (length < 1e-4 || sampled[2] <= SURFACE_THRESHOLD) {
-                                    return 0;
-                                }
-                                out[0] = sampled[0] / length;
-                                out[1] = sampled[1] / length;
-                                return (sampled[2] - SURFACE_THRESHOLD) * CONTACT_RADIUS * 2;
-                            }
-                            : undefined,
-                    });
-
-                    for (let i = 0; i < count; i += 1) {
-                        const offset = i * 6;
-                        bodies[offset + 2] = world.positions[i * 2];
-                        bodies[offset + 3] = world.positions[i * 2 + 1];
-                        bodies[offset + 4] = world.velocities[i * 2];
-                        bodies[offset + 5] = world.velocities[i * 2 + 1];
+                    accumulator = Math.min(MAX_CATCH_UP, accumulator + Math.max(0, frame.deltaSeconds));
+                    while (accumulator >= FIXED_STEP) {
+                        emitFrom(
+                            world,
+                            emitters,
+                            maximum,
+                            FIXED_STEP,
+                            emissionCredit,
+                            randomState,
+                        );
+                        stepParticles(world, {
+                            deltaSeconds: FIXED_STEP,
+                            drag: Math.max(0, frame.parameters.drag ?? 0),
+                            iterations: Math.max(1, Math.round(frame.parameters.collisionIterations ?? 4)),
+                            forces,
+                            colliders,
+                        });
+                        accumulator -= FIXED_STEP;
                     }
 
-                    frame.uploadGeometry({
-                        id: STATE_GEOMETRY_ID,
-                        data: bodies,
-                        attributes: [
-                            { name: 'aSlot', components: 2 },
-                            { name: 'aBody', components: 4 },
-                        ],
-                    });
+                    frame.publishValue?.(resource, {
+                        world,
+                        activeCount: activeParticleCount(world),
+                        emitters,
+                        forces: forceConfigs,
+                        colliders,
+                    } satisfies ParticleState);
                 },
 
-                render(render): RenderPass[] {
-                    // The physics does not need a force field to run — bodies still fall out of
-                    // emitters and collide — but a particle scene without one is not a scene worth
-                    // assembling, so the port stays required and this stays a hard stop.
-                    if (!render.inputs.force || !render.outputs.state || active === 0) {
-                        return [];
-                    }
-
-                    // The only GPU work left: copy the bodies into the texture the renderer reads.
-                    // Everything that decides where they are happened in `update`, on the CPU, where
-                    // both halves of a contact can be moved.
-                    return [{
-                        kind: 'geometry',
-                        shader: STATE_SHADER,
-                        geometry: STATE_GEOMETRY_ID,
-                        primitive: 'points',
-                        vertexCount: active,
-                        output: render.outputs.state,
-                        blend: 'none',
-                        clear: true,
-                    }];
+                render() {
+                    return [];
                 },
 
                 deactivate() {
-                    // Draining: the runtime keeps rendering while particles finish their motion.
+                    // Existing bodies remain in the snapshot until the instance is destroyed.
                 },
 
                 destroy() {
-                    // Nothing retained.
+                    resetParticleWorld(world);
                 },
             };
         },
     };
 }
 
-/** Draws the particle state as points. */
 export function createParticleRenderer(
     mode: typeof PARTICLE_RENDER_MODES[number] = 'discs',
 ): VisualPluginDefinition {
-    const GEOMETRY_ID = 'particle-indices';
+    const maskShader = `particle-mask:${mode}`;
+    const colorShader = `particle-color:${mode}`;
+    const debugShader = `particle-debug:${mode}`;
+    const debugLineShader = `particle-debug-lines:${mode}`;
 
     return {
         id: `ParticleRenderer:${mode}`,
         version: 1,
         category: 'compositor',
-        inputs: [{ name: 'state', type: 'particle-buffer', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
+        inputs: [{ name: STATE_OUTPUT, type: 'particle-state', required: true }],
+        outputs: [
+            { name: 'mask', type: 'mask-texture', required: false },
+            { name: 'color', type: 'color-texture', required: false },
+        ],
         capabilities: ['particle-rendering'],
-        cost: { gpu: 2, cpu: 0, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
-        character: character({ visualDensity: 0.7, motionEnergy: 0.8, brightness: 0.7, dominance: 'supporting' }),
+        cost: { gpu: 2, cpu: 1, memory: 1, renderPasses: 4, qualityScalable: true, dominant: false },
+        character: character({
+            visualDensity: 0.6,
+            motionEnergy: 0.8,
+            brightness: 0.7,
+            dominance: 'supporting',
+        }),
         activationRules: {
             activationWeight: 5,
-            prefersWith: ['ParticleSimulator', 'MaskSignedDistanceField'],
+            prefersWith: ['ParticleSimulator'],
         },
-        // Nine device pixels at rest, against two and a half before. At the old size, scaled by the
-        // speed term and then divided by the device pixel ratio, a particle occupied one to four CSS
-        // pixels — visible only as a fleck, and indistinguishable from sensor noise once a dozen of
-        // them overlapped. A particle has to be large enough to read as a body before any amount of
-        // correct physics makes it look like one is moving.
-        parameters: { pointSize: 9, brightness: 1.2 },
-        defaultBindings: [
-            {
-                feature: 'treble',
-                parameter: 'brightness',
-                outputRange: [0.7, 2],
-                attack: 0.03,
-                release: 0.3,
-                curve: 'sqrt',
-            },
-            {
-                // Size answers to the music as well as to speed. Held on a large-scale force so the
-                // field swells and contracts as a body rather than flickering per particle.
-                feature: 'bass',
-                role: 'large-scale-force',
-                parameter: 'pointSize',
-                outputRange: [6, 17],
-                attack: 0.2,
-                release: 0.8,
-                curve: 'smooth',
-            },
-        ],
+        parameters: {
+            brightness: 1,
+            debug: 0,
+        },
+        defaultBindings: [],
         deactivationPolicy: 'fade',
 
         create(context): VisualPluginInstance {
-            // One vertex per particle, holding only its lookup coordinate; positions come from the texture.
-            const indices = new Float32Array(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * 2);
-            let uploaded = false;
-            let activeCount = PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE;
-
-            for (let y = 0; y < PARTICLE_TEXTURE_SIDE; y += 1) {
-                for (let x = 0; x < PARTICLE_TEXTURE_SIDE; x += 1) {
-                    const offset = (y * PARTICLE_TEXTURE_SIDE + x) * 2;
-                    indices[offset] = (x + 0.5) / PARTICLE_TEXTURE_SIDE;
-                    indices[offset + 1] = (y + 0.5) / PARTICLE_TEXTURE_SIDE;
-                }
-            }
+            const geometryId = `particle-geometry:${mode}:${context.instanceId}`;
+            const debugLineGeometryId = `particle-debug-line-geometry:${mode}:${context.instanceId}`;
+            const bodies = new Float32Array(PARTICLE_CAPACITY * 6);
+            let count = 0;
+            let worldSize: readonly [number, number] = [1, 1];
+            let debug = false;
+            let debugLineCount = 0;
 
             return {
                 initialize() {
                     context.registerShader({
-                        id: RENDERER_SHADER,
-                        vertex: RENDERER_VERTEX,
-                        fragment: RENDERER_FRAGMENT,
+                        id: maskShader,
+                        vertex: PARTICLE_VERTEX,
+                        fragment: PARTICLE_MASK_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: colorShader,
+                        vertex: PARTICLE_VERTEX,
+                        fragment: PARTICLE_COLOR_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: debugShader,
+                        vertex: PARTICLE_VERTEX,
+                        fragment: PARTICLE_DEBUG_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: debugLineShader,
+                        vertex: DEBUG_LINE_VERTEX,
+                        fragment: DEBUG_LINE_FRAGMENT,
                     });
                 },
 
                 activate() {
-                    uploaded = false;
+                    count = 0;
                 },
 
                 update(frame) {
-                    // Ladder rung 2 reduces particle count. Applied by drawing fewer vertices from the
-                    // same buffer, so nothing is reallocated when quality changes.
-                    activeCount = Math.max(
-                        0,
-                        Math.min(
-                            PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE,
-                            Math.round(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * (frame.particleScale ?? 1)),
-                        ),
-                    );
+                    const state = frame.readValue?.<ParticleState>(frame.inputs.state);
+                    if (!state) {
+                        count = 0;
+                        return;
+                    }
 
-                    // Uploaded once: the index buffer never changes, only the state texture it reads.
-                    if (!uploaded) {
+                    const { world } = state;
+                    worldSize = [world.width, world.height];
+                    debug = (frame.parameters.debug ?? 0) > 0.5;
+                    count = 0;
+                    for (let index = 0; index < world.capacity; index += 1) {
+                        if (!world.active[index]) {
+                            continue;
+                        }
+
+                        const output = count * 6;
+                        bodies[output] = world.positions[index * 2];
+                        bodies[output + 1] = world.positions[index * 2 + 1];
+                        bodies[output + 2] = world.radii[index];
+                        bodies[output + 3] = world.colors[index * 3];
+                        bodies[output + 4] = world.colors[index * 3 + 1];
+                        bodies[output + 5] = world.colors[index * 3 + 2];
+                        count += 1;
+                    }
+
+                    frame.uploadGeometry({
+                        id: geometryId,
+                        data: bodies.subarray(0, count * 6),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aRadius', components: 1 },
+                            { name: 'aColor', components: 3 },
+                        ],
+                    });
+
+                    debugLineCount = 0;
+                    if (debug) {
+                        const lines = debugLines(state);
+                        debugLineCount = lines.length / 5;
                         frame.uploadGeometry({
-                            id: GEOMETRY_ID,
-                            data: indices,
-                            attributes: [{ name: 'aIndex', components: 2 }],
+                            id: debugLineGeometryId,
+                            data: lines,
+                            attributes: [
+                                { name: 'aPosition', components: 2 },
+                                { name: 'aColor', components: 3 },
+                            ],
                         });
-                        uploaded = true;
                     }
                 },
 
                 render(render): RenderPass[] {
-                    const state = render.inputs.state;
-                    if (!state || activeCount === 0) {
-                        return [];
+                    const passes: RenderPass[] = [
+                        {
+                            kind: 'geometry',
+                            shader: maskShader,
+                            geometry: geometryId,
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.mask,
+                            blend: 'none',
+                            clear: true,
+                            uniforms: {
+                                uWorldSize: worldSize,
+                            },
+                        },
+                        {
+                            kind: 'geometry',
+                            shader: colorShader,
+                            geometry: geometryId,
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.color,
+                            blend: 'none',
+                            clear: true,
+                            uniforms: {
+                                uWorldSize: worldSize,
+                                uBrightness: 1,
+                            },
+                        },
+                    ];
+
+                    if (debug && count > 0) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: debugShader,
+                            geometry: geometryId,
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.color,
+                            blend: 'add',
+                            clear: false,
+                            uniforms: {
+                                uWorldSize: worldSize,
+                            },
+                        });
+
                     }
 
-                    return [{
-                        kind: 'geometry',
-                        shader: RENDERER_SHADER,
-                        geometry: GEOMETRY_ID,
-                        primitive: 'points',
-                        vertexCount: activeCount,
-                        inputs: { uState: state },
-                        output: render.outputs.color,
-                        blend: 'add',
-                        clear: true,
-                        uniforms: {
-                            uMode: PARTICLE_RENDER_MODES.indexOf(mode),
-                            uPointSize: 2.5,
-                            uBrightness: 1.2,
-                        },
-                    }];
+                    if (debug && debugLineCount > 0) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: debugLineShader,
+                            geometry: debugLineGeometryId,
+                            primitive: 'lines',
+                            vertexCount: debugLineCount,
+                            output: render.outputs.color,
+                            blend: 'add',
+                            clear: false,
+                            uniforms: { uWorldSize: worldSize },
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {
-                    // Nothing retained; the simulator owns the state.
+                    // Stateless projection.
                 },
 
                 destroy() {
-                    uploaded = false;
+                    count = 0;
                 },
             };
         },
     };
-}
-
-export function createParticleEmitter(
-    mode: typeof EMITTER_MODES[number] = 'region',
-): VisualPluginDefinition {
-    return defineShaderPlugin({
-        id: `ParticleEmitter:${mode}`,
-        category: 'field',
-        inputs: [
-            // Optional, so a region or ring emitter works with no mask or artwork present at all.
-            { name: 'shape', type: 'mask-texture', required: mode === 'shape' },
-        ],
-        outputs: [{ name: 'spawn', type: 'particle-buffer' }],
-        capabilities: ['particle-emission'],
-        fragment: EMITTER_FRAGMENT,
-        uniforms: { uMode: EMITTER_MODES.indexOf(mode), uRate: 0.5 },
-        // Rate is the share of rebirths this emitter claims, and it was low enough that the emitter
-        // was a minority contributor to its own scene: at 0.15, six particles in seven were born from
-        // the simulator's fallback clustering instead and the emitter's shape barely showed. A scene
-        // that selected an emitter should look like it has one.
-        parameters: { rate: 0.5 },
-        bindings: [{
-            feature: 'spectralFlux',
-            parameter: 'rate',
-            outputRange: [0.2, 0.92],
-            attack: 0.02,
-            release: 0.35,
-            curve: 'sqrt',
-        }],
-        character: character({ visualDensity: 0, motionEnergy: 0.6, brightness: 0, dominance: 'supporting' }),
-        activationWeight: 5,
-        prefersWith: ['ParticleSimulator', 'ParticleTrailInjector'],
-    });
-}
-
-export function createParticleForceField(
-    mode: typeof FORCE_MODES[number] = 'vortex',
-): VisualPluginDefinition {
-    return defineShaderPlugin({
-        id: `ParticleForceField:${mode}`,
-        category: 'field',
-        inputs: [{ name: 'field', type: 'vector-field', required: true }],
-        outputs: [{ name: 'force', type: 'vector-field' }],
-        capabilities: ['particle-force'],
-        fragment: FORCE_FRAGMENT,
-        uniforms: { uMode: FORCE_MODES.indexOf(mode), uStrength: 1 },
-        parameters: { strength: 1 },
-        bindings: [{
-            feature: 'subBass',
-            parameter: 'strength',
-            outputRange: [0.3, 2.5],
-            attack: 0.12,
-            release: 0.5,
-            curve: 'smooth',
-        }],
-        character: character({ visualDensity: 0, motionEnergy: 0.75, brightness: 0, dominance: 'supporting' }),
-        activationWeight: 4,
-        prefersWith: ['ParticleSimulator'],
-    });
 }
 
 export function createParticleTrailInjector(): VisualPluginDefinition {
@@ -774,23 +764,7 @@ export function createParticleTrailInjector(): VisualPluginDefinition {
         fragment: TRAIL_FRAGMENT,
         uniforms: { uDecay: 0.9, uAmount: 1 },
         parameters: { decay: 0.9, amount: 1 },
-        bindings: [{
-            feature: 'rms',
-            role: 'intensity',
-            parameter: 'decay',
-            outputRange: [0.86, 0.98],
-            attack: 0.25,
-            release: 0.9,
-            curve: 'smooth',
-        }, {
-            feature: 'trebleExcite',
-            role: 'detail',
-            parameter: 'amount',
-            outputRange: [0.5, 1.6],
-            attack: 0.04,
-            release: 0.4,
-            curve: 'sqrt',
-        }],
+        bindings: [],
         character: character({ persistence: 0.9, visualDensity: 0.6, dominance: 'supporting' }),
         feedbackPort: 'history',
         clear: false,
@@ -799,4 +773,332 @@ export function createParticleTrailInjector(): VisualPluginDefinition {
         activationWeight: 4,
         prefersWith: ['ParticleRenderer', 'ParticleSimulator'],
     });
+}
+
+function semanticInstance(update: VisualPluginInstance['update']): VisualPluginInstance {
+    return {
+        initialize() {
+            // CPU value node.
+        },
+        activate() {
+            // No retained state.
+        },
+        update,
+        render() {
+            return [];
+        },
+        deactivate() {
+            // No retained state.
+        },
+        destroy() {
+            // No retained state.
+        },
+    };
+}
+
+function forceParameters(mode: ForceMode): Record<string, number> {
+    if (mode === 'gravity') {
+        return { strength: 300 };
+    }
+    if (mode === 'wind') {
+        return { strength: 120, direction: 0 };
+    }
+    if (mode === 'curl') {
+        return { strength: 180 };
+    }
+    if (mode === 'vortex') {
+        return { x: 0, y: 0, radius: 180, strength: 1200, inwardStrength: 120 };
+    }
+    return { x: 0, y: 0, radius: 180, strength: 1200 };
+}
+
+function colliderParameters(mode: ColliderMode): Record<string, number> {
+    const material = { elasticity: 0.9, friction: 0.1 };
+    if (mode === 'segment') {
+        return { ...material, x1: -100, y1: 0, x2: 100, y2: 0 };
+    }
+    if (mode === 'circle') {
+        return { ...material, x: 0, y: 0, radius: 80 };
+    }
+    if (mode === 'mask') {
+        return { ...material, containInside: 1 };
+    }
+    return material;
+}
+
+function materializeForces(
+    configs: ForceList,
+    world: ParticleWorld,
+): ParticleForce[] {
+    return configs.flatMap((config): ParticleForce[] => {
+        if (config.kind !== 'field') {
+            return [config];
+        }
+        if (!config.field) {
+            return [];
+        }
+
+        const field = config.field;
+        const sampled: [number, number] = [0, 0];
+        return [{
+            kind: 'field',
+            strength: config.strength,
+            sample(x, y, out) {
+                sampleField(field, world, x, y, sampled);
+                out[0] = sampled[0];
+                out[1] = sampled[1];
+            },
+        }];
+    });
+}
+
+function materializeColliders(configs: ColliderList): ParticleCollider[] {
+    return configs.flatMap((config): ParticleCollider[] => {
+        if (config.kind !== 'mask') {
+            return [config];
+        }
+        if (!config.field) {
+            return [];
+        }
+        return [{
+            kind: 'mask',
+            width: config.field.width,
+            height: config.field.height,
+            data: config.field.data,
+            containInside: config.containInside,
+            elasticity: config.elasticity,
+            friction: config.friction,
+        }];
+    });
+}
+
+function emitFrom(
+    world: ParticleWorld,
+    emitters: EmitterList,
+    maximum: number,
+    dt: number,
+    credit: Map<string, number>,
+    randomState: Map<string, number>,
+): void {
+    let active = activeParticleCount(world);
+    if (active >= maximum || emitters.length === 0) {
+        return;
+    }
+
+    for (const emitter of emitters) {
+        let available = (credit.get(emitter.id) ?? 0) + emitter.rate * dt;
+        while (available >= 1 && active < maximum) {
+            const random = () => nextRandom(emitter, randomState);
+            const position = emissionPosition(emitter, world, random);
+            if (!position) {
+                available -= 1;
+                continue;
+            }
+
+            const angle = degrees(
+                emitter.directionDegrees + (random() - 0.5) * emitter.spreadDegrees,
+            );
+            const radius = Math.max(
+                0.5,
+                emitter.radius * (1 + (random() * 2 - 1) * emitter.radiusJitter),
+            );
+            const emitted = emitParticle(world, {
+                position,
+                velocity: [Math.cos(angle) * emitter.speed, Math.sin(angle) * emitter.speed],
+                radius,
+                mass: emitter.mass,
+                elasticity: emitter.elasticity,
+                friction: emitter.friction,
+                lifetime: emitter.lifetime,
+                color: emitter.color,
+                emitterId: hashId(emitter.id),
+            });
+            if (emitted < 0) {
+                break;
+            }
+
+            active += 1;
+            available -= 1;
+        }
+        credit.set(emitter.id, Math.min(available, 1));
+    }
+}
+
+function emissionPosition(
+    emitter: ParticleEmitterConfig,
+    world: ParticleWorld,
+    random: () => number,
+): [number, number] | undefined {
+    const radius = emitter.emissionRadius;
+
+    if (emitter.mode === 'shape' && emitter.shape) {
+        for (let attempt = 0; attempt < 24; attempt += 1) {
+            const u = random();
+            const v = random();
+            const x = Math.min(emitter.shape.width - 1, Math.floor(u * emitter.shape.width));
+            const y = Math.min(emitter.shape.height - 1, Math.floor(v * emitter.shape.height));
+            if (emitter.shape.data[(y * emitter.shape.width + x) * 4] > 0.5) {
+                return [
+                    (u - 0.5) * world.width + emitter.origin[0],
+                    (v - 0.5) * world.height + emitter.origin[1],
+                ];
+            }
+        }
+        return undefined;
+    }
+
+    if (emitter.mode === 'line') {
+        const along = (random() * 2 - 1) * radius;
+        const direction = degrees(emitter.directionDegrees + 90);
+        return [
+            emitter.origin[0] + Math.cos(direction) * along,
+            emitter.origin[1] + Math.sin(direction) * along,
+        ];
+    }
+
+    if (emitter.mode === 'ring') {
+        const angle = random() * Math.PI * 2;
+        return [
+            emitter.origin[0] + Math.cos(angle) * radius,
+            emitter.origin[1] + Math.sin(angle) * radius,
+        ];
+    }
+
+    if (emitter.mode === 'region') {
+        return [
+            emitter.origin[0] + (random() * 2 - 1) * radius,
+            emitter.origin[1] + (random() * 2 - 1) * radius,
+        ];
+    }
+
+    const distance = Math.sqrt(random()) * radius;
+    const angle = random() * Math.PI * 2;
+    return [
+        emitter.origin[0] + Math.cos(angle) * distance,
+        emitter.origin[1] + Math.sin(angle) * distance,
+    ];
+}
+
+function nextRandom(
+    emitter: ParticleEmitterConfig,
+    states: Map<string, number>,
+): number {
+    const initial = (Math.floor(Math.abs(emitter.seed) * 0xffffffff) ^ hashId(emitter.id)) >>> 0;
+    const previous = states.get(emitter.id) ?? initial;
+    const next = (Math.imul(previous, 1664525) + 1013904223) >>> 0;
+    states.set(emitter.id, next);
+    return next / 0x100000000;
+}
+
+function sampleField(
+    field: FieldSample,
+    world: ParticleWorld,
+    x: number,
+    y: number,
+    out: [number, number],
+): void {
+    if (field.width < 2 || field.height < 2) {
+        out[0] = 0;
+        out[1] = 0;
+        return;
+    }
+
+    const u = clamp((x / world.width + 0.5) * (field.width - 1), 0, field.width - 1.001);
+    const v = clamp((y / world.height + 0.5) * (field.height - 1), 0, field.height - 1.001);
+    const x0 = Math.floor(u);
+    const y0 = Math.floor(v);
+    const fx = u - x0;
+    const fy = v - y0;
+
+    for (let channel = 0; channel < 2; channel += 1) {
+        const at = (sampleX: number, sampleY: number) =>
+            field.data[(sampleY * field.width + sampleX) * 4 + channel];
+        const top = at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx;
+        const bottom = at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx;
+        out[channel] = top * (1 - fy) + bottom * fy;
+    }
+}
+
+function debugLines(state: ParticleState): Float32Array {
+    const values: number[] = [];
+    const add = (
+        start: readonly [number, number],
+        end: readonly [number, number],
+        color: readonly [number, number, number],
+    ) => {
+        values.push(start[0], start[1], color[0], color[1], color[2]);
+        values.push(end[0], end[1], color[0], color[1], color[2]);
+    };
+    const circle = (
+        centre: readonly [number, number],
+        radius: number,
+        color: readonly [number, number, number],
+    ) => {
+        const segments = 32;
+        for (let segment = 0; segment < segments; segment += 1) {
+            const first = segment / segments * Math.PI * 2;
+            const second = (segment + 1) / segments * Math.PI * 2;
+            add(
+                [centre[0] + Math.cos(first) * radius, centre[1] + Math.sin(first) * radius],
+                [centre[0] + Math.cos(second) * radius, centre[1] + Math.sin(second) * radius],
+                color,
+            );
+        }
+    };
+
+    for (const collider of state.colliders) {
+        if (collider.kind === 'frame') {
+            const x = state.world.width * 0.5;
+            const y = state.world.height * 0.5;
+            add([-x, -y], [x, -y], [0.2, 1, 0.45]);
+            add([x, -y], [x, y], [0.2, 1, 0.45]);
+            add([x, y], [-x, y], [0.2, 1, 0.45]);
+            add([-x, y], [-x, -y], [0.2, 1, 0.45]);
+        } else if (collider.kind === 'segment') {
+            add(collider.start, collider.end, [0.2, 1, 0.45]);
+        } else if (collider.kind === 'circle') {
+            circle(collider.position, collider.radius, [0.2, 1, 0.45]);
+        }
+    }
+
+    for (const force of state.forces) {
+        if (force.kind === 'well') {
+            circle(force.position, force.radius, force.repel ? [1, 0.25, 0.25] : [0.3, 0.55, 1]);
+        } else if (force.kind === 'vortex') {
+            circle(force.position, force.radius, [0.75, 0.3, 1]);
+        }
+    }
+
+    for (const emitter of state.emitters) {
+        const color: readonly [number, number, number] = [1, 0.8, 0.2];
+        const centre = emitter.origin;
+        add([centre[0] - 8, centre[1]], [centre[0] + 8, centre[1]], color);
+        add([centre[0], centre[1] - 8], [centre[0], centre[1] + 8], color);
+        if (emitter.emissionRadius > 0) {
+            circle(centre, emitter.emissionRadius, color);
+        }
+    }
+
+    return new Float32Array(values);
+}
+
+function hashId(value: string): number {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return hash | 0;
+}
+
+function degrees(value: number): number {
+    return value * Math.PI / 180;
+}
+
+function clamp01(value: number): number {
+    return clamp(value, 0, 1);
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+    return Math.min(maximum, Math.max(minimum, value));
 }

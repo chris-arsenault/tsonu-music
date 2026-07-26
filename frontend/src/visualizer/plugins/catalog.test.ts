@@ -8,7 +8,12 @@ import {
     sourceDefinitions,
     transformerDefinitions,
 } from './registry';
-import { validateDefinition, type PluginCategory, type VisualPluginDefinition } from '../core/plugin';
+import {
+    isValuePortType,
+    validateDefinition,
+    type PluginCategory,
+    type VisualPluginDefinition,
+} from '../core/plugin';
 import { silentFeatureBus } from '../core/features';
 import { compileGraph } from '../core/graph';
 import { assetResourceId, wireScene, type AssetResource } from '../core/wiring';
@@ -139,18 +144,24 @@ describe('catalog integrity', () => {
         }
     });
 
-    test('every plugin registers shaders at initialization and emits passes when fully wired', () => {
+    test('every GPU plugin registers shaders and emits passes when fully wired', () => {
         for (const definition of CATALOG) {
             const { context, shaders } = createContext();
             const instance = definition.create(context);
             instance.initialize();
 
-            expect(shaders.length, `${definition.id} registers a shader`).toBeGreaterThan(0);
-            expect(renderWithAllInputs(definition).length, `${definition.id} emits a pass`).toBeGreaterThan(0);
+            if (definition.cost.renderPasses > 0) {
+                expect(shaders.length, `${definition.id} registers a shader`).toBeGreaterThan(0);
+                if (!definition.inputs.some((port) => isValuePortType(port.type))) {
+                    expect(renderWithAllInputs(definition).length, `${definition.id} emits a pass`).toBeGreaterThan(0);
+                }
+            } else {
+                expect(shaders, `${definition.id} is a CPU value node`).toEqual([]);
+            }
         }
     });
 
-    test('every plugin with a required input emits nothing when it is missing', () => {
+    test('every plugin with a missing required input draws no content', () => {
         for (const definition of CATALOG) {
             if (!definition.inputs.some((port) => port.required)) {
                 continue;
@@ -168,7 +179,15 @@ describe('catalog integrity', () => {
                 renderHeight: 360,
             });
 
-            expect(passes, `${definition.id} degrades to no passes`).toEqual([]);
+            if (definition.inputs.some((port) => isValuePortType(port.type))) {
+                expect(
+                    passes.every((pass) =>
+                        pass.kind === 'geometry' && pass.vertexCount === 0 && pass.clear === true),
+                    `${definition.id} only clears stale value-renderer outputs`,
+                ).toBe(true);
+            } else {
+                expect(passes, `${definition.id} degrades to no passes`).toEqual([]);
+            }
         }
     });
 
@@ -408,6 +427,7 @@ describe('scene assembly across the full catalog', () => {
     test('particles run with neither mask nor artwork present', () => {
         // Section 26: particles must operate without masks or album art.
         const particleScene = wireScene([
+            CATALOG.find((d) => d.id === 'ParticleEmitter:point')!,
             CATALOG.find((d) => d.id === 'ProceduralVectorField:curl')!,
             CATALOG.find((d) => d.id === 'ParticleForceField:vortex')!,
             CATALOG.find((d) => d.id === 'ParticleSimulator')!,

@@ -43,16 +43,22 @@ const CPU_SIDE_PARAMETERS: Record<string, string> = {
     'SpectrumGeometrySource:gain': 'scales spectrum magnitudes when writing vertices',
     'TransientGlyphSource:scale': 'scales glyph reach when writing glyph geometry',
     'ImpactCascadeSimulator:energyScale': 'scales collision energy in the CPU-side cascade step',
-    'ParticleSimulator:drag': 'velocity damping in the CPU-side physics step',
-    'ParticleSimulator:lifetime': 'bounds body age in the CPU-side physics step',
-    'ParticleRenderer:pointSize': 'set as a vertex-stage point size rather than a fragment uniform',
+    'ParticleRenderer:debug': 'controls CPU-side debug geometry and passes',
     'SymmetryTransform:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
     'SDFShapeSource:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
 };
 
+const CPU_VALUE_FAMILIES = new Set([
+    'ParticleSimulator',
+    'ParticleEmitter',
+    'ParticleForceField',
+    'ParticleCollider',
+]);
+
 function isCpuSide(definition: VisualPluginDefinition, parameter: string): boolean {
     const family = definition.id.split(':')[0];
-    return CPU_SIDE_PARAMETERS[`${family}:${parameter}`] !== undefined;
+    return CPU_VALUE_FAMILIES.has(family)
+        || CPU_SIDE_PARAMETERS[`${family}:${parameter}`] !== undefined;
 }
 
 const CATALOG = allDefinitions();
@@ -321,11 +327,17 @@ describe('parameters are driven', () => {
         'MaskSignedDistanceField:searchRadius': 'sets the derivation cost, not its appearance',
         'MaskContainmentField:outside': 'a switch, not a continuous value',
         'MaskEffectStencil:edgeOnly': 'a switch, not a continuous value',
-        'ParticleSimulator:lifetime': 'changing it mid-flight retimes particles already alive',
-        'ParticleRenderer:pointSize': 'a vertex-stage constant, not a per-frame value',
         'AlbumArtPalette:saturationFloor': 'a floor on extraction, not a visual parameter',
         'ImpactCascadeSimulator:brightness': 'the cascade drives its own energy',
     };
+    const STATIC_FAMILIES = new Set([
+        'ParticleSimulator',
+        'ParticleEmitter',
+        'ParticleForceField',
+        'ParticleCollider',
+        'ParticleRenderer',
+        'ParticleTrailInjector',
+    ]);
 
     test('every parameter is bound to a feature or listed as deliberately static', () => {
         const inert: string[] = [];
@@ -335,7 +347,9 @@ describe('parameters are driven', () => {
             const family = definition.id.split(':')[0];
 
             for (const parameter of Object.keys(definition.parameters ?? {})) {
-                if (bound.has(parameter) || STATIC_PARAMETERS[`${family}:${parameter}`]) {
+                if (bound.has(parameter)
+                    || STATIC_FAMILIES.has(family)
+                    || STATIC_PARAMETERS[`${family}:${parameter}`]) {
                     continue;
                 }
 

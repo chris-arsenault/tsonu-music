@@ -59,7 +59,7 @@ export default function GraphNodeBody({ node, selected }: GraphNodeBodyProps) {
                         {node.inputs.map((port) => <Port key={port.name} port={port} />)}
                     </div>
                     <div className="viz-node__column is-outputs">
-                        {node.outputs.map((port) => <Port key={port.name} port={port} output />)}
+                        {node.outputs.map((port) => <Port key={port.name} port={port} />)}
                     </div>
                 </div>
             ) : null}
@@ -85,7 +85,7 @@ export default function GraphNodeBody({ node, selected }: GraphNodeBodyProps) {
     );
 }
 
-function Port({ port, output }: { port: EditorPort; output?: boolean }) {
+function Port({ port }: { port: EditorPort }) {
     // A required input with nothing on it is the commonest reason a document does not compile, so it
     // is called out on the socket rather than only in the problem list.
     const wanting = port.required && !port.connected;
@@ -95,18 +95,9 @@ function Port({ port, output }: { port: EditorPort; output?: boolean }) {
         port.connected ? '' : 'is-unconnected',
     ].filter(Boolean).join(' ');
 
-    const dot = (
-        <span
-            className={`viz-node__dot${port.connected ? '' : ' is-hollow'}`}
-            style={{ background: portColour(port.type), color: portColour(port.type) }}
-        />
-    );
-
     return (
         <div className={classes} title={`${port.name}${port.type ? `: ${port.type}` : ''}`}>
-            {output ? null : dot}
             <span>{port.name}{wanting ? ' *' : ''}</span>
-            {output ? dot : null}
         </div>
     );
 }

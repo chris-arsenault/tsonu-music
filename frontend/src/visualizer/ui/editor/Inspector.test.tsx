@@ -1,7 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test, vi } from 'vitest';
 import Inspector, { defaultBinding } from './Inspector';
-import { ACCUMULATE_NODE, COMPOSITE_NODE, type EditorNode } from '../../core/editor-view';
+import {
+    ACCUMULATE_NODE,
+    COMPOSITE_NODE,
+    GRADE_NODE,
+    MOTION_NODE,
+    PALETTE_NODE,
+    type EditorNode,
+} from '../../core/editor-view';
 
 function node(overrides: Partial<EditorNode> = {}): EditorNode {
     return {
@@ -28,6 +35,9 @@ const handlers = {
     onClone: vi.fn(),
     onRemove: vi.fn(),
     onLayerOverride: vi.fn(),
+    onKernelInputs: vi.fn(),
+    onPaletteId: vi.fn(),
+    onPaletteStrength: vi.fn(),
 };
 
 const render = (element: Parameters<typeof renderToStaticMarkup>[0]) =>
@@ -94,6 +104,47 @@ describe('inspector', () => {
         expect(html).toContain('the starting value');
     });
 
+    test('the grade exposes its values and audio bindings as editable controls', () => {
+        const html = render(<Inspector
+            node={node({
+                id: GRADE_NODE,
+                kind: 'kernel',
+                title: 'Grade',
+                parameters: [{
+                    name: 'tint',
+                    value: 0.8,
+                    binding: defaultBinding('tint'),
+                }],
+            })}
+            editable
+            {...handlers}
+        />);
+
+        expect(html).toContain('value="0.8"');
+        expect(html).toContain('>Unbind</button>');
+        expect(html).toContain('attack / release');
+        expect(html).not.toContain('>To input</button>');
+    });
+
+    test('the palette offers an explicit scheme and strength selection', () => {
+        const html = render(<Inspector
+            node={node({
+                id: PALETTE_NODE,
+                kind: 'kernel',
+                title: 'Palette',
+                subtitle: 'monochrome-noir',
+                parameters: [{ name: 'strength', value: 0 }],
+            })}
+            editable
+            {...handlers}
+        />);
+
+        expect(html).toContain('Palette scheme');
+        expect(html).toContain('Monochrome Noir');
+        expect(html).toContain('value="monochrome-noir" selected');
+        expect(html).toContain('value="0"');
+    });
+
     test('an unpinned accumulation value reads as automatic rather than as zero', () => {
         const html = render(<Inspector
             node={node({
@@ -117,6 +168,10 @@ describe('inspector', () => {
                 kind: 'kernel',
                 title: 'Composite',
                 inputs: [{ name: 'trn#0', required: false, connected: true }],
+                availableInputs: [
+                    { name: 'trn#0', required: false, connected: true },
+                    { name: 'src#1', required: false, connected: false },
+                ],
             })}
             editable
             layerOverrides={{ 'trn#0': { opacity: 0.5 } }}
@@ -125,6 +180,32 @@ describe('inspector', () => {
 
         expect(html).toContain('from character');
         expect(html).toContain('placeholder="opacity"');
+        expect(html).toContain('Add input');
+        expect(html).toContain('src#1');
+        expect(html).toContain('>Remove</button>');
+        expect(html).toContain('>Use all</button>');
+    });
+
+    test('the motion sum can add and remove compatible field inputs', () => {
+        const html = render(<Inspector
+            node={node({
+                id: MOTION_NODE,
+                kind: 'kernel',
+                title: 'Motion sum',
+                inputs: [{ name: 'flow#0.field', required: false, connected: true }],
+                availableInputs: [
+                    { name: 'flow#0.field', required: false, connected: true },
+                    { name: 'wave#0.motion', required: false, connected: false },
+                ],
+            })}
+            editable
+            {...handlers}
+        />);
+
+        expect(html).toContain('Add motion input');
+        expect(html).toContain('wave#0.motion');
+        expect(html).toContain('>Remove</button>');
+        expect(html).toContain('>Use all</button>');
     });
 
     test('a node with problems shows them before anything else', () => {

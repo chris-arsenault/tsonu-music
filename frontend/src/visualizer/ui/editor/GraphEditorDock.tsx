@@ -35,15 +35,19 @@ import {
     removeBinding,
     removeNode,
     setBinding,
+    setAssetBinding,
     setLayerOverride,
     setMuted,
     setParameter,
     setPersistencePin,
+    setPaletteId,
+    setPaletteStrength,
     setPosition,
     setPromoted,
     setGradeParameter,
     setGradeBinding,
     removeGradeBinding,
+    setKernelInputs,
     setSeed,
     undo,
     type DocumentHistory,
@@ -51,20 +55,26 @@ import {
 } from '../../core/authored-scene-edit';
 import type { ParameterBinding } from '../../core/bindings';
 import type { PersistenceOverrides } from '../../core/persistence';
-import type { PortType, VisualPluginDefinition } from '../../core/plugin';
+import type { VisualPluginDefinition } from '../../core/plugin';
+import { assetResourceId } from '../../core/wiring';
 import { createM1Registry } from '../../plugins/registry';
 import type { KernelControlHandle, KernelReadout } from '../../host/kernel-loop';
 import { useEditorStyles } from './editor-styles';
 import Inspector from './Inspector';
-import NodeSearch from './NodeSearch';
+import NodeSearch, {
+    type NodeSearchAsset,
+    type NodeSearchPortFilter,
+} from './NodeSearch';
 import { MetersTab, PerformanceTab } from './ReadoutTabs';
 import {
     copyFixture,
+    copyGraph,
     downloadScene,
     loadStoredScene,
     readSceneFile,
     storeScene,
 } from './scene-storage';
+import { particleSanityScene } from './particle-sanity-scene';
 
 /**
  * The same catalog the running kernel registered.
@@ -90,8 +100,10 @@ interface Point { x: number; y: number }
 /** An open search box: where it was opened, and the link that opened it, if any. */
 interface SearchRequest {
     at: Point;
-    from?: CanvasEndpoint;
-    acceptingType?: PortType;
+    connection?: {
+        fixed: CanvasEndpoint;
+        candidatePort: NodeSearchPortFilter;
+    };
 }
 
 export interface GraphEditorDockProps {
@@ -121,20 +133,25 @@ export default function GraphEditorDock({
     const [selected, setSelected] = useState<string | undefined>();
     const [notice, setNotice] = useState<string | undefined>();
     const [search, setSearch] = useState<SearchRequest | undefined>();
+    const [manualGraphCopy, setManualGraphCopy] = useState<string | undefined>();
     const fileInput = useRef<HTMLInputElement | null>(null);
+    const canvas = useRef<HTMLDivElement | null>(null);
     const project = useRef<((point: Point) => Point) | undefined>(undefined);
+    const attemptedRestore = useRef(false);
 
     const document_ = history?.present;
 
-    // Whatever was open last time. Offered rather than applied: reopening the dock should not silently
-    // take the graph away from the scheduler.
+    // The Lab is an authoring surface: its last autosave resumes once the kernel is ready.
     const [stored] = useState(() => loadStoredScene());
 
     // The document the kernel is actually running, which after a capture is the one below. Read from
     // the readout rather than assumed, so what is drawn is what is rendering.
     const live = readout.scene?.authored;
     const problems = readout.scene?.problems ?? [];
-    const editable = Boolean(live);
+    // Once the editor has a document, transient runtime readout gaps while the Lab reloads or
+    // recompiles must not disable React Flow's drag and connection state machines. A live authored
+    // scene remains editable before it has been copied into local history as well.
+    const editable = Boolean(document_ || live);
 
     /** Hands a document to the kernel and starts a fresh history at it. */
     const apply = useCallback((next: AuthoredScene, note?: string) => {
@@ -150,6 +167,24 @@ export default function GraphEditorDock({
         setNotice(note);
         return true;
     }, [handle, controls, onControls]);
+
+    useEffect(() => {
+        if (attemptedRestore.current || !handle) {
+            return;
+        }
+
+        // An authored scene is already in control when the dock was merely closed and reopened. It
+        // must not be replaced by an older localStorage snapshot.
+        if (live) {
+            attemptedRestore.current = true;
+            return;
+        }
+
+        attemptedRestore.current = true;
+        if (stored) {
+            apply(stored, 'restored autosaved composition');
+        }
+    }, [apply, handle, live, stored]);
 
     /**
      * Records an edit and hands the result to the kernel.
@@ -251,7 +286,7 @@ export default function GraphEditorDock({
         apply(read.scene, read.warnings.length > 0 ? read.warnings[0].detail : `loaded ${file.name}`);
     }, [apply]);
 
-    const copy = useCallback(() => {
+    const copyTestFixture = useCallback(() => {
         if (!document_) {
             return;
         }
@@ -260,6 +295,27 @@ export default function GraphEditorDock({
             where === 'clipboard' ? 'fixture copied' : 'fixture downloaded',
         ));
     }, [document_]);
+
+    const copyGraphForAnalysis = useCallback(() => {
+        if (!document_) {
+            return;
+        }
+
+        void copyGraph(document_).then((result) => {
+            if (result.where === 'clipboard') {
+                setNotice('graph copied');
+            } else {
+                setManualGraphCopy(result.text);
+                setNotice('clipboard unavailable — copy the graph from the dialog');
+            }
+        });
+    }, [document_]);
+
+    const loadParticleSanityScene = useCallback(() => {
+        apply(particleSanityScene(), 'loaded particle sanity scene');
+        setSelected(undefined);
+        setSearch(undefined);
+    }, [apply]);
 
     // Autosaved on every change, so a reload does not lose a scene that took a while to find.
     useEffect(() => {
@@ -293,6 +349,25 @@ export default function GraphEditorDock({
         })
         : undefined), [document_, registry, resolved, readout.scene?.parameters]);
 
+    const searchAssets = useMemo<NodeSearchAsset[]>(() =>
+        (readout.scene?.assets ?? []).flatMap<NodeSearchAsset>((assetId) => {
+            if (assetId.startsWith('mask:')) {
+                return [{
+                    resource: assetResourceId(assetId),
+                    name: assetId,
+                    type: 'mask-texture' as const,
+                }];
+            }
+            if (assetId.startsWith('album-art:')) {
+                return [{
+                    resource: assetResourceId(assetId),
+                    name: assetId,
+                    type: 'color-texture' as const,
+                }];
+            }
+            return [];
+        }), [readout.scene?.assets]);
+
     /* -- editing --------------------------------------------------------- */
 
     const lookup = useCallback<PluginLookup>((pluginId) => registry.get(pluginId), [registry]);
@@ -323,12 +398,11 @@ export default function GraphEditorDock({
 
     const editKernel = useCallback((next: AuthoredScene | undefined) => edit(next), [edit]);
 
-    const onMove = useCallback((nodeId: string, position: Point, settled: boolean) => {
-        // A drag emits a position per frame. Coalesced until it stops, so undo takes back the drag
-        // rather than one frame of it, and it never reaches the kernel because it is not the scene.
+    const onMove = useCallback((nodeId: string, position: Point) => {
+        // React Flow owns the transient drag. The document receives one settled position, so moving a
+        // node neither rebuilds the whole canvas per pointer frame nor reaches the rendering kernel.
         edit(document_ && setPosition(document_, nodeId, position), {
             presentation: true,
-            coalesce: !settled,
         });
     }, [document_, edit]);
 
@@ -354,6 +428,23 @@ export default function GraphEditorDock({
         edit(result.scene);
     }, [document_, view, edit, lookup]);
 
+    const closeSearch = useCallback(() => setSearch(undefined), []);
+
+    /** Opens the unfiltered catalog and uses the visible canvas centre for the new node. */
+    const openCatalog = useCallback(() => {
+        const bounds = canvas.current?.getBoundingClientRect();
+        if (!bounds) {
+            return;
+        }
+
+        setSearch({
+            at: {
+                x: bounds.left + bounds.width / 2,
+                y: bounds.top + bounds.height / 2,
+            },
+        });
+    }, []);
+
     /** Adds a node where the pointer is, wiring it up when a link was dropped to get here. */
     const addNodeFromSearch = useCallback((
         definition: VisualPluginDefinition,
@@ -370,13 +461,37 @@ export default function GraphEditorDock({
         // canvas that quietly disagrees with the identical one beside it.
         let next = addNode(document_, definition.id, at, id);
 
-        if (search.from && port) {
-            next = applyConnect(next, view!, search.from, { node: id, port }, lookup);
+        if (search.connection && port) {
+            // `view` predates the node we just added. Build the pending document's view so the same
+            // connection validator used by canvas gestures can see and type-check both endpoints.
+            const pending = resolveAuthoredScene(next, registry);
+            const pendingView = buildEditorView({
+                document: next,
+                registry,
+                graph: pending.ok ? pending.scene.graph : undefined,
+                problems: pending.ok ? pending.warnings : pending.problems,
+            });
+            const added = { node: id, port };
+            const { fixed, candidatePort } = search.connection;
+
+            next = candidatePort.kind === 'input'
+                ? applyConnect(next, pendingView, fixed, added, lookup)
+                : applyConnect(next, pendingView, added, fixed, lookup);
         }
 
         setSearch(undefined);
         edit(next);
-    }, [document_, search, view, edit, lookup]);
+    }, [document_, search, edit, lookup]);
+
+    const addAssetFromSearch = useCallback((asset: NodeSearchAsset) => {
+        const connection = search?.connection;
+        if (!document_ || !connection || connection.candidatePort.kind !== 'output') {
+            return;
+        }
+
+        setSearch(undefined);
+        edit(setAssetBinding(document_, connection.fixed, asset.resource, lookup));
+    }, [document_, search, edit, lookup]);
 
     /**
      * A parameter edited from the inspector.
@@ -472,16 +587,6 @@ export default function GraphEditorDock({
                                 >
                                     New scene
                                 </button>
-                                {stored ? (
-                                    <button
-                                        type="button"
-                                        className="viz-editor__action"
-                                        onClick={() => apply(stored, 'restored the last capture')}
-                                        title="Reopen the document this editor last had"
-                                    >
-                                        Restore last
-                                    </button>
-                                ) : null}
                             </>
                         )}
 
@@ -504,9 +609,25 @@ export default function GraphEditorDock({
                                 event.currentTarget.value = '';
                             }}
                         />
+                        <button
+                            type="button"
+                            className="viz-editor__action"
+                            onClick={loadParticleSanityScene}
+                            title="Replace the Lab document with an unbound particle physics sanity scene"
+                        >
+                            Particle sanity
+                        </button>
 
                         {document_ ? (
                             <>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={copyGraphForAnalysis}
+                                    title="Copy the exact graph JSON for pasting into an analysis conversation"
+                                >
+                                    Copy graph
+                                </button>
                                 <button
                                     type="button"
                                     className="viz-editor__action"
@@ -518,7 +639,7 @@ export default function GraphEditorDock({
                                 <button
                                     type="button"
                                     className="viz-editor__action"
-                                    onClick={copy}
+                                    onClick={copyTestFixture}
                                     title="Copy this scene as a test file that reproduces it"
                                 >
                                     Copy fixture
@@ -528,6 +649,14 @@ export default function GraphEditorDock({
 
                         {editable ? (
                             <>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={openCatalog}
+                                    title="Add a disconnected node from the full plugin catalog"
+                                >
+                                    + Add node
+                                </button>
                                 <button
                                     type="button"
                                     className="viz-editor__action"
@@ -601,7 +730,7 @@ export default function GraphEditorDock({
                 {tab === 'graph' ? (
                     view ? (
                         <div className="viz-editor__split">
-                            <div className="viz-editor__canvas">
+                            <div ref={canvas} className="viz-editor__canvas">
                                 <Suspense
                                     fallback={<div className="viz-editor__empty">loading canvas…</div>}
                                 >
@@ -613,13 +742,28 @@ export default function GraphEditorDock({
                                         onMove={onMove}
                                         onConnect={onCanvasConnect}
                                         onDisconnect={onCanvasDisconnect}
-                                        onDropOnPane={(from, at) => setSearch({
-                                            at,
-                                            from,
-                                            acceptingType: view.nodes
-                                                .find((node) => node.id === from.node)?.outputs
-                                                .find((port) => port.name === from.port)?.type,
-                                        })}
+                                        onDropOnPane={(fixed, handleType, at) => {
+                                            const node = view.nodes.find(
+                                                (candidate) => candidate.id === fixed.node,
+                                            );
+                                            const port = (handleType === 'source'
+                                                ? node?.outputs
+                                                : node?.inputs
+                                            )?.find((candidate) => candidate.name === fixed.port);
+
+                                            if (port?.type) {
+                                                setSearch({
+                                                    at,
+                                                    connection: {
+                                                        fixed,
+                                                        candidatePort: {
+                                                            kind: handleType === 'source' ? 'input' : 'output',
+                                                            type: port.type,
+                                                        },
+                                                    },
+                                                });
+                                            }
+                                        }}
                                         onAddAt={(at) => setSearch({ at })}
                                         onReady={(fn) => { project.current = fn; }}
                                     />
@@ -628,9 +772,11 @@ export default function GraphEditorDock({
                                 {search ? (
                                     <NodeSearch
                                         catalog={registry.all()}
-                                        acceptingType={search.acceptingType}
+                                        assets={searchAssets}
+                                        portFilter={search.connection?.candidatePort}
                                         onPick={addNodeFromSearch}
-                                        onClose={() => setSearch(undefined)}
+                                        onPickAsset={addAssetFromSearch}
+                                        onClose={closeSearch}
                                     />
                                 ) : null}
                             </div>
@@ -671,6 +817,15 @@ export default function GraphEditorDock({
                                             ...(opacity !== undefined ? { opacity } : {}),
                                         }),
                                     )}
+                                    onKernelInputs={(stage, inputs) => editKernel(
+                                        document_ && setKernelInputs(document_, stage, inputs),
+                                    )}
+                                    onPaletteId={(id) => editKernel(
+                                        document_ && setPaletteId(document_, id),
+                                    )}
+                                    onPaletteStrength={(strength) => editKernel(
+                                        document_ && setPaletteStrength(document_, strength),
+                                    )}
                                 />
                             ) : null}
                         </div>
@@ -683,7 +838,62 @@ export default function GraphEditorDock({
                     )
                 ) : null}
             </div>
+
+            {manualGraphCopy ? (
+                <GraphCopyDialog
+                    text={manualGraphCopy}
+                    onClose={() => setManualGraphCopy(undefined)}
+                />
+            ) : null}
         </aside>
+    );
+}
+
+function GraphCopyDialog({ text, onClose }: { text: string; onClose: () => void }) {
+    const field = useRef<HTMLTextAreaElement | null>(null);
+
+    useEffect(() => {
+        field.current?.focus();
+        field.current?.select();
+    }, []);
+
+    useEffect(() => {
+        const dismiss = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                onClose();
+            }
+        };
+
+        window.addEventListener('keydown', dismiss, { capture: true });
+        return () => window.removeEventListener('keydown', dismiss, { capture: true });
+    }, [onClose]);
+
+    return (
+        <div className="viz-copy-modal__backdrop">
+            <section
+                className="viz-copy-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Copy graph manually"
+            >
+                <div className="viz-copy-modal__head">
+                    <strong>Copy graph</strong>
+                    <button type="button" className="viz-editor__action" onClick={onClose}>
+                        Close
+                    </button>
+                </div>
+                <p>Clipboard access was unavailable. The complete graph is selected; copy it manually.</p>
+                <textarea
+                    ref={field}
+                    className="viz-copy-modal__text"
+                    readOnly
+                    value={text}
+                    onFocus={(event) => event.currentTarget.select()}
+                />
+            </section>
+        </div>
     );
 }
 

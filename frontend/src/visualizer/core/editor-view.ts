@@ -19,13 +19,16 @@
 
 import type { AuthoredProblem, AuthoredScene } from './authored-scene';
 import type { ParameterBinding } from './bindings';
+import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from './composite-grade';
 import type { CompiledGraph } from './graph';
 import { layersForGraph } from './layers';
+import { selectKernelInputs } from './kernel-inputs';
 import { isMotionSource } from './persistence';
 import type { PluginCategory, PluginRegistry, PortType } from './plugin';
 import type { ResourceId } from './passes';
 
 /** The kernel's own stages, in the order they run. Ids match the runtime's target keys. */
+export const PALETTE_NODE = 'kernel:palette';
 export const COMPOSITE_NODE = 'kernel:composite';
 export const MOTION_NODE = 'kernel:motion';
 export const ACCUMULATE_NODE = 'kernel:accumulate';
@@ -110,6 +113,8 @@ export interface EditorNode {
     category?: PluginCategory;
     position: { x: number; y: number };
     inputs: EditorPort[];
+    /** Every compatible kernel-stage input, including ones excluded by explicit membership. */
+    availableInputs?: EditorPort[];
     outputs: EditorPort[];
     parameters: EditorParameterRow[];
     /** Non-numeric facts about the node, shown as rows beneath its parameters. */
@@ -136,7 +141,7 @@ export interface EditorView {
 export interface EditorViewInput {
     document: AuthoredScene;
     registry: PluginRegistry;
-    /** The compiled graph, when the document resolved. Without it the tail cannot be derived. */
+    /** The compiled graph, when the document resolved. Its layer and motion inputs are then derived. */
     graph?: CompiledGraph;
     /** Live resolved parameter values by node id, as the kernel last reported them. */
     live?: Readonly<Record<string, Readonly<Record<string, number>>>>;
@@ -259,9 +264,10 @@ export function buildEditorView(input: EditorViewInput): EditorView {
 
     edges.push(...assetNodesAndEdges(document, nodes));
 
-    if (graph) {
-        appendKernelTail(nodes, edges, graph, document);
-    }
+    // These stages exist independently of whether the plugin graph currently compiles. Keeping the
+    // fixed tail visible is especially important while editing: removing one required input should
+    // expose the broken connection, not make Composite through Canvas look deleted as collateral.
+    appendKernelTail(nodes, edges, graph, document);
 
     return { nodes, edges };
 }
@@ -405,26 +411,54 @@ function assetNodesAndEdges(document: AuthoredScene, nodes: EditorNode[]): Edito
 function appendKernelTail(
     nodes: EditorNode[],
     edges: EditorEdge[],
-    graph: CompiledGraph,
+    graph: CompiledGraph | undefined,
     document: AuthoredScene,
 ): void {
     const rightmost = nodes.reduce((widest, node) => Math.max(widest, node.position.x), 0);
     const column = (index: number) => rightmost + KERNEL_COLUMN_GAP * (index + 1);
 
-    const layers = layersForGraph(graph);
-    const motion = graph.resources.filter((resource) => isMotionSource(resource.type));
+    const availableLayers = graph ? layersForGraph(graph) : [];
+    const availableMotion = graph?.resources.filter((resource) => isMotionSource(resource.type)) ?? [];
+    const layers = selectKernelInputs(availableLayers, document.kernel?.compositeInputs);
+    const motion = selectKernelInputs(availableMotion, document.kernel?.motionInputs);
     const kernel = document.kernel;
+
+    nodes.push({
+        id: PALETTE_NODE,
+        kind: 'kernel',
+        title: 'Palette',
+        subtitle: kernel?.palette?.id ?? 'theme / entropy',
+        position: { x: column(0), y: -KERNEL_ROW_GAP },
+        inputs: [],
+        outputs: [{ name: 'palette', type: 'palette', required: false, connected: true }],
+        parameters: [pinnedRow('strength', kernel?.palette?.strength)],
+        details: [{
+            label: 'selection',
+            value: kernel?.palette?.id ?? 'automatic',
+        }],
+        problems: [],
+    });
 
     nodes.push({
         id: COMPOSITE_NODE,
         kind: 'kernel',
         title: 'Composite',
-        subtitle: `${layers.length} layer${layers.length === 1 ? '' : 's'}`,
+        subtitle: graph
+            ? `${layers.length} layer${layers.length === 1 ? '' : 's'}`
+            : 'layers unresolved',
         position: { x: column(0), y: 0 },
-        inputs: layers.map((layer) => ({
+        inputs: [
+            { name: 'palette', type: 'palette', required: true, connected: true },
+            ...layers.map((layer) => ({
+                name: layer.id,
+                required: false,
+                connected: true,
+            })),
+        ],
+        availableInputs: availableLayers.map((layer) => ({
             name: layer.id,
             required: false,
-            connected: true,
+            connected: layers.some((selected) => selected.id === layer.id),
         })),
         outputs: [{ name: 'composite', required: false, connected: true }],
         // Blend mode and opacity are per layer rather than per stage, so they are shown on the edges
@@ -438,15 +472,23 @@ function appendKernelTail(
         id: MOTION_NODE,
         kind: 'kernel',
         title: 'Motion sum',
-        subtitle: motion.length === 0
-            ? 'no field — the image is not dragged'
-            : `${motion.length} field${motion.length === 1 ? '' : 's'}`,
+        subtitle: graph
+            ? motion.length === 0
+                ? 'no field — the image is not dragged'
+                : `${motion.length} field${motion.length === 1 ? '' : 's'}`
+            : 'field unresolved',
         position: { x: column(0), y: KERNEL_ROW_GAP },
         inputs: motion.map((resource) => ({
             name: resource.id,
             type: resource.type,
             required: false,
             connected: true,
+        })),
+        availableInputs: availableMotion.map((resource) => ({
+            name: resource.id,
+            type: resource.type,
+            required: false,
+            connected: motion.some((selected) => selected.id === resource.id),
         })),
         outputs: [{ name: 'motion', required: false, connected: motion.length > 0 }],
         parameters: [],
@@ -474,7 +516,8 @@ function appendKernelTail(
         problems: [],
     });
 
-    const gradeValues = kernel?.grade?.parameters ?? {};
+    const gradeValues = { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) };
+    const gradeBindings = kernel?.grade?.bindings ?? COMPOSITE_BINDINGS;
     nodes.push({
         id: GRADE_NODE,
         kind: 'kernel',
@@ -486,8 +529,8 @@ function appendKernelTail(
         parameters: Object.keys(gradeValues).sort().map((name) => ({
             name,
             value: gradeValues[name],
-            ...(kernel?.grade?.bindings?.find((binding) => binding.parameter === name)
-                ? { binding: kernel.grade.bindings.find((binding) => binding.parameter === name) }
+            ...(gradeBindings.find((binding) => binding.parameter === name)
+                ? { binding: gradeBindings.find((binding) => binding.parameter === name) }
                 : {}),
         })),
         // The graded image is the canvas, so there is nothing separate to inspect: clearing the
@@ -507,27 +550,39 @@ function appendKernelTail(
         problems: [],
     });
 
-    for (const layer of layers) {
-        edges.push({
-            id: `layer:${layer.id}`,
-            kind: 'layer',
-            from: { node: producerOf(layer.color, graph) ?? layer.id, port: portOf(layer.color, graph) ?? 'color' },
-            to: { node: COMPOSITE_NODE, port: layer.id },
-            type: 'color-texture',
-        });
-    }
+    if (graph) {
+        for (const layer of layers) {
+            edges.push({
+                id: `layer:${layer.id}`,
+                kind: 'layer',
+                from: {
+                    node: producerOf(layer.color, graph) ?? layer.id,
+                    port: portOf(layer.color, graph) ?? 'color',
+                },
+                to: { node: COMPOSITE_NODE, port: layer.id },
+                type: 'color-texture',
+            });
+        }
 
-    for (const resource of motion) {
-        edges.push({
-            id: `motion:${resource.id}`,
-            kind: 'motion',
-            from: { node: resource.producedBy, port: resource.port },
-            to: { node: MOTION_NODE, port: resource.id },
-            type: resource.type,
-        });
+        for (const resource of motion) {
+            edges.push({
+                id: `motion:${resource.id}`,
+                kind: 'motion',
+                from: { node: resource.producedBy, port: resource.port },
+                to: { node: MOTION_NODE, port: resource.id },
+                type: resource.type,
+            });
+        }
     }
 
     edges.push(
+        {
+            id: 'kernel:palette-composite',
+            kind: 'kernel',
+            from: { node: PALETTE_NODE, port: 'palette' },
+            to: { node: COMPOSITE_NODE, port: 'palette' },
+            type: 'palette',
+        },
         {
             id: 'kernel:composite-accumulate',
             kind: 'kernel',

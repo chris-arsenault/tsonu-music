@@ -7,6 +7,7 @@ import {
     GRADE_NODE,
     isPinned,
     MOTION_NODE,
+    PALETTE_NODE,
 } from './editor-view';
 import { emptyAuthoredScene, resolveAuthoredScene, type AuthoredScene } from './authored-scene';
 import { createPluginRegistry } from './plugin';
@@ -204,6 +205,19 @@ describe('the implicit buses', () => {
         expect(layerEdges.every((edge) => edge.to.node === COMPOSITE_NODE)).toBe(true);
     });
 
+    test('explicit composite membership can exclude a layer without hiding it as a choice', () => {
+        const built = view({
+            ...twoBranches,
+            kernel: { compositeInputs: ['src#1'] },
+        });
+        const composite = built.nodes.find((node) => node.id === COMPOSITE_NODE);
+
+        expect(built.edges.filter((edge) => edge.kind === 'layer').map((edge) => edge.from.node))
+            .toEqual(['src#1']);
+        expect(composite?.inputs.map((port) => port.name)).toEqual(['palette', 'src#1']);
+        expect(composite?.availableInputs?.map((port) => port.name)).toEqual(['src#0', 'src#1']);
+    });
+
     test('a consumed output is an intermediate, not a layer', () => {
         const built = view(scene({
             nodes: [
@@ -244,6 +258,22 @@ describe('the implicit buses', () => {
         expect(motion[0].to.node).toBe(MOTION_NODE);
     });
 
+    test('explicit motion membership can select none while retaining available fields', () => {
+        const built = view(scene({
+            nodes: [
+                { id: 'fld#0', pluginId: 'fld', position: { x: 0, y: 0 } },
+                { id: 'fld#1', pluginId: 'fld', position: { x: 0, y: 200 } },
+            ],
+            kernel: { motionInputs: [] },
+        }));
+        const motion = built.nodes.find((node) => node.id === MOTION_NODE);
+
+        expect(built.edges.filter((edge) => edge.kind === 'motion')).toEqual([]);
+        expect(motion?.inputs).toEqual([]);
+        expect(motion?.availableInputs?.map((port) => port.name))
+            .toEqual(['fld#0.flow', 'fld#1.flow']);
+    });
+
     test('a scene with no field says so rather than showing an empty stage', () => {
         const motionNode = view(twoBranches).nodes.find((node) => node.id === MOTION_NODE);
 
@@ -253,16 +283,17 @@ describe('the implicit buses', () => {
 });
 
 describe('the kernel tail', () => {
-    test('the five stages are present and chained in the order they run', () => {
+    test('the six stages are present and chained in the order they run', () => {
         const built = view(scene());
         const ids = built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id);
 
         expect(ids).toEqual([
-            COMPOSITE_NODE, MOTION_NODE, ACCUMULATE_NODE, GRADE_NODE, CANVAS_NODE,
+            PALETTE_NODE, COMPOSITE_NODE, MOTION_NODE, ACCUMULATE_NODE, GRADE_NODE, CANVAS_NODE,
         ]);
 
         const chain = built.edges.filter((edge) => edge.kind === 'kernel');
         expect(chain.map((edge) => `${edge.from.node}->${edge.to.node}`)).toEqual([
+            `${PALETTE_NODE}->${COMPOSITE_NODE}`,
             `${COMPOSITE_NODE}->${ACCUMULATE_NODE}`,
             `${MOTION_NODE}->${ACCUMULATE_NODE}`,
             `${ACCUMULATE_NODE}->${GRADE_NODE}`,
@@ -300,12 +331,25 @@ describe('the kernel tail', () => {
         expect(isPinned(rows[1])).toBe(false);
     });
 
-    test('the grade shows what the document states about it', () => {
+    test('the grade shows all effective values and bindings, including kernel defaults', () => {
         const grade = view(scene({
             kernel: { grade: { parameters: { exposure: 1.5 } } },
         })).nodes.find((node) => node.id === GRADE_NODE);
 
-        expect(grade?.parameters).toEqual([{ name: 'exposure', value: 1.5 }]);
+        expect(grade?.parameters.map((row) => row.name)).toEqual([
+            'contrast', 'exposure', 'hueDrift', 'saturation', 'tint',
+        ]);
+        expect(grade?.parameters.find((row) => row.name === 'exposure')?.value).toBe(1.5);
+        expect(grade?.parameters.every((row) => row.binding)).toBe(true);
+    });
+
+    test('the palette is visible and can state an explicit scheme and strength', () => {
+        const palette = view(scene({
+            kernel: { palette: { id: 'monochrome-noir', strength: 0 } },
+        })).nodes.find((node) => node.id === PALETTE_NODE);
+
+        expect(palette?.subtitle).toBe('monochrome-noir');
+        expect(palette?.parameters).toEqual([{ name: 'strength', value: 0 }]);
     });
 
     test('the composite counts its stack, and the canvas ends the chain', () => {
@@ -315,14 +359,24 @@ describe('the kernel tail', () => {
         expect(built.nodes.find((node) => node.id === CANVAS_NODE)?.outputs).toEqual([]);
     });
 
-    test('a document that does not compile draws its nodes and skips the tail', () => {
-        // There is no graph, so there is no layer stack and no motion bus to report — but the nodes
-        // and the reason are exactly what has to stay on screen.
+    test('a document that does not compile keeps the fixed kernel tail visible', () => {
+        // There is no graph, so the layer stack and motion bus cannot be derived. The fixed stages
+        // still exist, though: making them disappear makes a one-node removal look like it deleted
+        // Composite, Accumulate, Grade and Canvas as collateral.
         const built = view(scene({
             nodes: [{ id: 'mix#0', pluginId: 'mix', position: { x: 0, y: 0 } }],
         }));
 
-        expect(built.nodes.filter((node) => node.kind === 'kernel')).toEqual([]);
+        expect(built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id)).toEqual([
+            PALETTE_NODE,
+            COMPOSITE_NODE,
+            MOTION_NODE,
+            ACCUMULATE_NODE,
+            GRADE_NODE,
+            CANVAS_NODE,
+        ]);
+        expect(built.nodes.find((node) => node.id === COMPOSITE_NODE)?.subtitle)
+            .toBe('layers unresolved');
         expect(built.nodes.find((node) => node.id === 'mix#0')?.problems.length).toBeGreaterThan(0);
     });
 });

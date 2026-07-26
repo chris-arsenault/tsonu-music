@@ -25,6 +25,7 @@ import type { VisualPluginDefinition } from './plugin';
 
 /** Resolves a plugin id to its definition. Operations need port shapes, not the whole registry. */
 export type PluginLookup = (pluginId: string) => VisualPluginDefinition | undefined;
+export type KernelInputStage = 'composite' | 'motion';
 
 /**
  * A free id for another instance of this definition.
@@ -130,7 +131,42 @@ export function connect(
         ...(feedback ? { feedback: true } : {}),
     };
 
-    return { ...scene, edges: [...kept, edge] };
+    return {
+        ...scene,
+        edges: [...kept, edge],
+        // A single input cannot simultaneously read a graph edge and a host asset.
+        assetBindings: displaces
+            ? scene.assetBindings.filter((binding) =>
+                binding.node !== to.node || binding.port !== to.port)
+            : scene.assetBindings,
+    };
+}
+
+/** Binds a host asset to an input, displacing another producer on a single-valued port. */
+export function setAssetBinding(
+    scene: AuthoredScene,
+    to: { node: string; port: string },
+    resource: string,
+    lookup: PluginLookup,
+): AuthoredScene {
+    const target = scene.nodes.find((node) => node.id === to.node);
+    const port = target && lookup(target.pluginId)?.inputs.find((entry) => entry.name === to.port);
+    const displaces = !port?.multiple;
+    const assetBindings = scene.assetBindings.filter((binding) => {
+        if (binding.node !== to.node || binding.port !== to.port) {
+            return true;
+        }
+
+        return !displaces && binding.resource !== resource;
+    });
+
+    return {
+        ...scene,
+        edges: displaces
+            ? scene.edges.filter((edge) => edge.to.node !== to.node || edge.to.port !== to.port)
+            : scene.edges,
+        assetBindings: [...assetBindings, { node: to.node, port: to.port, resource }],
+    };
 }
 
 export function disconnect(scene: AuthoredScene, edgeId: string): AuthoredScene {
@@ -279,6 +315,36 @@ function updateKernel(
     return { ...scene, kernel: change(scene.kernel ?? {}) };
 }
 
+/**
+ * Pins one kernel stage to explicit inputs, or returns it to all compatible graph outputs.
+ *
+ * An empty list is intentionally different from undefined: it disconnects the stage.
+ */
+export function setKernelInputs(
+    scene: AuthoredScene,
+    stage: KernelInputStage,
+    inputs: readonly string[] | undefined,
+): AuthoredScene {
+    return updateKernel(scene, (kernel) => {
+        const unique = inputs === undefined ? undefined : [...new Set(inputs)];
+        const next = { ...kernel };
+
+        if (stage === 'composite') {
+            if (unique === undefined) {
+                delete next.compositeInputs;
+            } else {
+                next.compositeInputs = unique;
+            }
+        } else if (unique === undefined) {
+            delete next.motionInputs;
+        } else {
+            next.motionInputs = unique;
+        }
+
+        return next;
+    });
+}
+
 /** Sets one of the grade's own parameters, which resolve exactly as a plugin's do. */
 export function setGradeParameter(
     scene: AuthoredScene,
@@ -320,6 +386,42 @@ export function removeGradeBinding(scene: AuthoredScene, parameter: string): Aut
                 .filter((entry) => entry.parameter !== parameter),
         },
     }));
+}
+
+/** Selects the scene palette explicitly, or releases it back to the theme and entropy. */
+export function setPaletteId(scene: AuthoredScene, id: string | undefined): AuthoredScene {
+    return updateKernel(scene, (kernel) => {
+        const palette = { ...(kernel.palette ?? {}) };
+
+        if (id === undefined) {
+            delete palette.id;
+        } else {
+            palette.id = id;
+        }
+
+        return {
+            ...kernel,
+            palette: Object.keys(palette).length > 0 ? palette : undefined,
+        };
+    });
+}
+
+/** Pins how strongly Composite applies the selected scheme, or returns it to the theme. */
+export function setPaletteStrength(scene: AuthoredScene, strength: number | undefined): AuthoredScene {
+    return updateKernel(scene, (kernel) => {
+        const palette = { ...(kernel.palette ?? {}) };
+
+        if (strength === undefined) {
+            delete palette.strength;
+        } else {
+            palette.strength = strength;
+        }
+
+        return {
+            ...kernel,
+            palette: Object.keys(palette).length > 0 ? palette : undefined,
+        };
+    });
 }
 
 /**
@@ -412,8 +514,8 @@ export function commit(history: DocumentHistory, next: AuthoredScene): DocumentH
 /**
  * Records a continuous edit onto the previous one rather than beside it.
  *
- * Dragging a node or a slider produces a document per frame. Each recorded separately, undo walks
- * back through the drag one frame at a time instead of undoing the drag.
+ * Dragging a slider produces a document per frame. Each recorded separately, undo walks back through
+ * the gesture one frame at a time instead of undoing the gesture.
  */
 export function coalesce(history: DocumentHistory, next: AuthoredScene): DocumentHistory {
     if (next === history.present) {

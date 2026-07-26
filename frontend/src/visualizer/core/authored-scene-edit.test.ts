@@ -17,11 +17,15 @@ import {
     removeGradeBinding,
     removeNode,
     setBinding,
+    setAssetBinding,
     setFeedback,
     setGradeBinding,
     setGradeParameter,
+    setKernelInputs,
     setLayerOverride,
     setMuted,
+    setPaletteId,
+    setPaletteStrength,
     setParameter,
     setPersistencePin,
     setPosition,
@@ -203,6 +207,31 @@ describe('connections', () => {
         expect(scene.edges).toHaveLength(1);
     });
 
+    test('an asset binding displaces an edge on a single input', () => {
+        const connected = connect(twoNodes(), from, to, lookup);
+        const scene = setAssetBinding(connected, to, 'asset:mask:ring', lookup);
+
+        expect(scene.edges).toEqual([]);
+        expect(scene.assetBindings).toEqual([
+            { node: 'one#0', port: 'source', resource: 'asset:mask:ring' },
+        ]);
+    });
+
+    test('a graph edge displaces an asset on a single input', () => {
+        const bound = setAssetBinding(twoNodes(), to, 'asset:mask:ring', lookup);
+        const scene = connect(bound, from, to, lookup);
+
+        expect(scene.assetBindings).toEqual([]);
+        expect(scene.edges).toHaveLength(1);
+    });
+
+    test('binding the same asset twice does not duplicate it', () => {
+        let scene = setAssetBinding(twoNodes(), to, 'asset:mask:ring', lookup);
+        scene = setAssetBinding(scene, to, 'asset:mask:ring', lookup);
+
+        expect(scene.assetBindings).toHaveLength(1);
+    });
+
     test('disconnecting removes exactly the edge named', () => {
         const scene = connect(twoNodes(), from, to, lookup);
 
@@ -321,6 +350,18 @@ describe('the kernel tail', () => {
         expect(bindings.length).toBeGreaterThan(1);
     });
 
+    test('palette selection and strength can be pinned and released independently', () => {
+        let scene = setPaletteId(base, 'monochrome-noir');
+        scene = setPaletteStrength(scene, 0);
+
+        expect(scene.kernel?.palette).toEqual({ id: 'monochrome-noir', strength: 0 });
+
+        scene = setPaletteId(scene, undefined);
+        expect(scene.kernel?.palette).toEqual({ strength: 0 });
+        scene = setPaletteStrength(scene, undefined);
+        expect(scene.kernel?.palette).toBeUndefined();
+    });
+
     test('removing a grade binding leaves the rest of the kernel default set', () => {
         const scene = removeGradeBinding(base, 'exposure');
 
@@ -350,6 +391,18 @@ describe('the kernel tail', () => {
     test('a zero pin is a pin', () => {
         expect(setPersistencePin(base, 'motionScale', 0).kernel?.persistence)
             .toEqual({ motionScale: 0 });
+    });
+
+    test('kernel input membership distinguishes explicit empty from automatic', () => {
+        let scene = setKernelInputs(base, 'composite', ['src#1', 'src#1', 'src#0']);
+        scene = setKernelInputs(scene, 'motion', []);
+
+        expect(scene.kernel?.compositeInputs).toEqual(['src#1', 'src#0']);
+        expect(scene.kernel?.motionInputs).toEqual([]);
+
+        scene = setKernelInputs(scene, 'composite', undefined);
+        expect(scene.kernel?.compositeInputs).toBeUndefined();
+        expect(scene.kernel?.motionInputs).toEqual([]);
     });
 
     test('a layer override is set and cleared by the layer it names', () => {
@@ -402,8 +455,8 @@ describe('history', () => {
     });
 
     test('a coalesced edit replaces the last rather than stacking on it', () => {
-        // A drag emits a document per frame. Recorded separately, undo walks back through the drag
-        // one frame at a time instead of undoing the drag.
+        // A continuous slider emits a document per frame. Recorded separately, undo walks back
+        // through the gesture one frame at a time instead of undoing the gesture.
         const dragged = setPosition(addNode(base, 'src', at), 'src#0', { x: 10, y: 0 });
         const further = setPosition(dragged, 'src#0', { x: 20, y: 0 });
 
@@ -414,6 +467,16 @@ describe('history', () => {
         expect(history.past.length).toBe(depth);
         expect(history.present).toBe(further);
         expect(undo(history).present).toBe(base);
+    });
+
+    test('a settled node move is one undoable document change', () => {
+        const placed = addNode(base, 'src', at);
+        const moved = setPosition(placed, 'src#0', { x: 20, y: 30 });
+        const history = commit(createHistory(placed), moved);
+
+        expect(history.past).toEqual([placed]);
+        expect(history.present.nodes[0].position).toEqual({ x: 20, y: 30 });
+        expect(undo(history).present.nodes[0].position).toEqual(at);
     });
 
     test('history is bounded', () => {

@@ -23,6 +23,10 @@ export const PORT_COLOURS: Readonly<Record<string, string>> = {
     'depth-texture': '#6f7fa8',
     'motion-field': '#59b58a',
     'particle-buffer': '#d0705a',
+    'particle-emitter': '#d98b55',
+    'particle-force': '#d06078',
+    'particle-collider': '#72b98c',
+    'particle-state': '#d0705a',
     geometry: '#c98f5a',
     palette: '#c45f9b',
     'scalar-feature': '#5f8fc4',
@@ -56,6 +60,7 @@ const EDITOR_CSS = `
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 0.72rem;
     overflow: hidden;
+    position: relative;
 }
 
 .viz-editor__grip {
@@ -127,6 +132,51 @@ const EDITOR_CSS = `
 
 .viz-editor__split { display: flex; height: 100%; min-height: 0; }
 .viz-editor__canvas { position: relative; flex: 1 1 auto; min-width: 0; }
+
+/* Manual graph copy ------------------------------------------------------ */
+
+.viz-copy-modal__backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    background: rgba(5, 5, 8, 0.78);
+}
+
+.viz-copy-modal {
+    width: min(760px, 100%);
+    height: min(520px, 100%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    padding: 0.7rem;
+    border: 1px solid #454552;
+    border-radius: 0.35rem;
+    background: #141419;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.65);
+}
+
+.viz-copy-modal__head { display: flex; align-items: center; gap: 0.5rem; }
+.viz-copy-modal__head strong { color: #f0f0f4; }
+.viz-copy-modal__head .viz-editor__action { margin-left: auto; }
+.viz-copy-modal p { margin: 0; color: #9a9aa4; }
+
+.viz-copy-modal__text {
+    flex: 1 1 auto;
+    min-height: 0;
+    resize: none;
+    padding: 0.5rem;
+    border: 1px solid #32323b;
+    border-radius: 0.25rem;
+    background: #0b0b0e;
+    color: #d8d8de;
+    font: inherit;
+    line-height: 1.4;
+    white-space: pre;
+}
 
 /* Inspector -------------------------------------------------------------- */
 
@@ -323,8 +373,6 @@ const EDITOR_CSS = `
 }
 
 .viz-node__port.is-required.is-unconnected { color: #e0806a; }
-.viz-node__dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
-.viz-node__dot.is-hollow { background: transparent !important; box-shadow: inset 0 0 0 1.5px currentColor; }
 
 .viz-node__params {
     border-top: 1px solid #26262c;

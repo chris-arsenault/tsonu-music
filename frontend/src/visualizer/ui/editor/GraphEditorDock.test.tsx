@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test, vi } from 'vitest';
 import GraphEditorDock from './GraphEditorDock';
+import { emptyAuthoredScene } from '../../core/authored-scene';
 import { createDiagnosticsControls } from '../../core/diagnostics';
 import { silentFeatureBus } from '../../core/features';
 import type { KernelReadout } from '../../host/kernel-loop';
@@ -60,10 +61,34 @@ describe('the dock', () => {
         expect(html).toContain('accept="application/json,.json"');
     });
 
+    test('the particle physics sanity scene is available before capture', () => {
+        const html = renderToStaticMarkup(<GraphEditorDock readout={readout()} {...props} />);
+
+        expect(html).toContain('>Particle sanity</button>');
+        expect(html).toContain('unbound particle physics sanity scene');
+    });
+
+    test('an authored scene offers a visible full-catalog node action', () => {
+        const html = renderToStaticMarkup(
+            <GraphEditorDock
+                readout={readout({
+                    scene: {
+                        authored: emptyAuthoredScene('catalog-search'),
+                    } as NonNullable<KernelReadout['scene']>,
+                })}
+                {...props}
+            />,
+        );
+
+        expect(html).toContain('>+ Add node</button>');
+        expect(html).toContain('Add a disconnected node from the full plugin catalog');
+    });
+
     test('export and fixture are offered only once there is a document to export', () => {
         const html = renderToStaticMarkup(<GraphEditorDock readout={readout()} {...props} />);
 
         expect(html).not.toContain('>Export</button>');
+        expect(html).not.toContain('>Copy graph</button>');
         expect(html).not.toContain('>Copy fixture</button>');
     });
 

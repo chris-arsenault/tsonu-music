@@ -33,15 +33,18 @@ void main() {
         float n4 = fbm((p - vec2(e, 0.0)) * uScale + uTime * 0.1);
         field = vec2(n1 - n2, n4 - n3) / (2.0 * e);
     } else if (uMode < 1.5) {                // radial attraction
-        field = -normalize(p + 1e-5) * (1.0 - length(p) * 0.5);
+        field = -normalize(p + 1e-5) * (1.0 - length(p) * uScale * 0.25);
     } else if (uMode < 2.5) {                // radial repulsion
-        field = normalize(p + 1e-5) * (1.0 - length(p) * 0.5);
+        field = normalize(p + 1e-5) * (1.0 - length(p) * uScale * 0.25);
     } else if (uMode < 3.5) {                // spiral
-        field = rotate(normalize(p + 1e-5), 1.9) * (1.0 - length(p) * 0.4);
+        field = rotate(normalize(p + 1e-5), 1.9) * (1.0 - length(p) * uScale * 0.2);
     } else if (uMode < 4.5) {                // saddle
-        field = vec2(p.x, -p.y);
+        field = vec2(p.x, -p.y) * uScale * 0.5;
     } else if (uMode < 5.5) {                // sinusoidal lattice
-        field = vec2(sin(p.y * 6.0 + uTime), sin(p.x * 6.0 - uTime));
+        field = vec2(
+            sin(p.y * uScale * 3.0 + uTime),
+            sin(p.x * uScale * 3.0 - uTime)
+        );
     } else if (uMode < 6.5) {                // turbulence
         field = vec2(
             fbm(p * uScale * 2.0 + uPhase) - 0.5,

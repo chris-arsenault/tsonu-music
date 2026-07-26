@@ -11,10 +11,19 @@
 
 import type { ChangeEvent } from 'react';
 import { BINDABLE_FEATURES, isEventFeature } from '../../core/audio-mapping';
+import type { KernelInputStage } from '../../core/authored-scene-edit';
 import type { BindingCurve, BindingMode, ParameterBinding } from '../../core/bindings';
-import type { EditorNode, EditorParameterRow } from '../../core/editor-view';
-import { isPinned } from '../../core/editor-view';
+import {
+    COMPOSITE_NODE,
+    GRADE_NODE,
+    isPinned,
+    MOTION_NODE,
+    PALETTE_NODE,
+    type EditorNode,
+    type EditorParameterRow,
+} from '../../core/editor-view';
 import type { BlendMode } from '../../core/passes';
+import { CURATED_PALETTES } from '../../core/palettes';
 import { formatValue } from './GraphNodeBody';
 
 const CURVES: readonly BindingCurve[] = ['linear', 'smooth', 'square', 'sqrt', 'exponential'];
@@ -35,6 +44,12 @@ export interface InspectorProps {
     onClone: () => void;
     onRemove: () => void;
     onLayerOverride: (layerId: string, blendMode: BlendMode | undefined, opacity: number | undefined) => void;
+    onKernelInputs: (
+        stage: KernelInputStage,
+        inputs: readonly string[] | undefined,
+    ) => void;
+    onPaletteId: (id: string | undefined) => void;
+    onPaletteStrength: (strength: number | undefined) => void;
     /** The layer overrides in force, so the composite stage can show what it is being told. */
     layerOverrides?: Readonly<Record<string, { blendMode?: BlendMode; opacity?: number }>>;
 }
@@ -69,9 +84,9 @@ export default function Inspector(props: InspectorProps) {
                 </div>
             ) : null}
 
-            {node.parameters.map((row) => (
+            {node.id !== PALETTE_NODE ? node.parameters.map((row) => (
                 <ParameterControls key={row.name} row={row} {...props} />
-            ))}
+            )) : null}
 
             {!editable ? (
                 <p className="viz-inspector__hint">
@@ -132,18 +147,99 @@ function PluginControls({ node, editable, onMute, onSeed, onClone, onRemove }: I
 }
 
 /**
- * The composite stage's per-layer controls.
+ * Composite and Motion sum input membership, plus Composite's per-layer controls.
  *
  * Blend mode and opacity are chosen *for* a layer from the plugin's declared character, so this is
  * where a branch that vanished into an `add` over a bright base can be made to composite instead.
  */
-function KernelControls({ node, editable, layerOverrides, onLayerOverride }: InspectorProps) {
-    if (node.id !== 'kernel:composite') {
+function KernelControls({
+    node,
+    editable,
+    layerOverrides,
+    onLayerOverride,
+    onKernelInputs,
+    onPaletteId,
+    onPaletteStrength,
+}: InspectorProps) {
+    if (node.id === PALETTE_NODE) {
+        const strength = node.parameters.find((row) => row.name === 'strength');
+
+        return (
+            <div className="viz-inspector__group">
+                <div className="viz-inspector__row">
+                    <span className="viz-inspector__label">scheme</span>
+                    <select
+                        aria-label="Palette scheme"
+                        value={node.subtitle === 'theme / entropy' ? '' : node.subtitle}
+                        disabled={!editable}
+                        onChange={(event) => onPaletteId(event.currentTarget.value || undefined)}
+                    >
+                        <option value="">from theme / entropy</option>
+                        {CURATED_PALETTES.map((palette) => (
+                            <option key={palette.id} value={palette.id}>{palette.name}</option>
+                        ))}
+                    </select>
+                </div>
+                <div className="viz-inspector__row">
+                    <span className="viz-inspector__label">strength</span>
+                    <NumberInput
+                        value={strength && isPinned(strength) ? strength.value : undefined}
+                        placeholder="from theme"
+                        disabled={!editable}
+                        onChange={onPaletteStrength}
+                    />
+                </div>
+            </div>
+        );
+    }
+
+    const stage: KernelInputStage | undefined = node.id === COMPOSITE_NODE
+        ? 'composite'
+        : node.id === MOTION_NODE ? 'motion' : undefined;
+
+    if (!stage) {
         return null;
     }
 
+    const available = node.availableInputs ?? node.inputs;
+    const selected = available.filter((port) => port.connected).map((port) => port.name);
+    const excluded = available.filter((port) => !selected.includes(port.name));
+
     return (
         <div className="viz-inspector__group">
+            <div className="viz-inspector__row">
+                <select
+                    aria-label={`Add ${stage} input`}
+                    defaultValue=""
+                    disabled={!editable || excluded.length === 0}
+                    onChange={(event) => {
+                        const input = event.currentTarget.value;
+                        if (input) {
+                            onKernelInputs(stage, [...selected, input]);
+                            event.currentTarget.value = '';
+                        }
+                    }}
+                >
+                    <option value="">Add input…</option>
+                    {excluded.map((port) => (
+                        <option key={port.name} value={port.name}>{port.name}</option>
+                    ))}
+                </select>
+                <button
+                    type="button"
+                    className="viz-editor__action"
+                    disabled={!editable}
+                    onClick={() => onKernelInputs(stage, undefined)}
+                    title="Use every compatible output, including ones added later"
+                >
+                    Use all
+                </button>
+            </div>
+
+            {node.inputs.length === 0 ? (
+                <span className="viz-inspector__hint">no inputs selected</span>
+            ) : null}
+
             {node.inputs.map((port) => {
                 const override = layerOverrides?.[port.name] ?? {};
 
@@ -151,26 +247,42 @@ function KernelControls({ node, editable, layerOverrides, onLayerOverride }: Ins
                     <div className="viz-inspector__stack" key={port.name}>
                         <span className="viz-inspector__label" title={port.name}>{port.name}</span>
                         <div className="viz-inspector__row">
-                            <select
-                                value={override.blendMode ?? ''}
+                            {stage === 'composite' ? (
+                                <>
+                                    <select
+                                        value={override.blendMode ?? ''}
+                                        disabled={!editable}
+                                        onChange={(event) => onLayerOverride(
+                                            port.name,
+                                            (event.currentTarget.value || undefined) as BlendMode | undefined,
+                                            override.opacity,
+                                        )}
+                                    >
+                                        <option value="">from character</option>
+                                        {BLEND_MODES.map((mode) => (
+                                            <option key={mode} value={mode}>{mode}</option>
+                                        ))}
+                                    </select>
+                                    <NumberInput
+                                        value={override.opacity}
+                                        placeholder="opacity"
+                                        disabled={!editable}
+                                        onChange={(value) =>
+                                            onLayerOverride(port.name, override.blendMode, value)}
+                                    />
+                                </>
+                            ) : null}
+                            <button
+                                type="button"
+                                className="viz-editor__action"
                                 disabled={!editable}
-                                onChange={(event) => onLayerOverride(
-                                    port.name,
-                                    (event.currentTarget.value || undefined) as BlendMode | undefined,
-                                    override.opacity,
+                                onClick={() => onKernelInputs(
+                                    stage,
+                                    selected.filter((name) => name !== port.name),
                                 )}
                             >
-                                <option value="">from character</option>
-                                {BLEND_MODES.map((mode) => (
-                                    <option key={mode} value={mode}>{mode}</option>
-                                ))}
-                            </select>
-                            <NumberInput
-                                value={override.opacity}
-                                placeholder="opacity"
-                                disabled={!editable}
-                                onChange={(value) => onLayerOverride(port.name, override.blendMode, value)}
-                            />
+                                Remove
+                            </button>
                         </div>
                     </div>
                 );
@@ -210,17 +322,19 @@ function ParameterControls({
                 />
             </div>
 
-            {node.kind === 'plugin' ? (
+            {node.kind === 'plugin' || node.id === GRADE_NODE ? (
                 <div className="viz-inspector__actions">
-                    <button
-                        type="button"
-                        className="viz-editor__action"
-                        disabled={!editable}
-                        onClick={() => onPromote(row.name, true)}
-                        title="Show this parameter as a socket on the node"
-                    >
-                        To input
-                    </button>
+                    {node.kind === 'plugin' ? (
+                        <button
+                            type="button"
+                            className="viz-editor__action"
+                            disabled={!editable}
+                            onClick={() => onPromote(row.name, true)}
+                            title="Show this parameter as a socket on the node"
+                        >
+                            To input
+                        </button>
+                    ) : null}
                     <button
                         type="button"
                         className="viz-editor__action"

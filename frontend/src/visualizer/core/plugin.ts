@@ -31,11 +31,23 @@ export type PortType =
     | 'depth-texture'
     | 'motion-field'
     | 'particle-buffer'
+    | 'particle-emitter'
+    | 'particle-force'
+    | 'particle-collider'
+    | 'particle-state'
     | 'geometry'
     | 'palette'
     | 'scalar-feature'
     | 'event-feature'
     | 'event-stream';
+
+/** CPU values passed synchronously through the graph instead of allocated as render targets. */
+export function isValuePortType(type: PortType): boolean {
+    return type === 'particle-emitter'
+        || type === 'particle-force'
+        || type === 'particle-collider'
+        || type === 'particle-state';
+}
 
 export interface PluginPort {
     name: string;
@@ -126,6 +138,10 @@ export interface FrameContext {
     parameters: Readonly<Record<string, number>>;
     /** Uploads geometry for a `GeometryPass` to draw. */
     uploadGeometry(upload: GeometryUpload): void;
+    /** Publishes a synchronous CPU value for a semantic graph resource. */
+    publishValue?(resource: ResourceId, value: unknown): void;
+    /** Reads a CPU value published by an upstream node earlier in graph order. */
+    readValue?<T>(resource: ResourceId | undefined): T | undefined;
     /** Particle and agent count multiplier from the quality ladder. */
     particleScale?: number;
     /** Frames of temporal history the quality ladder permits a plugin to retain. */

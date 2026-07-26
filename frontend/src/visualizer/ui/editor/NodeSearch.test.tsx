@@ -1,19 +1,20 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test, vi } from 'vitest';
-import NodeSearch from './NodeSearch';
+import NodeSearch, { dismissNodeSearch } from './NodeSearch';
 import type { PluginCategory, PluginPort, VisualPluginDefinition } from '../../core/plugin';
 
 function plugin(
     id: string,
     category: PluginCategory,
     inputs: PluginPort[] = [],
+    outputs: PluginPort[] = [{ name: 'color', type: 'color-texture', required: false }],
 ): VisualPluginDefinition {
     return {
         id,
         version: 1,
         category,
         inputs,
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
+        outputs,
         capabilities: [],
         cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
         character: {
@@ -40,11 +41,35 @@ const CATALOG = [
     plugin('ParticleSimulator', 'simulator', [
         { name: 'force', type: 'vector-field', required: true },
     ]),
+    plugin('ParticleForceField:vortex', 'field', [], [
+        { name: 'force', type: 'vector-field', required: false },
+    ]),
 ];
 
 const handlers = { onPick: vi.fn(), onClose: vi.fn() };
+const MASKS = [{
+    resource: 'asset:mask:tree-of-life-full',
+    name: 'mask:tree-of-life-full',
+    type: 'mask-texture' as const,
+}];
 
 describe('node search', () => {
+    test('Escape closes the search without choosing a node', () => {
+        const event = {
+            key: 'Escape',
+            preventDefault: vi.fn(),
+            stopImmediatePropagation: vi.fn(),
+        };
+        const onClose = vi.fn();
+        const onPick = vi.fn();
+
+        expect(dismissNodeSearch(event, onClose)).toBe(true);
+        expect(onClose).toHaveBeenCalledOnce();
+        expect(onPick).not.toHaveBeenCalled();
+        expect(event.preventDefault).toHaveBeenCalledOnce();
+        expect(event.stopImmediatePropagation).toHaveBeenCalledOnce();
+    });
+
     test('lists the catalog when nothing constrains it', () => {
         const html = renderToStaticMarkup(<NodeSearch catalog={CATALOG} {...handlers} />);
 
@@ -58,7 +83,11 @@ describe('node search', () => {
         // A hundred and fifty plugins is unusable without this, and offering one that cannot take the
         // link is offering a connection that will not be made.
         const html = renderToStaticMarkup(
-            <NodeSearch catalog={CATALOG} acceptingType="color-texture" {...handlers} />,
+            <NodeSearch
+                catalog={CATALOG}
+                portFilter={{ kind: 'input', type: 'color-texture' }}
+                {...handlers}
+            />,
         );
 
         expect(html).toContain('ColorTransform:solarize');
@@ -69,7 +98,11 @@ describe('node search', () => {
 
     test('it names the port a result would connect to', () => {
         const html = renderToStaticMarkup(
-            <NodeSearch catalog={CATALOG} acceptingType="color-texture" {...handlers} />,
+            <NodeSearch
+                catalog={CATALOG}
+                portFilter={{ kind: 'input', type: 'color-texture' }}
+                {...handlers}
+            />,
         );
 
         expect(html).toContain('>source</span>');
@@ -77,7 +110,11 @@ describe('node search', () => {
 
     test('a type nothing accepts says so rather than showing an empty box', () => {
         const html = renderToStaticMarkup(
-            <NodeSearch catalog={CATALOG} acceptingType="palette" {...handlers} />,
+            <NodeSearch
+                catalog={CATALOG}
+                portFilter={{ kind: 'input', type: 'palette' }}
+                {...handlers}
+            />,
         );
 
         expect(html).toContain('nothing takes a palette');
@@ -89,9 +126,50 @@ describe('node search', () => {
             { name: 'mask', type: 'mask-texture', required: true },
         ]);
         const html = renderToStaticMarkup(
-            <NodeSearch catalog={[masked]} acceptingType="distance-field" {...handlers} />,
+            <NodeSearch
+                catalog={[masked]}
+                portFilter={{ kind: 'input', type: 'distance-field' }}
+                {...handlers}
+            />,
         );
 
         expect(html).toContain('MaskRouter');
+    });
+
+    test('dragging from an input offers plugins with compatible outputs', () => {
+        const html = renderToStaticMarkup(
+            <NodeSearch
+                catalog={CATALOG}
+                portFilter={{ kind: 'output', type: 'vector-field' }}
+                {...handlers}
+            />,
+        );
+
+        expect(html).toContain('ParticleForceField:vortex');
+        expect(html).not.toContain('ParticleSimulator');
+        expect(html).toContain('plugins producing vector-field');
+        expect(html).toContain('>force</span>');
+    });
+
+    test('dragging from a mask input offers loaded packaged masks', () => {
+        const html = renderToStaticMarkup(
+            <NodeSearch
+                catalog={CATALOG}
+                assets={MASKS}
+                portFilter={{ kind: 'output', type: 'mask-texture' }}
+                {...handlers}
+            />,
+        );
+
+        expect(html).toContain('mask:tree-of-life-full');
+        expect(html).toContain('>asset</span>');
+    });
+
+    test('assets are not offered as disconnected plugin nodes', () => {
+        const html = renderToStaticMarkup(
+            <NodeSearch catalog={CATALOG} assets={MASKS} {...handlers} />,
+        );
+
+        expect(html).not.toContain('mask:tree-of-life-full');
     });
 });

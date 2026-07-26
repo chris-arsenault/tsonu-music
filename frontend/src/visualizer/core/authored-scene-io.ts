@@ -86,9 +86,15 @@ function canonicalScene(scene: AuthoredScene): Record<string, unknown> {
 
 function canonicalKernel(kernel: AuthoredKernel): Record<string, unknown> {
     return omitUndefined({
+        compositeInputs: kernel.compositeInputs !== undefined ? [...kernel.compositeInputs] : undefined,
+        motionInputs: kernel.motionInputs !== undefined ? [...kernel.motionInputs] : undefined,
         grade: kernel.grade && omitUndefined({
             parameters: kernel.grade.parameters && sortedNumbers(kernel.grade.parameters),
             bindings: kernel.grade.bindings?.map(canonicalBinding),
+        }),
+        palette: kernel.palette && omitUndefined({
+            id: kernel.palette.id,
+            strength: kernel.palette.strength,
         }),
         persistence: kernel.persistence && omitUndefined({
             survivalPerSecond: kernel.persistence.survivalPerSecond,
@@ -448,6 +454,14 @@ function validateBinding(
 function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[]): AuthoredKernel {
     const kernel: AuthoredKernel = {};
 
+    if (Array.isArray(raw.compositeInputs)) {
+        kernel.compositeInputs = uniqueStrings(raw.compositeInputs);
+    }
+
+    if (Array.isArray(raw.motionInputs)) {
+        kernel.motionInputs = uniqueStrings(raw.motionInputs);
+    }
+
     if (isRecord(raw.grade)) {
         const parameters = isRecord(raw.grade.parameters)
             ? finiteNumbers(raw.grade.parameters)
@@ -459,6 +473,15 @@ function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[
             : undefined;
 
         kernel.grade = { ...(parameters ? { parameters } : {}), ...(bindings ? { bindings } : {}) };
+    }
+
+    if (isRecord(raw.palette)) {
+        const id = stringAt(raw.palette, 'id');
+        const strength = numberAt(raw.palette, 'strength');
+        kernel.palette = {
+            ...(id ? { id } : {}),
+            ...(strength !== undefined ? { strength } : {}),
+        };
     }
 
     if (isRecord(raw.persistence)) {
@@ -490,6 +513,11 @@ function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[
     }
 
     return kernel;
+}
+
+function uniqueStrings(values: readonly unknown[]): string[] {
+    return [...new Set(values.filter((value): value is string =>
+        typeof value === 'string' && value.length > 0))];
 }
 
 /* -------------------------------------------------------------------------- */

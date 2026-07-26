@@ -45,11 +45,13 @@ import {
 } from './fields/procedural-fields';
 import {
     createParticleEmitter,
+    createParticleCollider,
     createParticleForceField,
     createParticleRenderer,
     createParticleSimulator,
     createParticleTrailInjector,
     EMITTER_MODES,
+    COLLIDER_MODES,
     FORCE_MODES,
     PARTICLE_RENDER_MODES,
 } from './simulators/particles';
@@ -143,6 +145,7 @@ export function simulatorDefinitions(): VisualPluginDefinition[] {
         createParticleSimulator(),
         ...EMITTER_MODES.map(createParticleEmitter),
         ...FORCE_MODES.map(createParticleForceField),
+        ...COLLIDER_MODES.map(createParticleCollider),
         ...PARTICLE_RENDER_MODES.map(createParticleRenderer),
         createParticleTrailInjector(),
         createReactionDiffusionSimulator(),

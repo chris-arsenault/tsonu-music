@@ -92,7 +92,10 @@ function full(): AuthoredScene {
         assetBindings: [{ node: 'src#0', port: 'mask', resource: 'asset:ring' }],
         present: { node: 'trn#0', port: 'color' },
         kernel: {
+            compositeInputs: ['trn#0'],
+            motionInputs: [],
             grade: { parameters: { exposure: 1.4 }, bindings: [{ ...binding, parameter: 'exposure' }] },
+            palette: { id: 'monochrome-noir', strength: 0 },
             persistence: { survivalPerSecond: 0.8 },
             layers: { 'trn#0': { blendMode: 'screen', opacity: 0.5 } },
         },

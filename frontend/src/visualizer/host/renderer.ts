@@ -23,8 +23,13 @@ import {
     type PersistenceSettings,
 } from '../core/persistence';
 import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from '../core/composite-grade';
-import { buildScenePalette, driftPalette, type ScenePalette } from '../core/palette';
-import type { PaletteCharacter } from '../core/palettes';
+import {
+    buildScenePalette,
+    driftPalette,
+    scenePaletteFrom,
+    type ScenePalette,
+} from '../core/palette';
+import { CURATED_PALETTES, type PaletteCharacter } from '../core/palettes';
 import { resolveParameters } from '../core/parameters';
 import { modulateParameters } from '../core/modulation';
 import {
@@ -47,7 +52,9 @@ import {
     resolveAuthoredScene,
     type AuthoredProblem,
     type AuthoredScene,
+    type ResolvedKernel,
 } from '../core/authored-scene';
+import { selectKernelInputs } from '../core/kernel-inputs';
 import { captureScene } from '../core/scene-capture';
 import { applyLayerOverrides, type LayerOverride } from '../core/layers';
 import { applyPersistenceOverrides, type PersistenceOverrides } from '../core/persistence';
@@ -264,6 +271,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * new colour scheme, and these are the values grading it.
      */
     let gradeParameters: Record<string, number> = { ...COMPOSITE_PARAMETERS };
+    /** Authored choice for the otherwise theme/entropy-derived scheme. */
+    let paletteOverride: ResolvedKernel['palette'];
     let basePalette: ScenePalette = drawPalette();
 
     /** The document in control of the graph, if any. Undefined while the scheduler owns the scene. */
@@ -274,9 +283,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let gradeBindings: readonly ParameterBinding[] = COMPOSITE_BINDINGS;
     let persistenceOverrides: PersistenceOverrides | undefined;
     let layerOverrides: Record<string, LayerOverride> | undefined;
+    let motionInputs: readonly string[] | undefined;
 
     function colourStrength(theme: typeof scene.theme): number {
-        return theme.colorPolicy?.strength ?? 0.75;
+        return paletteOverride?.strength ?? theme.colorPolicy?.strength ?? 0.75;
     }
 
     /**
@@ -300,6 +310,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     }
 
     function drawPalette(): ScenePalette {
+        const selected = paletteOverride?.id
+            ? CURATED_PALETTES.find((palette) => palette.id === paletteOverride?.id)
+            : undefined;
+
+        if (selected) {
+            return scenePaletteFrom(selected, colourStrength(scene.theme), 4);
+        }
+
         return buildScenePalette(
             scene.entropy,
             colourStrength(scene.theme),
@@ -486,6 +504,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         result: ReturnType<typeof buildFromEntropy>,
         preserveInstances = true,
         seeds: Readonly<Record<string, number>> = {},
+        kernelInputs?: Pick<ResolvedKernel, 'compositeInputs' | 'motionInputs'>,
     ): boolean => {
         if (!result.ok) {
             // A failed rebuild is not a reason to stop rendering what already works.
@@ -562,7 +581,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         // drains a plugin's own simulation but does nothing about a new branch appearing at full
         // opacity in a single frame.
         const departingLayers = layers;
-        layers = layersForGraph(scene.graph);
+        layers = selectKernelInputs(layersForGraph(scene.graph), kernelInputs?.compositeInputs);
+        motionInputs = kernelInputs?.motionInputs;
         crossfades = crossfadesBetween(departingLayers, layers);
         runtime.setGraph(scene.graph, instances);
 
@@ -598,6 +618,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         ).values()];
 
         const entropyChanged = built.entropy !== scene.entropy;
+        const paletteChanged = built.kernel.palette?.id !== paletteOverride?.id
+            || built.kernel.palette?.strength !== paletteOverride?.strength;
         const applied = applyBuild({
             ok: true,
             scene: {
@@ -609,7 +631,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 bindings: built.bindings,
                 parameterOverrides: built.parameters,
             },
-        }, true, built.seeds);
+        }, true, built.seeds, built.kernel);
 
         if (!applied) {
             return sceneProblems;
@@ -617,15 +639,16 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
         authored = document;
         sceneProblems = [];
+        paletteOverride = built.kernel.palette;
 
         // A different document is a different scene, so it draws its own scheme — from its own
         // entropy, which is why the entropy is in the document at all. Re-applying the same one after
         // an edit leaves the palette and the grade's smoothing exactly where they were.
-        if (entropyChanged) {
+        if (entropyChanged || paletteChanged) {
             refreshPalette();
         }
 
-        gradeParameters = { ...gradeParameters, ...(document.kernel?.grade?.parameters ?? {}) };
+        gradeParameters = { ...built.kernel.gradeParameters };
         gradeBindings = built.kernel.gradeBindings;
         persistenceOverrides = built.kernel.persistence;
         layerOverrides = built.kernel.layers;
@@ -717,6 +740,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
                     layers: composedLayers,
+                    motionInputs,
                     crossfades,
                     // Section 11 gives every layer a feedback participation weight and makes injection
                     // the compositor's duty. The weights were computed and consumed by nothing; this is
@@ -756,8 +780,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 authored = undefined;
                 sceneProblems = [];
                 gradeBindings = COMPOSITE_BINDINGS;
+                paletteOverride = undefined;
                 persistenceOverrides = undefined;
                 layerOverrides = undefined;
+                motionInputs = undefined;
 
                 return applyBuild(buildFresh(profile), false);
             },

@@ -1,0 +1,24 @@
+import { describe, expect, test } from 'vitest';
+import { resolveAuthoredScene } from '../../core/authored-scene';
+import { createM1Registry } from '../../plugins/registry';
+import { particleSanityScene } from './particle-sanity-scene';
+
+describe('particle sanity scene', () => {
+    test('is a complete music-independent physical particle graph', () => {
+        const document = particleSanityScene();
+        const resolved = resolveAuthoredScene(document, createM1Registry());
+
+        expect(resolved.ok).toBe(true);
+        expect(document.nodes.every((node) => node.bindings?.length === 0)).toBe(true);
+        expect(document.nodes.find((node) => node.pluginId === 'ParticleRenderer:discs')?.parameters)
+            .toEqual({ brightness: 1, debug: 1 });
+        expect(document.nodes.filter((node) => node.pluginId.startsWith('ParticleCollider:')))
+            .toHaveLength(2);
+        expect(document.kernel?.motionInputs).toEqual([]);
+        expect(document.kernel?.persistence).toEqual({
+            survivalPerSecond: 0,
+            motionScale: 0,
+            transientPunch: 0,
+        });
+    });
+});
