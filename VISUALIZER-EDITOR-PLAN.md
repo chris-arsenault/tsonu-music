@@ -157,7 +157,10 @@ editable yet.
 - Exit: `make ci` green; every operation covered as a reducer test; a topology edit demonstrably
   preserves an untouched simulator's state.
 
-### M5 — Persistence and repro export [depends on M4]
+### M5 — Persistence and repro export
+
+Built ahead of M4: export and import operate on a captured document, which does not require editing.
+
 
 - JSON export and import, and localStorage autosave, with the document version carried and a
   migration hook for a format that will change.

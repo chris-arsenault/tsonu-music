@@ -17,3 +17,7 @@ Contents:
   cooldowns, the mutation model, deactivation policies, and fresh random scene selection.
 - **Performance** — the quality profile and downgrade ladder as a function of frame-time statistics,
   buffer health, and the current profile.
+- **Authored scenes** — the scene document, its resolution through the render graph compiler alone,
+  the edit operations and their history, capture from a generated scene, graph layout, the editor's
+  view of what runs, and reading and writing documents as text. See
+  [ADR-0010](../../../../docs/adr/0010-visualizer-authored-scene-graphs.md).

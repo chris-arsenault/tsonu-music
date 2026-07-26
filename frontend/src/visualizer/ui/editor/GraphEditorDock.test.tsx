@@ -51,6 +51,22 @@ describe('the dock', () => {
         expect(html).toContain('freeze mutations');
     });
 
+    test('a document can be brought in before anything has been captured', () => {
+        // Import is the way back into a scene from a previous session or another machine, so it
+        // cannot be behind having captured something first.
+        const html = renderToStaticMarkup(<GraphEditorDock readout={readout()} {...props} />);
+
+        expect(html).toContain('>Import</button>');
+        expect(html).toContain('accept="application/json,.json"');
+    });
+
+    test('export and fixture are offered only once there is a document to export', () => {
+        const html = renderToStaticMarkup(<GraphEditorDock readout={readout()} {...props} />);
+
+        expect(html).not.toContain('>Export</button>');
+        expect(html).not.toContain('>Copy fixture</button>');
+    });
+
     test('it reports on the kernel it is given rather than starting one', () => {
         // Two visualizers in two GL contexts would describe the wrong thing. With no handle there is
         // nothing to capture and the dock still renders.

@@ -15,6 +15,13 @@ import { createM1Registry } from '../../plugins/registry';
 import type { KernelControlHandle, KernelReadout } from '../../host/kernel-loop';
 import { useEditorStyles } from './editor-styles';
 import { MetersTab, PerformanceTab } from './ReadoutTabs';
+import {
+    copyFixture,
+    downloadScene,
+    loadStoredScene,
+    readSceneFile,
+    storeScene,
+} from './scene-storage';
 
 /**
  * The same catalog the running kernel registered.
@@ -60,31 +67,78 @@ export default function GraphEditorDock({
     const [height, setHeight] = useState(initialHeight);
     const [document_, setDocument] = useState<AuthoredScene | undefined>();
     const [selected, setSelected] = useState<string | undefined>();
+    const [notice, setNotice] = useState<string | undefined>();
+    const fileInput = useRef<HTMLInputElement | null>(null);
+
+    // Whatever was open last time. Offered rather than applied: reopening the dock should not silently
+    // take the graph away from the scheduler.
+    const [stored] = useState(() => loadStoredScene());
 
     // The document the kernel is actually running, which after a capture is the one below. Read from
     // the readout rather than assumed, so what is drawn is what is rendering.
     const live = readout.scene?.authored;
     const problems = readout.scene?.problems ?? [];
 
-    const capture = useCallback(() => {
-        const captured = handle?.captureScene();
-        if (!captured) {
-            return;
+    /** Hands a document to the kernel and keeps it, or reports why it could not be handed over. */
+    const apply = useCallback((next: AuthoredScene, note?: string) => {
+        setDocument(next);
+
+        const failures = handle?.setAuthoredScene(next) ?? [];
+        if (failures.length > 0) {
+            setNotice(failures[0].detail);
+            return false;
         }
 
-        setDocument(captured);
-        const failures = handle?.setAuthoredScene(captured) ?? [];
-        if (failures.length === 0) {
-            onControls({ ...controls, authoring: true });
-        }
+        onControls({ ...controls, authoring: true });
+        setNotice(note);
+        return true;
     }, [handle, controls, onControls]);
+
+    const capture = useCallback(() => {
+        const captured = handle?.captureScene();
+        if (captured) {
+            apply(captured);
+        }
+    }, [handle, apply]);
 
     const release = useCallback(() => {
         handle?.clearAuthoredScene();
         setDocument(undefined);
         setSelected(undefined);
+        setNotice(undefined);
         onControls({ ...controls, authoring: false, inspectResource: undefined });
     }, [handle, controls, onControls]);
+
+    const importFile = useCallback(async (file: File | undefined) => {
+        if (!file) {
+            return;
+        }
+
+        const read = await readSceneFile(file);
+        if (!read.ok) {
+            setNotice(read.problems[0].detail);
+            return;
+        }
+
+        apply(read.scene, read.warnings.length > 0 ? read.warnings[0].detail : `loaded ${file.name}`);
+    }, [apply]);
+
+    const copy = useCallback(() => {
+        if (!document_) {
+            return;
+        }
+
+        void copyFixture(document_).then((where) => setNotice(
+            where === 'clipboard' ? 'fixture copied' : 'fixture downloaded',
+        ));
+    }, [document_]);
+
+    // Autosaved on every change, so a reload does not lose a scene that took a while to find.
+    useEffect(() => {
+        if (document_) {
+            storeScene(document_);
+        }
+    }, [document_]);
 
     // Selecting a node routes its resource to the whole canvas. One at a time, through the same
     // control the resource picker has always used.
@@ -158,8 +212,59 @@ export default function GraphEditorDock({
                                 >
                                     New scene
                                 </button>
+                                {stored ? (
+                                    <button
+                                        type="button"
+                                        className="viz-editor__action"
+                                        onClick={() => apply(stored, 'restored the last capture')}
+                                        title="Reopen the document this editor last had"
+                                    >
+                                        Restore last
+                                    </button>
+                                ) : null}
                             </>
                         )}
+
+                        <button
+                            type="button"
+                            className="viz-editor__action"
+                            onClick={() => fileInput.current?.click()}
+                            title="Open a scene document from a file"
+                        >
+                            Import
+                        </button>
+                        <input
+                            ref={fileInput}
+                            type="file"
+                            accept="application/json,.json"
+                            hidden
+                            onChange={(event) => {
+                                void importFile(event.currentTarget.files?.[0]);
+                                // Cleared so choosing the same file twice fires again.
+                                event.currentTarget.value = '';
+                            }}
+                        />
+
+                        {document_ ? (
+                            <>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={() => downloadScene(document_)}
+                                    title="Save this scene as a document"
+                                >
+                                    Export
+                                </button>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={copy}
+                                    title="Copy this scene as a test file that reproduces it"
+                                >
+                                    Copy fixture
+                                </button>
+                            </>
+                        ) : null}
 
                         {selectedNode ? (
                             <>
@@ -189,6 +294,8 @@ export default function GraphEditorDock({
                                 {problems.length} problem{problems.length === 1 ? '' : 's'}
                             </span>
                         ) : null}
+
+                        {notice ? <span className="viz-editor__note">{notice}</span> : null}
                     </>
                 ) : null}
 

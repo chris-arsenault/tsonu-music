@@ -32,6 +32,13 @@ motion-typed resource whether or not the graph reads it, are drawn as dashed edg
 stages that consume them. Composite, motion sum, accumulation and grade appear as nodes, each
 inspectable, and each showing the values it is running with.
 
+A captured document is autosaved and reopened by **Restore last**, exported as a JSON file, and
+imported from one. **Copy fixture** writes the scene to the clipboard as a test file that resolves it
+against the live catalog, so a fault found by watching becomes a test that fails when it returns.
+`frontend/src/visualizer/captured-scene.fixture.test.ts` is one such file, emitted by that button and
+committed unchanged. A document carries the format version it was written against; one from a newer
+build is refused rather than misread, and one from an older build is migrated.
+
 ## Layout
 
 `frontend/src/visualizer/` splits along the boundary

@@ -15,6 +15,7 @@ The React surface in the public player, plus the development graph editor in
   GPU readouts. Capturing the running scene freezes it into a document and holds it still while it is
   examined; selecting a node routes its output to the canvas, and muting one excludes it. The graph
   draws the layer stack and the motion bus, which appear in no edge list, and the kernel stages
-  between the graph and the canvas.
+  between the graph and the canvas. A captured document is autosaved, exportable as JSON, importable
+  from a file, and copyable as a test file that reproduces the scene.
 
 Styling extends the player's existing `bottom-player__*` BEM classes in `frontend/src/App.css`.
