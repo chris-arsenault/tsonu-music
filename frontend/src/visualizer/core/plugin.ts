@@ -42,6 +42,25 @@ export interface PluginPort {
     type: PortType;
     required: boolean;
     multiple?: boolean;
+    /**
+     * Output of this same plugin whose previous frame this input reads.
+     *
+     * Feedback was recognised by input name alone — `history`, `feedback`, `previous` — and paired
+     * with whichever output happened to match by type. That works while a plugin has one feedback
+     * loop and one output of that type, and stops working the moment it has two: the particle
+     * simulator writes both its state and its spatial bins as particle buffers, and the bins input has
+     * to close onto the bins output specifically, not onto whichever came first.
+     */
+    feedbackFrom?: string;
+    /**
+     * Output that exists only to close a loop inside this plugin, and is not offered to others.
+     *
+     * The particle simulator writes both its state and a spatial bin grid, and both are particle
+     * buffers. Registered as an ordinary producer, the bin grid was picked up by the particle
+     * renderers instead of the state — so they drew the occupancy grid rather than the particles, and
+     * a scene that looked like it had a working simulation was showing a picture of its index.
+     */
+    internal?: boolean;
 }
 
 export interface PluginCost {

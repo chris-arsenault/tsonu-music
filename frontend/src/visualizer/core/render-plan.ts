@@ -65,9 +65,25 @@ export const RESOURCE_SIZING: Partial<Record<PortType, { scale?: number; fixed?:
     'wave-field-state': { scale: 0.5 },
     'motion-field': { scale: 0.5 },
     'distance-field': { scale: 0.5 },
-    'particle-buffer': { fixed: 128 },
+    // One texel per particle. Sixty-four squared is four thousand of them, which is the count at which
+    // particles can be large enough to read as bodies and still have room not to overlap: at sixteen
+    // thousand, contact-sized discs cover seventy-eight percent of the frame, past the density at
+    // which discs can be packed at all without crystallising.
+    'particle-buffer': { fixed: 64 },
     // A palette is a strip of swatches, not an image.
     palette: { fixed: 64 },
+};
+
+/**
+ * Sizes for individual ports whose needs differ from their type's.
+ *
+ * The particle simulator's spatial bins are a particle buffer by type — they hold a position and a
+ * velocity per texel — but they are indexed by *location* rather than by particle, so the grid has to
+ * be fine enough that one cell is one contact diameter while the state buffer stays sized to the
+ * particle count. Keyed by port name, checked before the type.
+ */
+export const PORT_SIZING: Record<string, { scale?: number; fixed?: number }> = {
+    bins: { fixed: 128 },
 };
 
 /**
@@ -135,7 +151,8 @@ export function planTargets(
         // Sized by what the resource is for, so a field or particle buffer is not needlessly allocated at
         // full viewport resolution — and so the size is stable across frames rather than recomputed per
         // pass, which is what previously caused a delete-and-recreate every frame.
-        const sizing = RESOURCE_SIZING[resource.type];
+        const portName = resource.id.slice(resource.id.lastIndexOf('.') + 1);
+        const sizing = PORT_SIZING[portName] ?? RESOURCE_SIZING[resource.type];
         let resourceWidth = width;
         let resourceHeight = height;
 

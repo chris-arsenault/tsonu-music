@@ -17,6 +17,8 @@ import { QUAD_VERTEX_SHADER } from '../../host/device';
 // `defineShaderPlugin`, which derives the id from the plugin's own id.
 const SIMULATOR_SHADER = 'particle-simulator';
 const RENDERER_SHADER = 'particle-renderer';
+const BIN_SHADER = 'particle-bins';
+const BIN_GEOMETRY_ID = 'particle-bin-indices';
 
 /**
  * Each texel is one particle: xy position in clip space, zw velocity.
@@ -42,12 +44,21 @@ uniform sampler2D uState;
 uniform sampler2D uForce;
 uniform sampler2D uBoundary;
 uniform sampler2D uSpawn;
+/** Previous frame's spatial bins: one particle's position and velocity per grid cell. */
+uniform sampler2D uBins;
 uniform vec2 uResolution;
+uniform vec2 uBinResolution;
 uniform float uDelta;
 uniform float uDrag;
 uniform float uLifetime;
 uniform float uTime;
 uniform float uSeed;
+/** Contact radius in clip units. One cell of the bin grid is one diameter across. */
+uniform float uRadius;
+/** How much of the closing speed is returned on contact. Zero is dead clay, one is billiards. */
+uniform float uRestitution;
+/** Zero disables contact resolution entirely, for the cheapest rung of the quality ladder. */
+uniform float uContact;
 uniform bool uHasBoundary;
 uniform bool uHasSpawn;
 ${GLSL_COMMON}
@@ -132,20 +143,68 @@ void main() {
     velocity += force * uDelta;
     velocity *= (1.0 - uDrag * uDelta);
 
-    // Collision fields carry boundary proximity in blue and an outward normal in red/green. Reflect
-    // particles that are moving into the mask edge, then push them clear so they do not jitter inside
-    // the boundary on the following frame.
+    // Collision fields carry boundary proximity in blue and an outward normal in red/green. A mask is
+    // a surface, so a particle is turned away from it and then moved clear of it — reflecting the
+    // velocity alone lets a fast particle travel through the wall within a single step and arrive on
+    // the far side still moving away from it, which is how a solid object becomes a suggestion.
     if (uHasBoundary) {
         vec4 boundary = texture(uBoundary, clamp(forceUv, 0.0, 1.0));
         float proximity = boundary.b;
         vec2 normal = length(boundary.rg) > 0.0001 ? normalize(boundary.rg) : vec2(0.0);
-        if (proximity > 0.04 && dot(velocity, normal) < 0.0) {
-            velocity = reflect(velocity, normal) * mix(0.72, 0.94, proximity);
-            velocity += normal * proximity * 0.35;
+        if (proximity > 0.04) {
+            if (dot(velocity, normal) < 0.0) {
+                velocity = reflect(velocity, normal) * mix(0.72, 0.94, proximity);
+            }
+            // Positional, not a force: penetration is removed outright rather than discouraged.
+            position += normal * proximity * uRadius * 1.5;
         }
     }
 
     position += velocity * uDelta;
+
+    // Contact against the neighbours sharing this patch of the frame.
+    //
+    // Resolved as position-based dynamics, which is what makes these read as objects rather than as
+    // charges: an overlap is corrected by moving both bodies apart by half of it, immediately, and the
+    // component of relative velocity along the contact normal is reversed and damped. A repulsive
+    // force would instead let two particles pass through one another whenever they arrived fast
+    // enough, and would make every particle a soft haze at rest. Solid means the overlap is not
+    // allowed to persist, which is a statement about position, not about force.
+    if (uContact > 0.0) {
+        vec2 correction = vec2(0.0);
+        vec2 bounce = vec2(0.0);
+        float diameter = uRadius * 2.0;
+        // Snapped to the centre of the cell this particle is in, then stepped a whole cell at a time.
+        // Sampling at a continuous coordinate reads between texels, and under linear filtering that
+        // returns the average of four neighbouring particles' positions — a point where nothing is,
+        // which is never in contact with anything. The neighbourhood has to be addressed as cells.
+        vec2 step_uv = vec2(1.0) / uBinResolution;
+        vec2 cell = (floor((position * 0.5 + 0.5) * uBinResolution) + 0.5) * step_uv;
+
+        for (int dy = -1; dy <= 1; dy += 1) {
+            for (int dx = -1; dx <= 1; dx += 1) {
+                vec4 other = texture(uBins, cell + vec2(float(dx), float(dy)) * step_uv);
+
+                vec2 apart = position - other.xy;
+                float gap = length(apart);
+
+                // A gap of zero is this particle finding itself; an empty cell reads as the origin,
+                // which the outer radius test rejects unless something is genuinely there.
+                if (gap > 1e-5 && gap < diameter) {
+                    vec2 normal = apart / gap;
+                    correction += normal * (diameter - gap) * 0.5;
+
+                    float closing = dot(velocity - other.zw, normal);
+                    if (closing < 0.0) {
+                        bounce += normal * (-closing) * uRestitution;
+                    }
+                }
+            }
+        }
+
+        position += correction;
+        velocity += bounce;
+    }
 
     fragColor = vec4(position, velocity);
 }`;
@@ -197,6 +256,46 @@ void main() {
 
     float energy = clamp(shape * uBrightness * (0.3 + vSpeed * 2.0), 0.0, 1.0);
     fragColor = vec4(vec3(energy), energy);
+}`;
+
+/**
+ * Spatial binning: each particle writes itself into the grid cell it occupies.
+ *
+ * This is what makes particle-to-particle contact affordable. Testing every particle against every
+ * other is two hundred and sixty-eight million pairs at this count; testing against the nine cells
+ * around you is nine texture reads. The grid is sized so one cell is one particle diameter, which
+ * makes at most one particle fit per cell in a resting pack and turns "the neighbours that could be
+ * touching me" into a fixed, tiny neighbourhood.
+ *
+ * The winner of a contested cell is whichever particle draws last. That is arbitrary, and it is the
+ * standard trade: a cell holding two particles means a contact is missed for one frame, and the pair
+ * separates on the next one because the overlap is still there.
+ */
+const BIN_VERTEX = `#version 300 es
+in vec2 aIndex;
+out vec4 vBody;
+
+uniform sampler2D uState;
+
+void main() {
+    vec4 state = texture(uState, aIndex);
+    vBody = state;
+
+    // Position in clip space maps directly to a cell, because the grid covers the same square.
+    gl_PointSize = 1.0;
+    gl_Position = vec4(clamp(state.xy, -0.999, 0.999), 0.0, 1.0);
+}`;
+
+const BIN_FRAGMENT = `#version 300 es
+precision highp float;
+in vec4 vBody;
+out vec4 fragColor;
+
+void main() {
+    // Position and velocity of whoever holds this cell. Alpha is unused: an empty cell reads as all
+    // zeroes, and a particle at exactly the origin with exactly zero velocity is the uninitialised
+    // state the simulator overwrites on its first frame anyway.
+    fragColor = vBody;
 }`;
 
 const EMITTER_FRAGMENT = `#version 300 es
@@ -324,8 +423,29 @@ export const PARTICLE_RENDER_MODES = ['points', 'discs', 'sparks', 'comets'] as 
 export const EMITTER_MODES = ['point', 'region', 'line', 'ring', 'shape'] as const;
 export const FORCE_MODES = ['attract', 'repel', 'vortex', 'gravity', 'wind', 'curl'] as const;
 
-/** Particle count at full quality. The performance ladder's particle scale multiplies this. */
-export const PARTICLE_TEXTURE_SIDE = 128;
+/**
+ * Particle count at full quality. The performance ladder's particle scale multiplies this.
+ *
+ * Four thousand rather than sixteen. Solid contact and a large drawn particle put a ceiling on how
+ * many can share a frame: at sixteen thousand, discs of one contact diameter cover seventy-eight
+ * percent of it, which is past the density at which discs can be packed without crystallising, so
+ * most overlaps could not be resolved and the field went back to being a haze. At four thousand the
+ * same discs cover a fifth of the frame — dense enough to collide constantly, loose enough that every
+ * collision can actually be answered.
+ */
+export const PARTICLE_TEXTURE_SIDE = 64;
+
+/**
+ * Side of the spatial grid particles are binned into for contact.
+ *
+ * Matched to the particle count, so a fully packed field has about one particle per cell. The cell
+ * size is then the contact diameter, which is what makes a three-by-three neighbourhood sufficient:
+ * anything close enough to touch is in it.
+ */
+export const BIN_SIDE = 128;
+
+/** Contact radius in clip units — half a cell, so two touching particles span exactly one. */
+export const CONTACT_RADIUS = 1 / BIN_SIDE;
 
 /**
  * Holds particle state across frames in a ping-ponged float texture.
@@ -343,11 +463,20 @@ export function createParticleSimulator(): VisualPluginDefinition {
             { name: 'boundary', type: 'collision-field', required: false },
             { name: 'spawn', type: 'particle-buffer', required: false },
             { name: 'history', type: 'particle-buffer', required: false },
+            // This plugin's own bins from the previous frame, which is what it collides against.
+            { name: 'crowd', type: 'particle-buffer', required: false, feedbackFrom: 'bins' },
         ],
-        outputs: [{ name: 'state', type: 'particle-buffer', required: false }],
+        outputs: [
+            { name: 'state', type: 'particle-buffer', required: false },
+            { name: 'bins', type: 'particle-buffer', required: false, internal: true },
+        ],
         capabilities: ['particles', 'feedback'],
         requiredCapabilities: ['float-textures'],
-        cost: { gpu: 2, cpu: 0, memory: 2, renderPasses: 1, qualityScalable: true, dominant: false },
+        // Two passes and a second buffer: the step, then the binning that makes contact affordable.
+        // GPU cost stays at two — the bin pass draws sixteen thousand single-pixel points into a
+        // 128-square target, which is nothing beside the step itself, and three would cross the
+        // high-cost threshold and make particle scenes rarer for no real expense.
+        cost: { gpu: 2, cpu: 0, memory: 3, renderPasses: 2, qualityScalable: true, dominant: false },
         character: character({
             visualDensity: 0.7,
             motionEnergy: 0.8,
@@ -375,6 +504,18 @@ export function createParticleSimulator(): VisualPluginDefinition {
 
         create(context): VisualPluginInstance {
             let playbackTime = 0;
+            let contactEnabled = 1;
+
+            // One vertex per particle holding its own lookup coordinate, for the binning pass.
+            const indices = new Float32Array(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * 2);
+            for (let y = 0; y < PARTICLE_TEXTURE_SIDE; y += 1) {
+                for (let x = 0; x < PARTICLE_TEXTURE_SIDE; x += 1) {
+                    const offset = (y * PARTICLE_TEXTURE_SIDE + x) * 2;
+                    indices[offset] = (x + 0.5) / PARTICLE_TEXTURE_SIDE;
+                    indices[offset + 1] = (y + 0.5) / PARTICLE_TEXTURE_SIDE;
+                }
+            }
+            let uploaded = false;
 
             return {
                 initialize() {
@@ -383,15 +524,35 @@ export function createParticleSimulator(): VisualPluginDefinition {
                         vertex: QUAD_VERTEX_SHADER,
                         fragment: SIMULATOR_FRAGMENT,
                     });
+                    context.registerShader({
+                        id: BIN_SHADER,
+                        vertex: BIN_VERTEX,
+                        fragment: BIN_FRAGMENT,
+                    });
                 },
 
                 activate() {
                     // The simulation state lives in the ping-ponged target, not here.
+                    uploaded = false;
                 },
 
                 update(frame) {
                     // Playback time, so lifetimes advance with the music and hold when it does.
                     playbackTime = frame.clock.playbackTime;
+
+                    // Contact is the expensive half. The ladder's particle scale is the signal that
+                    // the machine is struggling, and a thinned field has few contacts to resolve
+                    // anyway, so it is the first thing given up rather than the frame rate.
+                    contactEnabled = (frame.particleScale ?? 1) >= 0.6 ? 1 : 0;
+
+                    if (!uploaded) {
+                        frame.uploadGeometry({
+                            id: BIN_GEOMETRY_ID,
+                            data: indices,
+                            attributes: [{ name: 'aIndex', components: 2 }],
+                        });
+                        uploaded = true;
+                    }
                 },
 
                 render(render): RenderPass[] {
@@ -401,8 +562,9 @@ export function createParticleSimulator(): VisualPluginDefinition {
                     }
                     const boundary = render.inputs.boundary;
                     const spawn = render.inputs.spawn;
+                    const crowd = render.previous.crowd;
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'fullscreen',
                         shader: SIMULATOR_SHADER,
                         inputs: {
@@ -410,6 +572,7 @@ export function createParticleSimulator(): VisualPluginDefinition {
                             uState: render.previous.history ?? render.outputs.state,
                             ...(boundary ? { uBoundary: boundary } : {}),
                             ...(spawn ? { uSpawn: spawn } : {}),
+                            ...(crowd ? { uBins: crowd } : {}),
                         },
                         output: render.outputs.state,
                         blend: 'none',
@@ -421,10 +584,32 @@ export function createParticleSimulator(): VisualPluginDefinition {
                             uLifetime: 4,
                             uTime: playbackTime,
                             uSeed: context.seed,
+                            uRadius: CONTACT_RADIUS,
+                            uRestitution: 0.45,
+                            uBinResolution: [BIN_SIDE, BIN_SIDE],
+                            uContact: crowd ? contactEnabled : 0,
                             uHasBoundary: boundary !== undefined,
                             uHasSpawn: spawn !== undefined,
                         },
                     }];
+
+                    // Binning runs after the step, so next frame's contacts are resolved against
+                    // where everything actually ended up rather than where it started.
+                    if (render.outputs.bins) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: BIN_SHADER,
+                            geometry: BIN_GEOMETRY_ID,
+                            primitive: 'points',
+                            vertexCount: PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE,
+                            inputs: { uState: render.outputs.state },
+                            output: render.outputs.bins,
+                            blend: 'none',
+                            clear: true,
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {

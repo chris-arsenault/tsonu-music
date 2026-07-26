@@ -128,8 +128,14 @@ export function wireScene(
             }
         }
 
-        // Registered after its inputs, so a plugin never consumes its own forward output.
+        // Registered after its inputs, so a plugin never consumes its own forward output. An internal
+        // output is never registered at all: it is this plugin's own working state, and offering it
+        // to the rest of the graph gets it consumed in place of the thing the plugin actually makes.
         for (const port of node.definition.outputs) {
+            if (port.internal) {
+                continue;
+            }
+
             const existing = producers.get(port.type) ?? [];
             existing.push({ instanceId: node.instanceId, port: port.name });
             producers.set(port.type, existing);
@@ -259,12 +265,20 @@ function ownOutputFor(
     definition: VisualPluginDefinition,
     port: PluginPort,
 ): PluginPort | undefined {
+    // A named pairing wins over a type match, so a plugin with two outputs of one type can close two
+    // distinct loops. Falling back to type keeps every port written before `feedbackFrom` existed
+    // working unchanged.
+    if (port.feedbackFrom) {
+        return definition.outputs.find((candidate) => candidate.name === port.feedbackFrom);
+    }
+
     return definition.outputs.find((candidate) => portsCompatible(candidate.type, port.type));
 }
 
-/** A port named for history, which by convention is the one a feedback edge closes onto. */
+/** A port that reads its own plugin's previous frame, by declaration or by the older naming convention. */
 function isFeedbackPort(port: PluginPort): boolean {
-    return port.name === 'history' || port.name === 'feedback' || port.name === 'previous';
+    return port.feedbackFrom !== undefined
+        || port.name === 'history' || port.name === 'feedback' || port.name === 'previous';
 }
 
 function declaresFeedback(definition: VisualPluginDefinition): boolean {
