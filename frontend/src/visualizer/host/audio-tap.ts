@@ -7,6 +7,7 @@
  * off a parallel branch that terminates in nothing. Nothing on the analysis side can reach output.
  */
 
+import { createAnalyserAnalysis, type AnalyserAnalysis } from './analyser-fallback';
 import type { FeatureSnapshot } from '../core/features';
 import type { AnalysisCommand } from './analysis-worklet';
 // Bundled by `vite-plugins/audio-worklet.ts` into a single import-free script, because an
@@ -22,6 +23,8 @@ const FLATLINE_FRAME_LIMIT = 60;
 
 export interface AudioTap {
     readonly context: AudioContext;
+    /** Where analysis is running. `main-thread` means the worklet was unavailable. */
+    analysisPath(): 'worklet' | 'main-thread';
     /** Latest snapshot, or undefined if none has arrived since the last read. */
     takeSnapshot(): FeatureSnapshot | undefined;
     /** `outputLatency + baseLatency`, with a fallback where `outputLatency` is unreported. */
@@ -75,11 +78,11 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
     let flatlined = false;
     let analysis: AudioWorkletNode | undefined;
     let analysisConnected = false;
+    /** Used when the worklet is unavailable — most often because this is not a secure context. */
+    let fallback: AnalyserAnalysis | undefined;
 
-    const handleSnapshot = (event: MessageEvent<FeatureSnapshot>) => {
-        latest = event.data;
-
-        if (event.data.rms === 0 && !element.paused) {
+    const noteSilence = (level: number) => {
+        if (level === 0 && !element.paused) {
             silentFrames += 1;
             if (silentFrames >= FLATLINE_FRAME_LIMIT) {
                 flatlined = true;
@@ -90,7 +93,18 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         }
     };
 
+    const handleSnapshot = (event: MessageEvent<FeatureSnapshot>) => {
+        latest = event.data;
+        noteSilence(event.data.rms);
+    };
+
     try {
+        if (!context.audioWorklet) {
+            // `AudioWorklet` is a secure-context API. Named explicitly because the alternative is a
+            // `TypeError` about `addModule` on undefined, which says nothing about the actual cause.
+            throw new Error('AudioWorklet requires a secure context');
+        }
+
         await context.audioWorklet.addModule(workletUrl);
 
         analysis = new AudioWorkletNode(context, 'tsonu-analysis', {
@@ -107,15 +121,28 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         source.connect(analysis);
         analysisConnected = true;
     } catch (error) {
-        // Analysis failed to start. Audio is unaffected; report as flatlined so the caller falls back.
-        flatlined = true;
-        console.warn('[visualizer] audio analysis unavailable', error);
+        // The render thread is unavailable, so analysis moves to the main thread. Less precise, and
+        // still incomparably better than a visualizer whose every feature reads zero.
+        fallback = createAnalyserAnalysis(context, source);
+        console.warn('[visualizer] analysis running on the main thread', error);
     }
 
     return {
         context,
 
+        analysisPath() {
+            return fallback ? 'main-thread' : 'worklet';
+        },
+
         takeSnapshot() {
+            if (fallback) {
+                // Pulled rather than pushed: the frame loop already asks once per frame, so the
+                // fallback needs no timer of its own.
+                const snapshot = fallback.pull();
+                noteSilence(snapshot.rms);
+                return snapshot;
+            }
+
             const snapshot = latest;
             latest = undefined;
             return snapshot;
@@ -130,6 +157,8 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         },
 
         reset() {
+            fallback?.reset();
+
             const command: AnalysisCommand = { kind: 'reset' };
             analysis?.port.postMessage(command);
         },
@@ -139,6 +168,8 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         },
 
         async resume() {
+            fallback?.connect();
+
             if (analysis && !analysisConnected) {
                 latest = undefined;
                 silentFrames = 0;
@@ -156,6 +187,8 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
         dispose() {
             // The tap itself is never torn down — the source node cannot be detached from the
             // element. Pause its reusable analysis branch; audio keeps flowing through the gain.
+            fallback?.disconnect();
+
             if (analysis && analysisConnected) {
                 analysis.port.onmessage = null;
                 source.disconnect(analysis);

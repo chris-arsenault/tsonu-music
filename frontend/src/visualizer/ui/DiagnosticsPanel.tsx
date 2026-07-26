@@ -73,6 +73,7 @@ export default function DiagnosticsPanel({
                     <Row label="layers" value={String(readout.scene?.layerCount ?? 0)} />
                     <Row label="branches" value={String(readout.scene?.materialBranchCount ?? 0)} />
                     <Row label="modulators" value={String(readout.scene?.activeModulatorCount ?? 0)} />
+                    <Row label="analysis" value={readout.analysisPath} />
                     <Row
                         label="persistence"
                         value={`${(readout.scene?.survivalPerSecond ?? 0).toFixed(3)}/s`}

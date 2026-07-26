@@ -55,6 +55,11 @@ export interface KernelReadout {
     bus: AudioFeatureBus;
     latencySeconds: number;
     contextState: AudioContextState | 'starting' | 'failed';
+    /**
+     * Where audio analysis is running. `main-thread` means `AudioWorklet` was unavailable — most
+     * often because the page is not a secure context — and precision is reduced accordingly.
+     */
+    analysisPath: 'worklet' | 'main-thread' | 'starting';
     flatlined: boolean;
     /** Wall-clock milliseconds for the last frame, for the performance controller in M2. */
     frameTimeMs: number;
@@ -364,6 +369,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 bus: features.bus,
                 latencySeconds: tap?.latencySeconds() ?? 0,
                 contextState,
+                analysisPath: tap?.analysisPath() ?? 'starting',
                 flatlined: tap?.isFlatlined() ?? false,
                 frameTimeMs: wallDelta * 1000,
                 render: renderStats,
