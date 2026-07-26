@@ -208,21 +208,44 @@ uniform sampler2D uShape;
 uniform vec2 uResolution;
 uniform float uMode;
 uniform float uRate;
+uniform float uTime;
 uniform float uSeed;
 ${GLSL_COMMON}
 
+/**
+ * Where this emitter sits.
+ *
+ * Every mode used to be centred on the origin — a point emitter at exactly the middle of the frame, a
+ * ring concentric with it, a line straight through it. Dead centre is the one position that reads as
+ * a diagram rather than as something happening somewhere, and with the frame symmetric about it there
+ * is nowhere for the eye to travel. Placed off centre from the instance seed and drifting slowly, so
+ * two emitters in a scene are in different places and neither stays put.
+ */
+vec2 emitterOrigin() {
+    vec2 base = vec2(hash(vec2(uSeed, 3.1)), hash(vec2(uSeed, 7.7))) * 1.2 - 0.6;
+    vec2 drift = vec2(
+        sin(uTime * 0.07 + uSeed * 6.28),
+        cos(uTime * 0.053 + uSeed * 12.9)
+    ) * 0.22;
+
+    return clamp(base + drift, vec2(-0.85), vec2(0.85));
+}
+
 void main() {
+    vec2 origin = emitterOrigin();
     vec2 spawn;
 
     if (uMode < 0.5) {                       // point
-        spawn = vec2(0.0);
+        spawn = origin;
     } else if (uMode < 1.5) {                // region
-        spawn = vec2(hash(vUv + uSeed), hash(vUv + uSeed + 1.7)) * 2.0 - 1.0;
+        spawn = origin + (vec2(hash(vUv + uSeed), hash(vUv + uSeed + 1.7)) * 2.0 - 1.0) * 0.45;
     } else if (uMode < 2.5) {                // line
-        spawn = vec2(hash(vUv + uSeed) * 2.0 - 1.0, 0.0);
+        float along = hash(vUv + uSeed) * 2.0 - 1.0;
+        float tilt = uSeed * 3.1415926;
+        spawn = origin + vec2(cos(tilt), sin(tilt)) * along * 0.8;
     } else if (uMode < 3.5) {                // ring
         float angle = hash(vUv + uSeed) * 6.2831853;
-        spawn = vec2(cos(angle), sin(angle)) * 0.7;
+        spawn = origin + vec2(cos(angle), sin(angle)) * 0.45;
     } else {
         // Shape interior or edge: rejection-sampled against the supplied mask, so a mask or album-art
         // edge can seed particles without the emitter knowing which it was given.
@@ -231,8 +254,13 @@ void main() {
         spawn = weight > 0.4 ? candidate * 2.0 - 1.0 : vec2(2.0);
     }
 
-    // Rate gates emission: a texel outside the rate window emits nothing this frame.
-    float gate = step(hash(vUv + uSeed + 13.1), uRate);
+    // Rate gates emission, and the gate moves.
+    //
+    // Hashed on the texel alone, it was a fixed subset: a given particle either always came from the
+    // emitter or never did, for the life of the scene, so the emitter fed a static fraction of the
+    // field instead of streaming. Advancing the hash with time makes every particle pass through the
+    // emitter sooner or later, which is what makes it read as a source rather than a stencil.
+    float gate = step(hash(vUv + uSeed + 13.1 + floor(uTime * 7.0) * 0.37), uRate);
     fragColor = vec4(spawn, 0.0, gate);
 }`;
 
@@ -557,12 +585,16 @@ export function createParticleEmitter(
         outputs: [{ name: 'spawn', type: 'particle-buffer' }],
         capabilities: ['particle-emission'],
         fragment: EMITTER_FRAGMENT,
-        uniforms: { uMode: EMITTER_MODES.indexOf(mode), uRate: 0.15 },
-        parameters: { rate: 0.15 },
+        uniforms: { uMode: EMITTER_MODES.indexOf(mode), uRate: 0.5 },
+        // Rate is the share of rebirths this emitter claims, and it was low enough that the emitter
+        // was a minority contributor to its own scene: at 0.15, six particles in seven were born from
+        // the simulator's fallback clustering instead and the emitter's shape barely showed. A scene
+        // that selected an emitter should look like it has one.
+        parameters: { rate: 0.5 },
         bindings: [{
             feature: 'spectralFlux',
             parameter: 'rate',
-            outputRange: [0.02, 0.5],
+            outputRange: [0.2, 0.92],
             attack: 0.02,
             release: 0.35,
             curve: 'sqrt',
