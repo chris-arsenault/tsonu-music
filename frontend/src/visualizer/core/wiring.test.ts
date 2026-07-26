@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { instanceIdFor, wireScene } from './wiring';
+import { assignInstanceIds, instanceIdFor, wireScene } from './wiring';
 import { compileGraph } from './graph';
 import {
     distributeReactivity,
@@ -75,7 +75,7 @@ describe('scene wiring', () => {
 
         const intoSecond = wired.edges.find((edge) => edge.to.instanceId.startsWith('trn2'));
         // Takes the freshest colour output, which is the first transformer, not the source.
-        expect(intoSecond?.from.instanceId).toBe(instanceIdFor(transform, 1));
+        expect(intoSecond?.from.instanceId).toBe(instanceIdFor(transform, 0));
     });
 
     test('a two-input compositor receives two distinct colour branches', () => {
@@ -97,7 +97,7 @@ describe('scene wiring', () => {
     test('presents the last colour output in the chain', () => {
         const wired = wireScene([source, transform, post]);
 
-        expect(wired.present?.instanceId).toBe(instanceIdFor(post, 2));
+        expect(wired.present?.instanceId).toBe(instanceIdFor(post, 0));
     });
 
     test('a plugin never consumes its own forward output', () => {
@@ -115,7 +115,7 @@ describe('scene wiring', () => {
         const wired = wireScene([source, needsField]);
 
         expect(wired.unsatisfied).toEqual([
-            { instanceId: instanceIdFor(needsField, 1), port: 'flow', type: 'vector-field' },
+            { instanceId: instanceIdFor(needsField, 0), port: 'flow', type: 'vector-field' },
         ]);
     });
 
@@ -173,6 +173,30 @@ describe('scene wiring', () => {
         const ids = wired.nodes.map((node) => node.instanceId);
 
         expect(new Set(ids).size).toBe(ids.length);
+    });
+
+    test('an added plugin does not renumber the ones already in the scene', () => {
+        // Positional ids meant inserting anything gave every later node a different id, and
+        // `instantiate` reuses an instance only when its id matches — so an incremental rebuild reset
+        // the simulations it was supposed to preserve.
+        const before = wireScene([source, transform, post]);
+        const after = wireScene([source, transform, post, plugin('extra', 'field', [], [
+            { name: 'flow', type: 'vector-field', required: false },
+        ])]);
+
+        const idFor = (wired: typeof before, definitionId: string) =>
+            wired.nodes.find((node) => node.definition.id === definitionId)?.instanceId;
+
+        for (const definitionId of ['src', 'trn', 'post']) {
+            expect(idFor(after, definitionId), definitionId).toBe(idFor(before, definitionId));
+        }
+    });
+
+    test('a repeated definition numbers by its own occurrence, not by scene position', () => {
+        const wired = wireScene([source, transform, plugin('src', 'source')]);
+
+        expect(wired.nodes.map((node) => node.instanceId).sort())
+            .toEqual(['src#0', 'src#1', 'trn#0']);
     });
 });
 
@@ -235,6 +259,9 @@ describe('reactivity distribution', () => {
             defaultBindings: [binding],
         });
 
+    /** Ids as wiring assigns them, so distribution is exercised over instances as it runs in a scene. */
+    const nodes = (...definitions: VisualPluginDefinition[]) => assignInstanceIds(definitions);
+
     test('spreads reactivity instead of binding everything to one feature', () => {
         const plugins = [
             withBindings('a', 'source'),
@@ -243,7 +270,7 @@ describe('reactivity distribution', () => {
             withBindings('d', 'postprocess'),
         ];
 
-        const distributed = distributeReactivity(plugins, createRng('spread'));
+        const distributed = distributeReactivity(nodes(...plugins), createRng('spread'));
 
         // Four plugins that all defaulted to rms must not all still be on rms.
         expect(peakConcentration(distributed)).toBeLessThan(plugins.length);
@@ -254,7 +281,7 @@ describe('reactivity distribution', () => {
         // `rms` implies the intensity role, so distribution may move it to another intensity feature
         // and to nothing else. Spreading reactivity must not change what a parameter means.
         for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
-            const distributed = distributeReactivity([withBindings('f', 'field')], createRng(seed));
+            const distributed = distributeReactivity(nodes(withBindings('f', 'field')), createRng(seed));
             const rewritten = distributed[0].bindings[0];
 
             expect(rewritten.role).toBe('intensity');
@@ -280,7 +307,7 @@ describe('reactivity distribution', () => {
                         parameters: { amount: 0 },
                         defaultBindings: [{ ...binding, feature: authored, role }],
                     });
-                    const rewritten = distributeReactivity([subject], createRng(seed))[0].bindings[0];
+                    const rewritten = distributeReactivity(nodes(subject), createRng(seed))[0].bindings[0];
 
                     expect(featureKind(rewritten.feature)).toBe(featureKind(authored));
                 }
@@ -294,7 +321,7 @@ describe('reactivity distribution', () => {
             defaultBindings: [{ ...binding, role: 'detail' as const }],
         });
 
-        const rewritten = distributeReactivity([declared], createRng('declared'))[0].bindings[0];
+        const rewritten = distributeReactivity(nodes(declared), createRng('declared'))[0].bindings[0];
 
         expect(ROLE_FEATURES.detail).toContain(rewritten.feature);
     });
@@ -306,7 +333,7 @@ describe('reactivity distribution', () => {
             defaultBindings: [{ ...binding, feature: 'beatConfidence' }],
         });
 
-        const distributed = distributeReactivity([exotic], createRng('exotic'));
+        const distributed = distributeReactivity(nodes(exotic), createRng('exotic'));
 
         expect(distributed[0].bindings[0].feature).toBe('beatConfidence');
         expect(distributed[0].bindings[0].role).toBeUndefined();
@@ -318,7 +345,7 @@ describe('reactivity distribution', () => {
             defaultBindings: [{ ...binding, feature: 'onset', mode: 'impulse' as const }],
         });
 
-        const distributed = distributeReactivity([impulse], createRng('impulse'));
+        const distributed = distributeReactivity(nodes(impulse), createRng('impulse'));
 
         expect(['onset', 'beat']).toContain(distributed[0].bindings[0].feature);
     });
@@ -326,12 +353,12 @@ describe('reactivity distribution', () => {
     test('stays stable within one scene build', () => {
         const plugins = [withBindings('a', 'source'), withBindings('b', 'field')];
 
-        expect(distributeReactivity(plugins, createRng('same')))
-            .toEqual(distributeReactivity(plugins, createRng('same')));
+        expect(distributeReactivity(nodes(...plugins), createRng('same')))
+            .toEqual(distributeReactivity(nodes(...plugins), createRng('same')));
     });
 
     test('preserves everything about a binding except its feature', () => {
-        const distributed = distributeReactivity([withBindings('a', 'source')], createRng('preserve'));
+        const distributed = distributeReactivity(nodes(withBindings('a', 'source')), createRng('preserve'));
         const rewritten = distributed[0].bindings[0];
 
         expect(rewritten.parameter).toBe('amount');
@@ -342,14 +369,14 @@ describe('reactivity distribution', () => {
     });
 
     test('a plugin with no bindings gets none', () => {
-        const distributed = distributeReactivity([plugin('bare', 'source')], createRng('bare'));
+        const distributed = distributeReactivity(nodes(plugin('bare', 'source')), createRng('bare'));
 
         expect(distributed[0].bindings).toEqual([]);
     });
 
     test('more plugins than features still avoids total concentration', () => {
         const many = Array.from({ length: 12 }, (_, index) => withBindings(`p${index}`, 'transformer'));
-        const distributed = distributeReactivity(many, createRng('crowded'));
+        const distributed = distributeReactivity(nodes(...many), createRng('crowded'));
 
         expect(peakConcentration(distributed)).toBeLessThan(many.length);
     });
@@ -357,5 +384,16 @@ describe('reactivity distribution', () => {
     test('an empty scene distributes nothing', () => {
         expect(distributeReactivity([], createRng('empty'))).toEqual([]);
         expect(peakConcentration([])).toBe(0);
+    });
+
+    test('two instances of one definition are assigned separately', () => {
+        // Keyed by definition there was one entry for both, so they bound the same parameter to the
+        // same feature and moved as one object — and nothing downstream could tell them apart.
+        const twice = nodes(withBindings('same', 'source'), withBindings('same', 'source'));
+        const distributed = distributeReactivity(twice, createRng('twins'));
+
+        expect(distributed).toHaveLength(2);
+        expect(distributed.map((entry) => entry.instanceId)).toEqual(['same#0', 'same#1']);
+        expect(distributed[0].bindings[0].feature).not.toBe(distributed[1].bindings[0].feature);
     });
 });

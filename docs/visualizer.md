@@ -14,9 +14,49 @@ artwork remains the only album thumbnail. Opening the modal starts the kernel; c
 kernel. Chromium and Firefox show the button because they can switch to the required hls.js playback
 path. Safari remains on native HLS and does not offer the visualizer.
 
-Diagnostics are a **Diagnostics** button in the modal's top-right corner, opening a panel over the
-right-hand side. `?viz-debug=1` opens it immediately on load. It reports on the kernel the modal is
-running rather than starting one of its own.
+An **Editor** button in the modal's top-right corner opens a dock below the canvas, which shrinks to
+make room for it. `?viz-debug=1` opens the dock immediately on load. It reports on the kernel the
+modal is running rather than starting one of its own, and it carries three tabs: the scene graph,
+the audio feature meters, and the playback, performance and GPU readouts.
+
+**Capture scene** freezes what is rendering into a scene document and hands the graph to it. While a
+document is in control the scene holds still — the scheduler neither mutates nor rebuilds it, and the
+quality ladder does not suppress plugins out of it — so a composition can be examined a node at a
+time. **Release to scheduler** hands it back and starts a fresh scene. Selecting a node routes its
+output to the whole canvas; selecting a muted one excludes it from the graph along with anything it
+leaves unreachable.
+
+The graph shows more than the document's own edges. The layer stack — every colour output nothing
+else consumes, which is what actually reaches the screen — and the motion bus, summed from every
+motion-typed resource whether or not the graph reads it, are drawn as dashed edges into the kernel
+stages that consume them. Composite, motion sum, accumulation and grade appear as nodes, each
+inspectable, and each showing the values it is running with.
+
+While a document is in control the graph is editable. Nodes drag, links are drawn between sockets and
+cut with Delete, double-clicking the canvas opens a searchable catalog, and dropping a link on empty
+canvas opens the same search narrowed to plugins that could take it. A link the canvas refuses is one
+the compiler would have rejected: both ask `portsCompatible`. Derived connections — the layer stack,
+the motion bus, the kernel chain — cannot be cut, and say so rather than appearing to work.
+
+Selecting a node opens an inspector beside the canvas: its parameters, what drives each of them with
+the binding's feature, mode, range, curve, attack, release and polarity, its seed, and mute, clone and
+remove. A parameter can be converted to an input, which draws its driver as a node wired into a socket
+— ComfyUI's convert-widget-to-input, and promotion is per parameter so the one under investigation
+becomes visible wiring while the rest stay as rows. The accumulation's three values are pinned or
+released individually, the grade's are ordinary parameters, and each layer's blend mode and opacity
+can be overridden from the composite stage. Ctrl+Z and Ctrl+Shift+Z step the history.
+
+A parameter or binding change reaches the running instance without recompiling, so a value can be
+dragged while watching what it does; a topology change recompiles and keeps the instances it did not
+touch, so editing one edge does not reset the simulations around it. An edit that does not resolve
+leaves the previous graph rendering and reports why, against the node or edge at fault.
+
+A captured document is autosaved and reopened by **Restore last**, exported as a JSON file, and
+imported from one. **Copy fixture** writes the scene to the clipboard as a test file that resolves it
+against the live catalog, so a fault found by watching becomes a test that fails when it returns.
+`frontend/src/visualizer/captured-scene.fixture.test.ts` is one such file, emitted by that button and
+committed unchanged. A document carries the format version it was written against; one from a newer
+build is refused rather than misread, and one from an older build is migrated.
 
 ## Layout
 
@@ -28,7 +68,7 @@ running rather than starting one of its own.
 | `core/` | Pure decision logic over plain data, unit-tested in the Node environment |
 | `host/` | Web Audio, WebGL2 device, frame loop; gathers state and applies core decisions |
 | `plugins/` | The plugin catalog, one directory per category |
-| `ui/` | React surface in the player, plus the diagnostics overlay |
+| `ui/` | React surface in the player, plus the graph editor dock in `ui/editor/` |
 
 The whole subsystem loads as a dynamic chunk on first activation and is absent from the initial
 player bundle.

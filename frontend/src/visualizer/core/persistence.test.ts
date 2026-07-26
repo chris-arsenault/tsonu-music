@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
     accumulate,
     advanceAccumulationSlot,
+    applyPersistenceOverrides,
     blackFloorFor,
     DEFAULT_THEME_PERSISTENCE,
     frameSurvival,
@@ -11,6 +12,61 @@ import {
     persistenceSettings,
     type PersistenceSettings,
 } from './persistence';
+
+describe('pinned persistence', () => {
+    const computed: PersistenceSettings = {
+        survivalPerSecond: 0.2,
+        motionScale: 0.4,
+        transientPunch: 0.3,
+    };
+
+    test('no overrides leaves the computed settings alone', () => {
+        expect(applyPersistenceOverrides(computed, undefined)).toEqual(computed);
+        expect(applyPersistenceOverrides(computed, {})).toEqual(computed);
+    });
+
+    test('pinning one value leaves the other two following the audio', () => {
+        // Three separate questions. Holding the trail still to look at it should not also stop the
+        // drag, or what is being looked at is a different scene.
+        const pinned = applyPersistenceOverrides(computed, { survivalPerSecond: 0.9 });
+
+        expect(pinned.survivalPerSecond).toBe(0.9);
+        expect(pinned.motionScale).toBe(computed.motionScale);
+        expect(pinned.transientPunch).toBe(computed.transientPunch);
+    });
+
+    test('zero is a pin, not an absence', () => {
+        const pinned = applyPersistenceOverrides(computed, {
+            survivalPerSecond: 0,
+            motionScale: 0,
+            transientPunch: 0,
+        });
+
+        expect(pinned).toEqual({ survivalPerSecond: 0, motionScale: 0, transientPunch: 0 });
+    });
+
+    test('survival and punch are clamped to the unit interval, drag to non-negative', () => {
+        const pinned = applyPersistenceOverrides(computed, {
+            survivalPerSecond: 5,
+            motionScale: -2,
+            transientPunch: -1,
+        });
+
+        expect(pinned).toEqual({ survivalPerSecond: 1, motionScale: 0, transientPunch: 0 });
+    });
+
+    test('a non-finite pin is ignored rather than sent to the shader', () => {
+        // NaN reaching the accumulation blanks the frame, which looks exactly like the fault being
+        // hunted.
+        const pinned = applyPersistenceOverrides(computed, {
+            survivalPerSecond: Number.NaN,
+            motionScale: Number.POSITIVE_INFINITY,
+        });
+
+        expect(pinned.survivalPerSecond).toBe(computed.survivalPerSecond);
+        expect(pinned.motionScale).toBe(computed.motionScale);
+    });
+});
 
 describe('motion sources', () => {
     test('every field type a scene can produce drags the image', () => {

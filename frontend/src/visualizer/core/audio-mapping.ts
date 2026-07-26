@@ -14,7 +14,7 @@
  */
 
 import { bindingMode, type BindingRole, type ParameterBinding } from './bindings';
-import type { VisualPluginDefinition } from './plugin';
+import type { GraphNode } from './graph';
 import type { Rng } from './random';
 
 /**
@@ -44,6 +44,26 @@ export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
 
 /** Event channels an impulse binding fires from. Distribution never moves one onto a level. */
 const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat'];
+
+/**
+ * Every channel a binding may name, for an editor offering the choice.
+ *
+ * The role table plus the event channels plus the few continuous measures no role admits — a role
+ * exists to constrain what *distribution* may substitute, and choosing a feature by hand is not
+ * distribution. `beatConfidence` is the case in point: nothing should be moved onto it at random, and
+ * binding something to it deliberately is perfectly reasonable.
+ */
+export const BINDABLE_FEATURES: readonly string[] = [
+    ...new Set([
+        ...Object.values(ROLE_FEATURES).flat(),
+        ...IMPULSE_FEATURES,
+        'beatConfidence',
+    ]),
+].sort();
+
+export function isEventFeature(feature: string): boolean {
+    return IMPULSE_FEATURES.includes(feature);
+}
 
 /**
  * Whether a feature reads as a standing level or as a departure from one.
@@ -86,6 +106,8 @@ export function bindingRole(binding: ParameterBinding): BindingRole | undefined 
 }
 
 export interface DistributedBinding {
+    /** The instance these bindings belong to. Two instances of one definition are distinct here. */
+    instanceId: string;
     pluginId: string;
     bindings: ParameterBinding[];
 }
@@ -100,9 +122,14 @@ export interface DistributedBinding {
  * Features already claimed are avoided until a role's pool runs dry, at which point reuse is allowed
  * — a scene with more bindings in one role than that role has features cannot give each an exclusive
  * signal, but it can still avoid every binding sharing one.
+ *
+ * Distribution runs over instances rather than definitions. Keyed by definition, two instances of one
+ * plugin received one assignment between them: they bound the same parameter to the same feature and
+ * moved as one object, which is the concentration this function exists to break — and the scene had
+ * no way to tell them apart afterwards, because there was only one entry to look up.
  */
 export function distributeReactivity(
-    plugins: readonly VisualPluginDefinition[],
+    nodes: readonly GraphNode[],
     rng: Rng,
 ): DistributedBinding[] {
     const claimed = new Set<string>();
@@ -119,7 +146,8 @@ export function distributeReactivity(
         return feature;
     };
 
-    return plugins.map((definition) => ({
+    return nodes.map(({ instanceId, definition }) => ({
+        instanceId,
         pluginId: definition.id,
         bindings: (definition.defaultBindings ?? []).map((binding) => {
             // An impulse names an event channel. Rewriting it onto a continuous feature would leave
@@ -151,8 +179,8 @@ export function distributeReactivity(
 }
 
 /**
- * How many plugins share each feature. Used to check that a scene's reactivity is spread rather than
- * concentrated.
+ * How many instances share each feature. Used to check that a scene's reactivity is spread rather
+ * than concentrated.
  */
 export function reactivitySpread(distributed: readonly DistributedBinding[]): Map<string, number> {
     const spread = new Map<string, number>();
@@ -167,8 +195,8 @@ export function reactivitySpread(distributed: readonly DistributedBinding[]): Ma
 }
 
 /**
- * The largest number of plugins bound to any one feature. A scene where this equals the plugin count
- * is one where everything pulses together.
+ * The largest number of instances bound to any one feature. A scene where this equals the instance
+ * count is one where everything pulses together.
  */
 export function peakConcentration(distributed: readonly DistributedBinding[]): number {
     let peak = 0;

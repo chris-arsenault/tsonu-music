@@ -54,6 +54,20 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 - Detect section changes and publish them on the feature bus `sectionChange` channel, so the
   scheduler can drive branch mutation from musical structure.
 
+## Visualizer tooling
+
+- Draw a live thumbnail of each node's output in the scene graph editor, refreshed on a budgeted
+  rotation, so an empty branch is visible without inspecting nodes one at a time. See
+  [ADR-0010](./adr/0010-visualizer-authored-scene-graphs.md).
+- Add a bypass state to the editor distinct from mute, passing a node's input through to the output
+  of matching type so a stage can be removed from the chain without breaking what follows it.
+- Let curated scene documents ship in the catalog and be selected alongside generated scenes, giving
+  hand-tuned compositions to tracks that deserve them. See
+  [ADR-0010](./adr/0010-visualizer-authored-scene-graphs.md).
+- Compare two captured scene documents in the editor, highlighting the nodes, edges, parameters, and
+  bindings that differ, so a working scene and a broken one can be diffed directly.
+- Group nodes into named, collapsible regions in the editor, so a large graph can be read by branch.
+
 ## Visualizer platform reach
 
 - Evaluate future desktop Safari support by probing analysis on a throwaway hidden audio element
@@ -78,4 +92,3 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 
 - Bundle Tailwind through the Vite build, or replace its remaining usage with the project's own
   CSS, so `frontend/index.html` no longer loads it from a CDN.
-- Reduce `CLAUDE.md` to an `@AGENTS.md` import plus Claude-Code-specific overrides.

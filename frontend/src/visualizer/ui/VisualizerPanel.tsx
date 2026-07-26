@@ -15,8 +15,8 @@ import { createSimpleWaveform, type SimpleWaveform } from '../host/simple-wavefo
 import { isVisualizerDebugEnabled } from './debug-flag';
 import { useKernelReadout } from './use-kernel-readout';
 
-// Lazy, so the diagnostics UI is not carried by listeners who never open it.
-const DiagnosticsPanel = lazy(() => import('./DiagnosticsPanel'));
+// Lazy, so neither the editor nor React Flow is carried by listeners who never open it.
+const GraphEditorDock = lazy(() => import('./editor/GraphEditorDock'));
 
 export default function VisualizerPanel() {
     const player = useMusicPlayer();
@@ -94,7 +94,7 @@ export default function VisualizerPanel() {
 
     const modal = expanded ? (
         <div
-            className="visualizer-modal"
+            className={`visualizer-modal${showDiagnostics ? ' has-editor' : ''}`}
             role="dialog"
             aria-modal="true"
             aria-label="Visualizer"
@@ -145,9 +145,9 @@ export default function VisualizerPanel() {
                             className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
                             onClick={() => setShowDiagnostics((open) => !open)}
                             aria-pressed={showDiagnostics}
-                            title="Diagnostics"
+                            title="Graph editor and diagnostics"
                         >
-                            Diagnostics
+                            Editor
                         </button>
                     ) : null}
                     <button
@@ -160,19 +160,20 @@ export default function VisualizerPanel() {
                     </button>
                 </div>
 
-                {!unavailableMessage && showDiagnostics && readout ? (
-                    <Suspense fallback={null}>
-                        <DiagnosticsPanel
-                            readout={readout}
-                            faults={faults}
-                            controls={controls}
-                            onControls={setControls}
-                            handle={handle}
-                            onClose={() => setShowDiagnostics(false)}
-                        />
-                    </Suspense>
-                ) : null}
             </div>
+
+            {!unavailableMessage && showDiagnostics && readout ? (
+                <Suspense fallback={null}>
+                    <GraphEditorDock
+                        readout={readout}
+                        faults={faults}
+                        controls={controls}
+                        onControls={setControls}
+                        handle={handle}
+                        onClose={() => setShowDiagnostics(false)}
+                    />
+                </Suspense>
+            ) : null}
         </div>
     ) : null;
 

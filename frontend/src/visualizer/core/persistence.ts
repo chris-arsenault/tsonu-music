@@ -161,6 +161,42 @@ export function persistenceSettings(input: PersistenceInput): PersistenceSetting
     };
 }
 
+/**
+ * Values pinned against what the theme and the audio would otherwise decide.
+ *
+ * Every member is optional and an absent one is not pinned, because these are three separate
+ * questions: how long the image lasts, how far it is dragged, and how hard a hit punches through.
+ * Pinning survival to study a trail should not also freeze the drag.
+ */
+export type PersistenceOverrides = Partial<PersistenceSettings>;
+
+/**
+ * Applies pinned persistence values over the computed ones.
+ *
+ * The accumulation is where most of what the eye reads as motion actually happens, and it is
+ * computed from the theme, the layer stack and three audio channels at once — so asking whether a
+ * fault is in the accumulation means being able to hold it still while everything else keeps
+ * running. Non-finite pins are ignored rather than sent to the shader as `NaN`, which would blank
+ * the frame and look exactly like the bug being hunted.
+ */
+export function applyPersistenceOverrides(
+    settings: PersistenceSettings,
+    overrides: PersistenceOverrides | undefined,
+): PersistenceSettings {
+    if (!overrides) {
+        return settings;
+    }
+
+    const pin = (value: number | undefined, current: number): number =>
+        (typeof value === 'number' && Number.isFinite(value) ? value : current);
+
+    return {
+        survivalPerSecond: clamp01(pin(overrides.survivalPerSecond, settings.survivalPerSecond)),
+        motionScale: Math.max(0, pin(overrides.motionScale, settings.motionScale)),
+        transientPunch: clamp01(pin(overrides.transientPunch, settings.transientPunch)),
+    };
+}
+
 /** Smoothstep, so neither end of the persistence range is reached by a small change near the middle. */
 function curve(value: number): number {
     const clamped = clamp01(value);

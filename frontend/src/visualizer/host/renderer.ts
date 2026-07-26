@@ -9,11 +9,11 @@
 import type { CompiledGraph } from '../core/graph';
 import {
     advanceCrossfade,
-    blendForCharacter,
     composeLayers,
     createLayer,
     crossfadesBetween,
     isCrossfadeComplete,
+    layersForGraph,
     type Crossfade,
     type VisualLayer,
 } from '../core/layers';
@@ -42,7 +42,16 @@ import type { DiagnosticsControls } from '../core/diagnostics';
 import { buildFirstViableScene, variedThemeOrder } from '../core/scene-builder';
 import { compileGraph } from '../core/graph';
 import { distributeReactivity } from '../core/audio-mapping';
-import { createRng, freshSceneEntropy, type Rng } from '../core/random';
+import { createRng, freshSceneEntropy, instanceSeed, type Rng } from '../core/random';
+import {
+    resolveAuthoredScene,
+    type AuthoredProblem,
+    type AuthoredScene,
+} from '../core/authored-scene';
+import { captureScene } from '../core/scene-capture';
+import { applyLayerOverrides, type LayerOverride } from '../core/layers';
+import { applyPersistenceOverrides, type PersistenceOverrides } from '../core/persistence';
+import { setParameter } from '../core/authored-scene-edit';
 import {
     decideMutation,
     pickReplacement,
@@ -60,6 +69,8 @@ import { PRESENT_SHADER, PRESENT_SHADER_ID } from '../plugins/postprocess/tone-m
 import { createDevice, MAX_PIXEL_RATIO, type Device } from './device';
 import { createRuntime, type ActiveInstance, type RuntimeStats } from './runtime';
 import type { DistributedBinding } from '../core/audio-mapping';
+import type { ParameterBinding } from '../core/bindings';
+import type { VisualPluginDefinition } from '../core/plugin';
 
 export interface RendererFrame {
     clock: PlaybackClock;
@@ -74,6 +85,38 @@ export interface Renderer {
     renderFrame(frame: RendererFrame): RuntimeStats;
     /** Compile errors and shader failures, for the diagnostics overlay. */
     problems(): string[];
+    /**
+     * Puts a document in control of the graph.
+     *
+     * Instances the document keeps are kept, so editing one edge does not reset the simulations
+     * everywhere else. A document that does not resolve changes nothing and returns why.
+     */
+    setAuthoredScene(document: AuthoredScene): AuthoredProblem[];
+    /** Hands the scene back to the scheduler, starting a fresh one. */
+    clearAuthoredScene(profile: QualityProfile): boolean;
+    /** The document in control, or undefined when the scheduler has the scene. */
+    authoredScene(): AuthoredScene | undefined;
+    /** Freezes whatever is currently rendering into an editable document. */
+    captureCurrentScene(): AuthoredScene;
+    /** Why the last document did not resolve. Empty when it did. */
+    sceneProblems(): AuthoredProblem[];
+    /**
+     * Every live instance's resolved parameters, by node id.
+     *
+     * A snapshot rather than a stream: the readout is throttled, and a value the editor shows moving
+     * is worth far more than one it shows exactly.
+     */
+    liveParameters(): Record<string, Record<string, number>>;
+    /**
+     * Writes one parameter on one live instance.
+     *
+     * Takes effect on the next frame with nothing torn down, which is what lets a value be dragged
+     * while watching what it does. A bound parameter is resolved from its binding every frame, so
+     * writing one sets an initial condition the binding then moves away from.
+     */
+    setNodeParameter(nodeId: string, parameter: string, value: number): boolean;
+    /** Replaces what drives one live instance's parameters. No teardown. */
+    setNodeBindings(nodeId: string, bindings: readonly ParameterBinding[]): boolean;
     /** Rebuilds the current scene against changed assets or quality constraints. */
     rebuildCurrent(profile: QualityProfile): boolean;
     /** Discards the current scene and selects a fresh random one. */
@@ -203,7 +246,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         scene.parameterOverrides,
         scene.entropy,
     ).instances;
-    let layers = buildLayers(scene.graph);
+    let layers = layersForGraph(scene.graph);
     let crossfades: readonly Crossfade[] = [];
     runtime.setGraph(scene.graph, instances);
 
@@ -223,6 +266,15 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      */
     let gradeParameters: Record<string, number> = { ...COMPOSITE_PARAMETERS };
     let basePalette: ScenePalette = drawPalette();
+
+    /** The document in control of the graph, if any. Undefined while the scheduler owns the scene. */
+    let authored: AuthoredScene | undefined;
+    /** Why the last document did not resolve. Reported rather than logged, so the editor can show it. */
+    let sceneProblems: AuthoredProblem[] = [];
+    /** What drives the grade. A document may replace these exactly as it replaces a plugin's. */
+    let gradeBindings: readonly ParameterBinding[] = COMPOSITE_BINDINGS;
+    let persistenceOverrides: PersistenceOverrides | undefined;
+    let layerOverrides: Record<string, LayerOverride> | undefined;
 
     function colourStrength(theme: typeof scene.theme): number {
         return theme.colorPolicy?.strength ?? 0.75;
@@ -322,12 +374,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
     /** Re-runs reactivity distribution in place. No instance is torn down. */
     const redistribute = (rng: Rng): void => {
-        const bindings = distributeReactivity(scene.plugins, rng);
+        const bindings = distributeReactivity(scene.wired.nodes, rng);
         scene = { ...scene, bindings };
 
         for (const entry of instances) {
-            entry.bindings = bindings.find((candidate) => candidate.pluginId === entry.node.definition.id)?.bindings
-                ?? entry.node.definition.defaultBindings;
+            entry.bindings = bindingsFor(bindings, entry.instanceId, entry.node.definition);
         }
     };
 
@@ -435,6 +486,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     const applyBuild = (
         result: ReturnType<typeof buildFromEntropy>,
         preserveInstances = true,
+        seeds: Readonly<Record<string, number>> = {},
     ): boolean => {
         if (!result.ok) {
             // A failed rebuild is not a reason to stop rendering what already works.
@@ -453,6 +505,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             preserveInstances ? previousInstances : [],
             scene.parameterOverrides,
             scene.entropy,
+            seeds,
         );
         const departingInstances = preserveInstances ? rebuilt.retired : previousInstances;
 
@@ -510,7 +563,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         // drains a plugin's own simulation but does nothing about a new branch appearing at full
         // opacity in a single frame.
         const departingLayers = layers;
-        layers = buildLayers(scene.graph);
+        layers = layersForGraph(scene.graph);
         crossfades = crossfadesBetween(departingLayers, layers);
         runtime.setGraph(scene.graph, instances);
 
@@ -521,6 +574,64 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         }
 
         return true;
+    };
+
+    /**
+     * Puts a document in control, or reports why it cannot be.
+     *
+     * Goes through `applyBuild` like everything else, so instance reuse, retirement policies and
+     * crossfades all behave as they do for a scheduler rebuild: editing one edge keeps the particle
+     * state and feedback buffers of every node the edit did not touch. A document that does not
+     * resolve leaves the current scene rendering, because a half-drawn graph is the normal state of a
+     * graph being drawn and is no reason to blank the screen.
+     */
+    const applyAuthored = (document: AuthoredScene): AuthoredProblem[] => {
+        const resolved = resolveAuthoredScene(document, registry);
+        if (!resolved.ok) {
+            sceneProblems = resolved.problems;
+            return resolved.problems;
+        }
+
+        const built = resolved.scene;
+        const theme = themes.find((candidate) => candidate.id === built.themeId) ?? scene.theme;
+        const definitions = [...new Map(
+            built.nodes.map((node) => [node.definition.id, node.definition] as const),
+        ).values()];
+
+        const entropyChanged = built.entropy !== scene.entropy;
+        const applied = applyBuild({
+            ok: true,
+            scene: {
+                entropy: built.entropy,
+                theme,
+                plugins: definitions,
+                wired: built.wired,
+                graph: built.graph,
+                bindings: built.bindings,
+                parameterOverrides: built.parameters,
+            },
+        }, true, built.seeds);
+
+        if (!applied) {
+            return sceneProblems;
+        }
+
+        authored = document;
+        sceneProblems = [];
+
+        // A different document is a different scene, so it draws its own scheme — from its own
+        // entropy, which is why the entropy is in the document at all. Re-applying the same one after
+        // an edit leaves the palette and the grade's smoothing exactly where they were.
+        if (entropyChanged) {
+            refreshPalette();
+        }
+
+        gradeParameters = { ...gradeParameters, ...(document.kernel?.grade?.parameters ?? {}) };
+        gradeBindings = built.kernel.gradeBindings;
+        persistenceOverrides = built.kernel.persistence;
+        layerOverrides = built.kernel.layers;
+
+        return [];
     };
 
     return {
@@ -559,7 +670,12 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     }
                 }
 
-                const composedLayers = [...layers, ...retiringLayers()];
+                // Overridden before anything reads them, so a pinned blend mode or opacity reaches the
+                // feedback weighting below as well as the composite.
+                const composedLayers = applyLayerOverrides(
+                    [...layers, ...retiringLayers()],
+                    layerOverrides,
+                );
 
                 // A frozen clock passes zero delta, so a transition holds mid-fade rather than
                 // completing while paused.
@@ -571,19 +687,19 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 // resolved against the live bus, then the same role-aware slow modulation.
                 gradeParameters = resolveParameters(
                     gradeParameters,
-                    COMPOSITE_BINDINGS,
+                    gradeBindings,
                     frame.features,
                     frame.deltaSeconds,
                 );
                 const grade = modulateParameters(
                     gradeParameters,
-                    COMPOSITE_BINDINGS,
+                    gradeBindings,
                     frame.clock.playbackTime,
                     frame.features.continuous.transient,
                     0,
                 );
 
-                lastPersistence = persistenceSettings({
+                lastPersistence = applyPersistenceOverrides(persistenceSettings({
                     themePersistence:
                         scene.theme.targetCharacter?.persistence ?? DEFAULT_THEME_PERSISTENCE,
                     layerWeights: composeLayers(composedLayers).feedbackContributors
@@ -592,7 +708,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     rms: frame.features.continuous.rms,
                     transient: frame.features.continuous.transient,
                     reducedMotion: frame.profile.reducedMotion,
-                });
+                }), persistenceOverrides);
 
                 return runtime.renderFrame({
                     clock: frame.clock,
@@ -627,15 +743,106 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             },
 
             problems() {
-                return device.shaderErrors().map((error) => `${error.id}: ${error.message}`);
+                return [
+                    ...device.shaderErrors().map((error) => `${error.id}: ${error.message}`),
+                    ...sceneProblems.map((problem) => problem.detail),
+                ];
+            },
+
+            setAuthoredScene(document) {
+                return applyAuthored(document);
+            },
+
+            clearAuthoredScene(profile) {
+                authored = undefined;
+                sceneProblems = [];
+                gradeBindings = COMPOSITE_BINDINGS;
+                persistenceOverrides = undefined;
+                layerOverrides = undefined;
+
+                return applyBuild(buildFresh(profile), false);
+            },
+
+            authoredScene() {
+                return authored;
+            },
+
+            captureCurrentScene() {
+                return captureScene(scene);
+            },
+
+            sceneProblems() {
+                return sceneProblems;
+            },
+
+            liveParameters() {
+                return Object.fromEntries(
+                    instances.map((entry) => [entry.instanceId, { ...entry.parameters }]),
+                );
+            },
+
+            setNodeParameter(nodeId, parameter, value) {
+                const entry = instances.find((candidate) => candidate.instanceId === nodeId);
+                if (!entry || !Number.isFinite(value)) {
+                    return false;
+                }
+
+                // Written to the live instance, the scene record and the document at once, so what is
+                // rendering, what a rebuild would restore, and what an export would contain do not
+                // drift apart.
+                entry.parameters = { ...entry.parameters, [parameter]: value };
+                scene = {
+                    ...scene,
+                    parameterOverrides: {
+                        ...scene.parameterOverrides,
+                        [nodeId]: { ...scene.parameterOverrides[nodeId], [parameter]: value },
+                    },
+                };
+
+                if (authored) {
+                    authored = setParameter(authored, nodeId, parameter, value);
+                }
+
+                return true;
+            },
+
+            setNodeBindings(nodeId, bindings) {
+                const entry = instances.find((candidate) => candidate.instanceId === nodeId);
+                if (!entry) {
+                    return false;
+                }
+
+                const next = [...bindings];
+                entry.bindings = next;
+                scene = {
+                    ...scene,
+                    bindings: scene.bindings.map((candidate) => (
+                        candidate.instanceId === nodeId
+                            ? { ...candidate, bindings: next }
+                            : candidate
+                    )),
+                };
+
+                if (authored) {
+                    authored = {
+                        ...authored,
+                        nodes: authored.nodes.map((node) => (
+                            node.id === nodeId ? { ...node, bindings: next } : node
+                        )),
+                    };
+                }
+
+                return true;
             },
 
             rebuildCurrent(profile) {
-                return applyBuild(buildFromEntropy(scene.entropy, profile));
+                // A document owns the graph while it is in control; rebuilding from entropy would
+                // discard it and put the scheduler's scene back without anything having asked.
+                return authored ? applyAuthored(authored).length === 0 : applyBuild(buildFromEntropy(scene.entropy, profile));
             },
 
             newScene(profile) {
-                return applyBuild(buildFresh(profile), false);
+                return authored ? false : applyBuild(buildFresh(profile), false);
             },
 
             activeRecords() {
@@ -839,6 +1046,8 @@ function instantiate(
     previous: readonly ActiveInstance[] = [],
     overrides: Record<string, Record<string, number>> = {},
     sceneEntropy = '',
+    /** Identities the document has pinned. Anything absent is derived from the scene entropy. */
+    seeds: Readonly<Record<string, number>> = {},
 ): { instances: ActiveInstance[]; retired: ActiveInstance[] } {
     const reusable = new Map(previous.map((entry) => [entry.instanceId, entry]));
     const kept = new Set<string>();
@@ -853,8 +1062,7 @@ function instantiate(
             return {
                 ...existing,
                 node,
-                bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
-                    ?? definition.defaultBindings,
+                bindings: bindingsFor(bindings, node.instanceId, definition),
             };
         }
 
@@ -863,8 +1071,8 @@ function instantiate(
             node,
             definition,
             bindings,
-            overrides[definition.id],
-            sceneEntropy,
+            overrides[node.instanceId],
+            seeds[node.instanceId] ?? instanceSeed(sceneEntropy, node.instanceId),
         );
     });
 
@@ -880,13 +1088,12 @@ function createInstance(
     definition: CompiledGraph['order'][number]['definition'],
     bindings: readonly DistributedBinding[],
     overrides: Record<string, number> = {},
-    sceneEntropy = '',
+    seed = 0,
 ): ActiveInstance {
     {
-        const instanceSeed = seedFor(`${sceneEntropy}:${node.instanceId}`);
         const instance = definition.create({
             instanceId: node.instanceId,
-            seed: instanceSeed,
+            seed,
             registerShader: (source) => device.registerShader(source),
         });
 
@@ -898,75 +1105,29 @@ function createInstance(
 
         return {
             instanceId: node.instanceId,
-            seed: instanceSeed,
+            seed,
             instance,
             node,
             parameters: { ...(definition.parameters ?? {}), ...overrides },
             // The scheduler's redistributed bindings, so reactivity is spread rather than every plugin
             // reading the feature its author happened to pick.
-            bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
-                ?? definition.defaultBindings,
+            bindings: bindingsFor(bindings, node.instanceId, definition),
         };
     }
 }
 
 /**
- * The layer stack the compositor blends.
+ * The bindings for one instance, falling back to what its plugin ships.
  *
- * Every plugin producing a colour output that nothing else consumes becomes a layer, so a scene with two
- * parallel visual branches genuinely composites rather than presenting only the last one. Order follows
- * graph order, and a plugin whose material is meant to persist contributes to feedback in proportion to
- * its declared persistence.
+ * Matched by instance, so two instances of one definition hold the two distinct assignments
+ * distribution made for them. Matched by definition, both read the first entry and moved together.
  */
-function buildLayers(graph: CompiledGraph): VisualLayer[] {
-    const consumed = new Set<string>();
-    for (const node of graph.order) {
-        for (const resource of Object.values(node.inputs)) {
-            consumed.add(resource);
-        }
-    }
-
-    const layers: VisualLayer[] = [];
-
-    graph.order.forEach((node, index) => {
-        for (const port of node.definition.outputs) {
-            if (port.type !== 'color-texture') {
-                continue;
-            }
-
-            const resource = node.outputs[port.name];
-            // A resource something downstream reads is an intermediate, not a layer.
-            if (!resource || consumed.has(resource)) {
-                continue;
-            }
-
-            layers.push(createLayer(node.instanceId, resource, {
-                order: index,
-                // Chosen from what the plugin says it produces. Every layer above the base used to
-                // blend with `screen`, which is a lighten operator: parallel branches accumulated
-                // toward white and read as superposition rather than as interaction.
-                blendMode: layers.length === 0
-                    ? 'normal'
-                    : blendForCharacter(node.definition.character),
-                feedbackParticipation: node.definition.character.persistence,
-            }));
-        }
-    });
-
-    if (layers.length === 0 && graph.present) {
-        // Everything was consumed by something, so present the graph's own output.
-        layers.push(createLayer('output', graph.present, { order: 0 }));
-    }
-
-    return layers;
+function bindingsFor(
+    distributed: readonly DistributedBinding[],
+    instanceId: string,
+    definition: VisualPluginDefinition,
+): readonly ParameterBinding[] | undefined {
+    return distributed.find((entry) => entry.instanceId === instanceId)?.bindings
+        ?? definition.defaultBindings;
 }
 
-function seedFor(instanceId: string): number {
-    let hash = 2166136261;
-    for (let index = 0; index < instanceId.length; index += 1) {
-        hash ^= instanceId.charCodeAt(index);
-        hash = Math.imul(hash, 16777619);
-    }
-
-    return (hash >>> 0) / 4294967295;
-}

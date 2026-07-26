@@ -19,10 +19,25 @@ export interface DiagnosticsControls {
     disabledPlugins: readonly string[];
     /** Intermediate resource displayed instead of the composed output. */
     inspectResource?: string;
+    /**
+     * A document is in control of the graph.
+     *
+     * Holds the scene still in every way the scheduler and the ladder would otherwise move it: no
+     * mutation, no rebuild when the track changes, and no quality suppression. The last of those is
+     * the important one — the ladder drops whole plugins at level five and above, so a scene under
+     * study would lose the very node being examined the moment frame time slipped, and nothing on
+     * screen would say so.
+     */
+    authoring: boolean;
 }
 
 export function createDiagnosticsControls(): DiagnosticsControls {
-    return { freezeMutations: false, freezeSimulation: false, disabledPlugins: [] };
+    return {
+        freezeMutations: false,
+        freezeSimulation: false,
+        disabledPlugins: [],
+        authoring: false,
+    };
 }
 
 export function togglePluginDisabled(
