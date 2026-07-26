@@ -27,6 +27,8 @@ export type ShaderId = string;
 export type GeometryId = string;
 
 /** Identifies a texture in the graph: a plugin output, a feedback read, or an asset. */
+import type { PortType } from './plugin';
+
 export type ResourceId = string;
 
 export type Primitive =
@@ -159,4 +161,67 @@ export function isSuppressedByQuality(
     }
 
     return false;
+}
+
+/** The minimum a node needs to know about itself to be checked for reachability. */
+interface ReachableNode {
+    instanceId: string;
+    outputs: Record<string, ResourceId>;
+    inputs: Record<string, ResourceId>;
+    definition: { outputs: readonly { name: string; type: PortType }[] };
+}
+
+/**
+ * Instances whose work no longer reaches the screen once `skipped` are not run.
+ *
+ * The scene builder already prunes plugins that contribute to nothing, but quality suppression and
+ * the diagnostics controls remove plugins *after* assembly, one node at a time, leaving whatever fed
+ * them running into a buffer nobody reads. A particle simulator is the clearest case: its output is a
+ * particle buffer, never a colour texture, so with its renderer suppressed it produces no pixels at
+ * all while still costing a full simulation pass every frame — and the scene silently loses the
+ * element it was built around.
+ *
+ * A node survives if it still writes something terminal — a colour texture or a motion field that the
+ * kernel sums — or if anything still running reads one of its outputs.
+ */
+export function unreachableInstances(
+    order: readonly ReachableNode[],
+    skipped: ReadonlySet<string>,
+    isTerminalType: (type: PortType) => boolean,
+): Set<string> {
+    const dead = new Set(skipped);
+
+    // Repeated to a fixed point, because dropping one node can strand the node that fed it.
+    for (let pass = 0; pass < order.length; pass += 1) {
+        let changed = false;
+
+        for (const node of order) {
+            if (dead.has(node.instanceId)) {
+                continue;
+            }
+
+            const terminal = node.definition.outputs.some((port) =>
+                isTerminalType(port.type) && node.outputs[port.name] !== undefined);
+            if (terminal) {
+                continue;
+            }
+
+            const written = new Set(Object.values(node.outputs));
+            const readByLive = order.some((other) =>
+                !dead.has(other.instanceId)
+                && other.instanceId !== node.instanceId
+                && Object.values(other.inputs).some((resource) => written.has(resource)));
+
+            if (!readByLive) {
+                dead.add(node.instanceId);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            break;
+        }
+    }
+
+    return dead;
 }

@@ -5,6 +5,7 @@ import {
     passInputs,
     passOutputs,
     resolvePassScale,
+    unreachableInstances,
     type RenderPass,
 } from './passes';
 
@@ -85,5 +86,52 @@ describe('quality scaling', () => {
     test('a non-positive scale collapses to zero rather than going negative', () => {
         expect(resolvePassScale({ ...fullscreen, scale: -1 }, 1)).toBe(0);
         expect(resolvePassScale(fullscreen, 0)).toBe(0);
+    });
+});
+
+describe('suppression strands whatever fed the suppressed plugin', () => {
+    const isTerminal = (type: string) => type === 'color-texture' || type === 'vector-field';
+
+    /** field -> simulator -> renderer, the chain that made this visible. */
+    const CHAIN = [
+        {
+            instanceId: 'Field#0',
+            inputs: {},
+            outputs: { field: 'Field#0.field' },
+            definition: { outputs: [{ name: 'field', type: 'vector-field' }] },
+        },
+        {
+            instanceId: 'Simulator#1',
+            inputs: { force: 'Field#0.field' },
+            outputs: { state: 'Simulator#1.state' },
+            definition: { outputs: [{ name: 'state', type: 'particle-buffer' }] },
+        },
+        {
+            instanceId: 'Renderer#2',
+            inputs: { state: 'Simulator#1.state' },
+            outputs: { color: 'Renderer#2.color' },
+            definition: { outputs: [{ name: 'color', type: 'color-texture' }] },
+        },
+    ] as never;
+
+    test('nothing is stranded when the whole chain runs', () => {
+        expect([...unreachableInstances(CHAIN, new Set(), isTerminal as never)]).toEqual([]);
+    });
+
+    test('a suppressed renderer takes its simulator with it', () => {
+        // The simulator writes a particle buffer, which is never a colour texture, so with the
+        // renderer gone it produces no pixels at all — while still costing a full simulation pass
+        // every frame.
+        const dead = unreachableInstances(CHAIN, new Set(['Renderer#2']), isTerminal as never);
+
+        expect(dead.has('Simulator#1')).toBe(true);
+    });
+
+    test('a field that still reaches the motion bus survives its consumer', () => {
+        // Vector fields are summed by the kernel whether or not anything else reads them, so the
+        // field is terminal in its own right.
+        const dead = unreachableInstances(CHAIN, new Set(['Renderer#2']), isTerminal as never);
+
+        expect(dead.has('Field#0')).toBe(false);
     });
 });

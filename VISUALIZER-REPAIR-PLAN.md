@@ -17,7 +17,7 @@ judged once their inputs have a usable range.
 | 6 | Quality ladder recovery | 1.6 | done |
 | 7 | Particle lifetime, respawn, and emitters | 1.4 | done |
 | 8 | Particle legibility: seeding, size, trails, seam | 1.5, 1.12 | done |
-| 9 | Simulator/renderer wiring requirements | 2.6 | pending |
+| 9 | Simulator/renderer wiring requirements | 2.6 | done |
 | 10 | Composition reach: branch count, spectrum gain, injection | 1.8, 1.3, 1.11 | pending |
 | 11 | Sampler binding correctness | 1.9, 2.5, 2.13, 2.14 | pending |
 | 12 | Lifecycle: accumulation clear, context loss, activation, retirement | 2.3, 2.4, 2.7, 2.8 | pending |

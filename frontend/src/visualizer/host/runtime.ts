@@ -25,7 +25,12 @@ import {
 } from '../core/impact';
 import { mergeUniforms, resolveParameters } from '../core/parameters';
 import { modulateParameters } from '../core/modulation';
-import { isSuppressedByQuality, type RenderPass, type ResourceId } from '../core/passes';
+import {
+    isSuppressedByQuality,
+    unreachableInstances,
+    type RenderPass,
+    type ResourceId,
+} from '../core/passes';
 import type { QualityProfile } from '../core/performance';
 import {
     advanceAccumulationSlot,
@@ -297,19 +302,21 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 ? simulationDelta(frame.controls, frame.deltaSeconds)
                 : frame.deltaSeconds;
 
+            // Which plugins are not running this frame, decided before any of them run.
+            //
+            // A disabled plugin is skipped entirely, so its contribution disappears while everything
+            // downstream keeps running against whatever remains. Ladder rungs 5 to 7 drop whole
+            // plugins rather than reducing resolution.
+            const skipped = new Set<string>();
             for (const node of graph.order) {
-                const active = byInstance.get(node.instanceId);
-                if (!active) {
+                if (!byInstance.has(node.instanceId)) {
+                    skipped.add(node.instanceId);
                     continue;
                 }
-
-                // A disabled plugin is skipped entirely, so its contribution disappears while everything
-                // downstream keeps running against whatever remains.
                 if (frame.controls && isPluginDisabled(frame.controls, node.instanceId)) {
+                    skipped.add(node.instanceId);
                     continue;
                 }
-
-                // Ladder rungs 5 to 7 drop whole plugins rather than reducing resolution.
                 if (frame.profile && isSuppressedByQuality(
                     node.definition.capabilities,
                     node.definition.character.dominance,
@@ -317,6 +324,22 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     frame.profile,
                 )) {
                     stats.suppressedPlugins += 1;
+                    skipped.add(node.instanceId);
+                }
+            }
+
+            // Then whatever those leave stranded. Suppressing a particle renderer used to leave its
+            // simulator running into a buffer nobody reads: a full simulation pass every frame
+            // producing no pixels, since a particle buffer is never a colour texture.
+            const dead = unreachableInstances(
+                graph.order,
+                skipped,
+                (type) => type === 'color-texture' || isMotionSource(type),
+            );
+
+            for (const node of graph.order) {
+                const active = byInstance.get(node.instanceId);
+                if (!active || dead.has(node.instanceId)) {
                     continue;
                 }
 
