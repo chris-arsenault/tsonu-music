@@ -35,7 +35,7 @@ import {
     isMotionSource,
     type PersistenceSettings,
 } from '../core/persistence';
-import { liveKeys, planTargets, type RenderPlan } from '../core/render-plan';
+import { liveKeys, planTargets, withRetiringNodes, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
 import {
@@ -243,21 +243,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Retiring plugins' resources are planned alongside the live graph's, so a departing plugin
             // still has somewhere to draw while it finishes.
             const retiring = frame.retiring ?? [];
-            const planningGraph: CompiledGraph = retiring.length === 0
-                ? graph
-                : {
-                    ...graph,
-                    resources: [
-                        ...graph.resources,
-                        ...retiring.flatMap((entry) =>
-                            entry.active.node.definition.outputs.map((port) => ({
-                                id: entry.active.node.outputs[port.name],
-                                type: port.type,
-                                producedBy: entry.active.instanceId,
-                                port: port.name,
-                            }))),
-                    ],
-                };
+            const planningGraph = withRetiringNodes(graph, retiring.map((entry) => entry.active.node));
 
             const plan = planTargets(
                 planningGraph,

@@ -6,7 +6,7 @@
  * quality scaling are testable without a GL context.
  */
 
-import type { CompiledGraph } from './graph';
+import type { CompiledGraph, CompiledNode } from './graph';
 import type { PortType } from './plugin';
 import type { ResourceId } from './passes';
 
@@ -69,6 +69,45 @@ export const RESOURCE_SIZING: Partial<Record<PortType, { scale?: number; fixed?:
     // A palette is a strip of swatches, not an image.
     palette: { fixed: 64 },
 };
+
+/**
+ * Extends a graph with the resources of plugins that have left it but are still rendering.
+ *
+ * A retiring plugin draws into the resources it already owned, so the plan has to cover them. Its
+ * ping-pong slots have to come too: a departing feedback plugin planned with one buffer samples the
+ * texture it is writing, which the driver rejects outright. The draw is dropped and the branch
+ * renders nothing for the whole of its retirement — which, with mutation running every ten to
+ * eighteen seconds, is most of the time.
+ */
+export function withRetiringNodes(
+    graph: CompiledGraph,
+    retiring: readonly CompiledNode[],
+): CompiledGraph {
+    if (retiring.length === 0) {
+        return graph;
+    }
+
+    return {
+        ...graph,
+        resources: [
+            ...graph.resources,
+            ...retiring.flatMap((node) => node.definition.outputs.map((port) => ({
+                id: node.outputs[port.name],
+                type: port.type,
+                producedBy: node.instanceId,
+                port: port.name,
+            }))),
+        ],
+        // Whatever a retiring node reads as a previous frame needs two slots, exactly as it did while
+        // the node was still part of the graph.
+        pingPong: [
+            ...new Set([
+                ...graph.pingPong,
+                ...retiring.flatMap((node) => Object.values(node.previous)),
+            ]),
+        ],
+    };
+}
 
 export function planTargets(
     graph: CompiledGraph,

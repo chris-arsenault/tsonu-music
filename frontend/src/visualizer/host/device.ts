@@ -28,9 +28,23 @@ export interface RenderTarget {
     height: number;
 }
 
+/**
+ * A uniform's location together with the type the shader declared it as.
+ *
+ * The type is kept because the setter has to dispatch on what the *shader* says, not on what the
+ * JavaScript value happens to be. A boolean handed to a `float` uniform through `uniform1i` is
+ * `GL_INVALID_OPERATION`: the driver rejects the call, the uniform silently keeps its default, and
+ * the only symptom is a feature that quietly does nothing.
+ */
+export interface UniformSlot {
+    location: WebGLUniformLocation;
+    /** The GLSL type enum from `getActiveUniform`. */
+    type: number;
+}
+
 export interface Program {
     program: WebGLProgram;
-    uniforms: Map<string, WebGLUniformLocation>;
+    uniforms: Map<string, UniformSlot>;
     attributes: Map<string, number>;
 }
 
@@ -171,13 +185,13 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             return;
         }
 
-        const uniforms = new Map<string, WebGLUniformLocation>();
+        const uniforms = new Map<string, UniformSlot>();
         const uniformCount = gl!.getProgramParameter(program, gl!.ACTIVE_UNIFORMS) as number;
         for (let index = 0; index < uniformCount; index += 1) {
             const info = gl!.getActiveUniform(program, index);
             const location = info && gl!.getUniformLocation(program, info.name);
             if (info && location) {
-                uniforms.set(info.name, location);
+                uniforms.set(info.name, { location, type: info.type });
             }
         }
 
@@ -416,16 +430,29 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
 
         setUniforms(program, uniforms) {
             for (const [name, value] of Object.entries(uniforms)) {
-                const location = program.uniforms.get(name);
-                if (!location) {
+                const slot = program.uniforms.get(name);
+                if (!slot) {
                     continue;
                 }
 
-                if (typeof value === 'number') {
-                    gl.uniform1f(location, value);
-                } else if (typeof value === 'boolean') {
-                    gl.uniform1i(location, value ? 1 : 0);
-                } else if (value.length === 2) {
+                const location = slot.location;
+
+                // Scalars dispatch on the declared type rather than on the JavaScript one. A shader
+                // may express a flag as `bool` or as `float` and a caller should not have to know
+                // which: passing the wrong one is rejected outright and leaves the uniform unset.
+                if (typeof value === 'number' || typeof value === 'boolean') {
+                    const scalar = typeof value === 'boolean' ? (value ? 1 : 0) : value;
+
+                    if (slot.type === gl.BOOL || slot.type === gl.INT) {
+                        gl.uniform1i(location, Math.round(scalar));
+                    } else {
+                        gl.uniform1f(location, scalar);
+                    }
+
+                    continue;
+                }
+
+                if (value.length === 2) {
                     gl.uniform2fv(location, value as number[]);
                 } else if (value.length === 3) {
                     gl.uniform3fv(location, value as number[]);
@@ -442,7 +469,7 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
         },
 
         bindTexture(program, sampler, texture, unit) {
-            const location = program.uniforms.get(sampler);
+            const location = program.uniforms.get(sampler)?.location;
             if (!location) {
                 return;
             }

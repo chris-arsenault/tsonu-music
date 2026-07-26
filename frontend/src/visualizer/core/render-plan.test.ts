@@ -4,8 +4,9 @@ import {
     liveKeys,
     planTargets,
     targetKey,
+    withRetiringNodes,
 } from './render-plan';
-import type { CompiledGraph } from './graph';
+import type { CompiledGraph, CompiledNode } from './graph';
 
 function graph(overrides: Partial<CompiledGraph> = {}): CompiledGraph {
     return {
@@ -142,5 +143,72 @@ describe('pool bookkeeping', () => {
         const withFeedback = estimateTargetMemory(planTargets(graph({ pingPong: ['b.color'] }), 100, 100, 1, 0));
 
         expect(withFeedback).toBe(plain + 100 * 100 * 8);
+    });
+});
+
+/**
+ * A plugin that has left the graph keeps rendering until its deactivation policy finishes, into the
+ * resources it already owned. Planning has to cover those — including their ping-pong slots.
+ */
+describe('retiring nodes in the plan', () => {
+    const node = (instanceId: string, feedback: boolean): CompiledNode => ({
+        instanceId,
+        definition: {
+            id: instanceId.split('#')[0],
+            version: 1,
+            category: 'transformer',
+            inputs: [],
+            outputs: [{ name: 'color', type: 'color-texture', required: false }],
+            capabilities: feedback ? ['feedback'] : [],
+            cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+            character: {
+                visualDensity: 0.5, motionEnergy: 0.5, geometricOrder: 0.5,
+                recognizability: 0.5, persistence: 0.5, brightness: 0.5, dominance: 'either',
+            },
+            activationRules: { activationWeight: 1 },
+            create: () => ({
+                initialize: () => undefined, activate: () => undefined, update: () => undefined,
+                render: () => [], deactivate: () => undefined, destroy: () => undefined,
+            }),
+        },
+        inputs: {},
+        outputs: { color: `${instanceId}.color` },
+        previous: feedback ? { history: `${instanceId}.color` } : {},
+    });
+
+    const live: CompiledGraph = {
+        order: [],
+        resources: [{ id: 'a.color', type: 'color-texture', producedBy: 'a', port: 'color' }],
+        pingPong: [],
+        present: 'a.color',
+    };
+
+    test('a graph with nothing retiring is returned unchanged', () => {
+        expect(withRetiringNodes(live, [])).toBe(live);
+    });
+
+    test('a retiring node contributes its resources', () => {
+        const extended = withRetiringNodes(live, [node('Old:mode#3', false)]);
+
+        expect(extended.resources.map((entry) => entry.id))
+            .toEqual(['a.color', 'Old:mode#3.color']);
+    });
+
+    test('a retiring feedback node keeps two slots, so it does not sample what it writes', () => {
+        // Planned with one buffer, the read and write keys collapse to the same texture. The driver
+        // rejects that draw, so the departing branch renders nothing for its whole retirement.
+        const retiring = node('Feedback:vortex#3', true);
+        const plan = planTargets(withRetiringNodes(live, [retiring]), 800, 600, 1, 0);
+
+        expect(plan.writeKeys['Feedback:vortex#3.color'])
+            .not.toBe(plan.readKeys['Feedback:vortex#3.color']);
+    });
+
+    test('a live ping-pong resource is not lost when something retires', () => {
+        const withLoop: CompiledGraph = { ...live, pingPong: ['a.color'] };
+        const extended = withRetiringNodes(withLoop, [node('Feedback:vortex#3', true)]);
+
+        expect(extended.pingPong).toContain('a.color');
+        expect(extended.pingPong).toContain('Feedback:vortex#3.color');
     });
 });
