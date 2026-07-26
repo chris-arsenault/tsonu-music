@@ -1,4 +1,4 @@
-# 0011 — The graph editor canvas is React Flow, carried only by debug sessions
+# 0011 — The graph editor canvas is React Flow, mounted only by the Visualizer Lab
 
 - Status: Accepted
 - Date: 2026-07-26
@@ -18,14 +18,13 @@ the Node environment — so anything requiring a live DOM, `ResizeObserver`, or 
 cannot be covered by the existing test style. And the visualizer is a dynamic chunk that costs a
 listener nothing until they open it, a property the editor must not spend.
 
-The editor is a development instrument. It is reached through the existing `?viz-debug=1` flag and is
-never part of ordinary playback.
+The editor is a development instrument. It is mounted by the checked-in `frontend/devlab` entry and
+is never imported or exposed by the public player.
 
 ## Decision
 
-`@xyflow/react` provides the canvas. It is imported only from modules behind a `lazy()` boundary that
-is itself gated on `isVisualizerDebugEnabled()`, so it forms its own chunk and a listener who never
-sets the flag never fetches it.
+`@xyflow/react` provides the canvas. The Lab imports the editor directly; the public
+`VisualizerPanel` has no dependency edge to the editor or React Flow.
 
 Its stylesheet is imported through Vite's `?inline` query and injected into a `<style>` element when
 the editor mounts, so it stays out of the single entry stylesheet.
@@ -46,8 +45,9 @@ typing, parameter widgets, and every edit operation are ours; `isValidConnection
 
 ## Consequences
 
-`@xyflow/react` is a runtime dependency rather than a development one, because application code
-imports it. It is built, hashed, and deployed as a chunk that ordinary playback never requests.
+`@xyflow/react` is a runtime dependency rather than a development one because the Lab executes it in
+the browser. The public Vite entry does not reach it, so it is absent from the deployed application
+graph.
 
 React Flow's own components cannot be rendered by `renderToStaticMarkup`, so node bodies are written
 as presentational components that take plain props and render without a React Flow context. They are

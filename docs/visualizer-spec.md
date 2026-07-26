@@ -2130,8 +2130,8 @@ Debug controls should support:
 
 ## 23.1 Scene Graph Editor
 
-A development-only node editor, reached through the debug flag, docked below the visualizer surface
-and driving the running kernel.
+A development-only node editor, mounted only by the checked-in Visualizer Lab, docked below its
+visualizer surface and driving its running kernel. The public player neither imports nor exposes it.
 
 The editor presents a scene as a node graph following ComfyUI conventions: typed sockets, dragged
 links, widgets that promote to inputs, and a searchable node catalog. It should show:

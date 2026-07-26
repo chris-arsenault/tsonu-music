@@ -35,6 +35,7 @@ DNS records for the three `tsonu.com` hostnames live in the `tsonu.com.` Route53
 ## Build and deploy
 
 - **Local dev**: `cd frontend && pnpm install && pnpm dev` → http://localhost:3000
+- **Visualizer Lab**: `cd frontend && pnpm dev:visualizer` → http://127.0.0.1:26010
 - **Local build**: `cd frontend && pnpm run build` -> `frontend/build/`
 - **Backend tests**: `cd backend && cargo test --lib`
 - **Migrations**: `db-migrate` applies `db/migrations` through the shared Ahara migration role.
@@ -72,7 +73,7 @@ and Rust Lambda artifacts under `backend/`.
   is configured with a single `ENTRY_CSS`. Do not add a second entry stylesheet.
 - **Every scene reaches the screen through `compileGraph`.** An authored graph may skip the scene
   grammar; it may not skip port typing, required inputs, or cycle declaration. The graph editor is
-  development-only, gated on `?viz-debug=1`, and never enters an ordinary playback session. See
+  mounted only by the checked-in Visualizer Lab; the public player must not import or expose it. See
   [ADR-0010](./docs/adr/0010-visualizer-authored-scene-graphs.md) and
   [ADR-0011](./docs/adr/0011-visualizer-graph-editor-canvas.md).
 - **Do not commit runtime catalog data.** RDS is the source of truth for releases, songs,

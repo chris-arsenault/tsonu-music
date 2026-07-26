@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "dev": "vite",
+    "dev:visualizer": "vite --config devlab/vite.config.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "lint": "eslint .",

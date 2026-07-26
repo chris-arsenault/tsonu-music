@@ -12,4 +12,4 @@
 | [0008](0008-visualizer-motion-field-bus.md) | Spatial fields sum into one motion field that drags the accumulation | Accepted | 2026-07-25 |
 | [0009](0009-visualizer-assets-as-producers.md) | Scene selection treats a loaded asset as a producer | Accepted | 2026-07-25 |
 | [0010](0010-visualizer-authored-scene-graphs.md) | Authored scene graphs bypass the scene grammar, never the graph compiler | Accepted | 2026-07-26 |
-| [0011](0011-visualizer-graph-editor-canvas.md) | The graph editor canvas is React Flow, carried only by debug sessions | Accepted | 2026-07-26 |
+| [0011](0011-visualizer-graph-editor-canvas.md) | The graph editor canvas is React Flow, mounted only by the Visualizer Lab | Accepted | 2026-07-26 |

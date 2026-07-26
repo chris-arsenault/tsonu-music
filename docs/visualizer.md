@@ -14,10 +14,16 @@ artwork remains the only album thumbnail. Opening the modal starts the kernel; c
 kernel. Chromium and Firefox show the button because they can switch to the required hls.js playback
 path. Safari remains on native HLS and does not offer the visualizer.
 
-An **Editor** button in the modal's top-right corner opens a dock below the canvas, which shrinks to
-make room for it. `?viz-debug=1` opens the dock immediately on load. It reports on the kernel the
-modal is running rather than starting one of its own, and it carries three tabs: the scene graph,
-the audio feature meters, and the playback, performance and GPU readouts.
+The public modal has no graph editor or debug-query access. Authoring is confined to the checked-in
+Visualizer Lab so development instruments and React Flow never enter the public application graph.
+
+## Visualizer Lab and editor
+
+Run `cd frontend && pnpm dev:visualizer`, then open <http://127.0.0.1:26010> and click **Start**. The
+Lab drives the kernel against local music without the public player, HLS switching, or availability
+gate. Its editor opens below the canvas and carries three tabs: the scene graph, the audio feature
+meters, and the playback, performance and GPU readouts. Only `frontend/devlab/audio/` is ignored;
+the Lab itself is checked in.
 
 **Capture scene** freezes what is rendering into a scene document and hands the graph to it. While a
 document is in control the scene holds still — the scheduler neither mutates nor rebuilds it, and the
@@ -68,7 +74,8 @@ build is refused rather than misread, and one from an older build is migrated.
 | `core/` | Pure decision logic over plain data, unit-tested in the Node environment |
 | `host/` | Web Audio, WebGL2 device, frame loop; gathers state and applies core decisions |
 | `plugins/` | The plugin catalog, one directory per category |
-| `ui/` | React surface in the player, plus the graph editor dock in `ui/editor/` |
+| `ui/` | Public React surface, plus editor components in `ui/editor/` mounted only by the Lab |
+| `../devlab/` | Checked-in Visualizer Lab and the sole editor entry point; local music is ignored |
 
 The whole subsystem loads as a dynamic chunk on first activation and is absent from the initial
 player bundle.

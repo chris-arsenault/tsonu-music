@@ -3,14 +3,15 @@
 A ComfyUI-convention node editor, docked below the visualizer canvas, that presents the running scene
 as a graph and drives it live. It exists to make the visualizer debuggable: capture whatever the
 scheduler put on screen, freeze it, see the whole graph including the parts no view shows today, and
-change one thing at a time while it renders. Development-only, behind `?viz-debug=1`. Authored graphs
-do not reach ordinary playback; the document format is versioned and committable so that path stays
-additive.
+change one thing at a time while it renders. Development-only, mounted by the checked-in
+`frontend/devlab` harness and nowhere in the public player. Authored graphs do not reach ordinary
+playback; the document format is versioned and committable so that path stays additive.
 
 ## Confirmed decisions
 
-- The canvas is `@xyflow/react`, lazily imported behind the debug flag, its stylesheet injected at
-  mount through Vite's `?inline` query. See [ADR-0011](./docs/adr/0011-visualizer-graph-editor-canvas.md).
+- The canvas is `@xyflow/react`, imported only by the Visualizer Lab entry, its stylesheet injected
+  at mount through Vite's `?inline` query. See
+  [ADR-0011](./docs/adr/0011-visualizer-graph-editor-canvas.md).
 - An `AuthoredScene` document resolves through `compileGraph` and nothing else. The scene grammar,
   minimum scene size, minimum material branches, and contribution pruning do not apply. Port typing,
   required inputs, and cycle declaration do. See [ADR-0010](./docs/adr/0010-visualizer-authored-scene-graphs.md).
@@ -67,8 +68,8 @@ Requirements: [spec section 23.1](./docs/visualizer-spec.md). Reserved home:
   dock subscribes and writes to refs, and the readout runs at 20 Hz. The editor shares the main
   thread with the kernel; it must not be what makes a frame late. See
   [ADR-0004](./docs/adr/0004-visualizer-playback-supremacy.md).
-- **Nothing authored reaches ordinary playback.** The dock and everything it imports sit behind
-  `lazy()` gated on `isVisualizerDebugEnabled()`.
+- **Nothing authored reaches ordinary playback.** The dock is mounted only from
+  `frontend/devlab/main.ts`; `VisualizerPanel` must not import it or expose editor access.
 - **Every scene reaches the screen through `compileGraph`.** Skipping the grammar is deliberate;
   skipping the compiler is not.
 

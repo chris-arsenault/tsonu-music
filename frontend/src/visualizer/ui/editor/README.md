@@ -1,8 +1,8 @@
 # Scene graph editor
 
 The visualizer's node editor: a docked surface below the canvas that presents the running scene as a
-graph and drives it. Development only — reached through `?viz-debug=1`, lazily imported, and absent
-from an ordinary playback session.
+graph and drives it. Development only — mounted exclusively by the checked-in `frontend/devlab`
+entry and absent from the public player dependency graph.
 
 This directory holds presentation only. The document model, its edit operations, resolution against
 the plugin registry, graph layout, what the canvas draws, and what each gesture means are pure modules
@@ -18,5 +18,5 @@ Two rules shape what may be written here:
   props, so `renderToStaticMarkup` covers them in the Node test environment. Only the canvas that
   hosts them depends on the library.
 - **React Flow's stylesheet is injected at mount**, imported through Vite's `?inline` query. The
-  production build publishes a single stylesheet and a debug surface does not join it. See
+  public production build publishes a single stylesheet and does not import this surface. See
   [ADR-0011](../../../../../docs/adr/0011-visualizer-graph-editor-canvas.md).

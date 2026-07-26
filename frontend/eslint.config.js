@@ -9,7 +9,7 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.{ts,tsx}'],
+    files: ['src/**/*.{ts,tsx}', 'devlab/**/*.{ts,tsx}'],
     languageOptions: {
       ecmaVersion: 'latest',
       sourceType: 'module',
@@ -21,6 +21,17 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
       'no-unused-vars': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+  {
+    files: ['src/visualizer/ui/VisualizerPanel.tsx'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [{
+          group: ['./editor/**'],
+          message: 'The graph editor is owned by frontend/devlab and must not enter the public app graph.',
+        }],
+      }],
     },
   },
 );

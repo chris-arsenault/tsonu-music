@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Visualizer lab</title>
+        <style>
+            :root { color-scheme: dark; }
+            * { box-sizing: border-box; }
+
+            body {
+                margin: 0;
+                background: #08080b;
+                color: #d8d8e0;
+                font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+                display: grid;
+                grid-template-columns: 1fr 320px;
+                grid-template-rows: minmax(0, 1fr) auto;
+                height: 100vh;
+                overflow: hidden;
+            }
+
+            /* Pure black behind the canvas: a washed-out frame is only obvious against true black. */
+            main {
+                position: relative;
+                grid-column: 1;
+                grid-row: 1;
+                min-height: 0;
+                background: #000;
+                overflow: hidden;
+            }
+            canvas { display: block; width: 100%; height: 100%; }
+
+            /* The kernel builds an AudioContext, which a browser only lets start from a gesture. */
+            #start {
+                position: absolute;
+                inset: 0;
+                margin: auto;
+                width: 160px;
+                height: 52px;
+                font-size: 15px;
+                letter-spacing: 0.1em;
+                text-transform: uppercase;
+                background: #16161c;
+                border: 1px solid #4a4a5a;
+            }
+
+            #lab-panel {
+                grid-column: 2;
+                grid-row: 1 / -1;
+                border-left: 1px solid #24242c;
+                padding: 14px;
+                overflow-y: auto;
+                display: flex;
+                flex-direction: column;
+                gap: 14px;
+            }
+
+            #editor-root {
+                grid-column: 1;
+                grid-row: 2;
+                min-width: 0;
+            }
+
+            #editor-root:empty {
+                display: none;
+            }
+
+            h1 { font-size: 13px; margin: 0; letter-spacing: 0.08em; text-transform: uppercase; color: #8a8a99; }
+            h2 { font-size: 11px; margin: 0 0 6px; letter-spacing: 0.08em; text-transform: uppercase; color: #6a6a7a; }
+
+            .row { display: flex; gap: 6px; flex-wrap: wrap; }
+
+            button, select {
+                background: #16161c;
+                color: #d8d8e0;
+                border: 1px solid #2c2c36;
+                border-radius: 4px;
+                padding: 6px 10px;
+                font: inherit;
+                cursor: pointer;
+            }
+            button:hover, select:hover { border-color: #4a4a5a; }
+            button[aria-pressed='true'] { background: #2a2a38; border-color: #5a5a72; }
+            select { width: 100%; cursor: default; }
+
+            audio { width: 100%; }
+
+            dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+            dt { color: #6a6a7a; }
+            dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+            ul { margin: 0; padding: 0; list-style: none; }
+            li { color: #9a9aa8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+            .meters { display: grid; gap: 3px; }
+            .meter { display: grid; grid-template-columns: 62px 1fr; gap: 8px; align-items: center; }
+            .meter span { color: #6a6a7a; }
+            .meter i { display: block; height: 7px; background: #1c1c24; border-radius: 2px; overflow: hidden; }
+            .meter i::after {
+                content: '';
+                display: block;
+                height: 100%;
+                width: var(--v, 0%);
+                background: linear-gradient(90deg, #3a6ea5, #7ad1c0);
+            }
+
+            .warn { color: #d99; }
+        </style>
+    </head>
+    <body>
+        <main>
+            <canvas id="stage"></canvas>
+            <button id="start" type="button">Start</button>
+        </main>
+
+        <aside id="lab-panel">
+            <h1>Visualizer lab</h1>
+
+            <section>
+                <h2>Audio</h2>
+                <select id="track"></select>
+                <audio id="player" controls loop></audio>
+                <div class="row" style="margin-top: 6px">
+                    <button id="new-scene">New scene</button>
+                    <button id="freeze" aria-pressed="false">Freeze</button>
+                    <button id="artwork" aria-pressed="false">Artwork</button>
+                    <button id="reduced" aria-pressed="false">Reduced motion</button>
+                    <button id="editor-toggle" aria-pressed="true">Editor</button>
+                </div>
+            </section>
+
+            <section>
+                <h2>Inspect</h2>
+                <select id="inspect"><option value="">composed output</option></select>
+            </section>
+
+            <section>
+                <h2>Composite</h2>
+                <dl id="composite"></dl>
+            </section>
+
+            <section>
+                <h2>Features</h2>
+                <div class="meters" id="meters"></div>
+            </section>
+
+            <section>
+                <h2>Scene</h2>
+                <ul id="plugins"></ul>
+            </section>
+
+            <section>
+                <h2>Problems</h2>
+                <ul id="problems"></ul>
+            </section>
+        </aside>
+
+        <div id="editor-root" aria-live="polite"></div>
+
+        <script type="module" src="./main.ts"></script>
+    </body>
+</html>

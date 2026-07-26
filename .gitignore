@@ -41,5 +41,5 @@ pnpm-debug.log*
 # frontend/public/masks/ and committed there. Raw renders are regenerable from the pack.
 assets/*/output/
 
-# Dev-only visualizer harness: local audio and a scratch page, never built or deployed.
-frontend/devlab/
+# Visualizer Lab music is local test material; the Lab itself is checked in.
+frontend/devlab/audio/

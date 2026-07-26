@@ -14,7 +14,10 @@ initial player bundle.
 | [`core/`](./core) | Pure decision logic over plain data — clock, features, graph, scheduler, performance |
 | [`host/`](./host) | Web Audio, WebGL2 device, and frame loop; gathers host state, applies core decisions |
 | [`plugins/`](./plugins) | Plugin catalog, one directory per category |
-| [`ui/`](./ui) | React surface in the player, plus the graph editor dock in [`ui/editor/`](./ui/editor) |
+| [`ui/`](./ui) | Public React surface, plus editor components mounted only by `frontend/devlab` |
+
+The graph editor is a development instrument owned by the checked-in Visualizer Lab. The public
+player must not import or expose it.
 
 ## Rules
 

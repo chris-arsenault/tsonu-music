@@ -71,7 +71,7 @@ import {
  *
  * Built here rather than passed in: the plugin definitions are already in this chunk's graph because
  * the kernel loaded them, and threading a registry through the player would put the whole catalog in
- * the panel's chunk for the sake of a surface behind a debug flag.
+ * the public panel's chunk for the sake of a surface mounted only by the Lab.
  */
 const REGISTRY = createM1Registry();
 

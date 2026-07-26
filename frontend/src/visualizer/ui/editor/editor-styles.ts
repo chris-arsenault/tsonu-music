@@ -1,11 +1,9 @@
 /**
  * The editor's stylesheet, injected at mount rather than bundled.
  *
- * The production build publishes a single stylesheet because the `website` module is configured with
- * one `ENTRY_CSS` value, so a normal CSS import from this module — lazily chunked though the module
- * is — would still land React Flow's stylesheet and all of the below in the file every visitor
- * downloads, for a surface almost none of them will open. Imported as text and injected on mount, it
- * costs a listener nothing. See ADR-0011.
+ * The public production build publishes a single stylesheet because the `website` module is
+ * configured with one `ENTRY_CSS` value. The editor is mounted only by the Lab, and importing its
+ * stylesheet as text keeps that development-only boundary explicit. See ADR-0011.
  */
 
 import { useEffect } from 'react';
@@ -45,22 +43,6 @@ export const CATEGORY_COLOURS: Readonly<Record<string, string>> = {
 };
 
 const EDITOR_CSS = `
-.visualizer-modal.has-editor {
-    flex-direction: column;
-    align-items: stretch;
-    padding: 1rem 1rem 0;
-    gap: 0.75rem;
-}
-
-.visualizer-modal.has-editor .visualizer-modal__frame {
-    flex: 1 1 auto;
-    min-height: 0;
-    width: auto;
-    max-width: 100%;
-    max-height: none;
-    align-self: center;
-}
-
 .viz-editor {
     display: flex;
     flex-direction: column;

@@ -5,31 +5,26 @@
  * it closes, so a listener who never opens it pays no GPU or main-thread cost at all.
  */
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMusicPlayer } from '../../music/MusicPlayerContext';
 import { collectFaults, describeFault, describeTier, selectTier, tierNeedsGpu } from '../core/fallback';
-import { createDiagnosticsControls, type DiagnosticsControls } from '../core/diagnostics';
+import { createDiagnosticsControls } from '../core/diagnostics';
 import { describeUnavailableReason } from '../host/capabilities';
 import { createSimpleWaveform, type SimpleWaveform } from '../host/simple-waveform';
-import { isVisualizerDebugEnabled } from './debug-flag';
 import { useKernelReadout } from './use-kernel-readout';
 
-// Lazy, so neither the editor nor React Flow is carried by listeners who never open it.
-const GraphEditorDock = lazy(() => import('./editor/GraphEditorDock'));
+const PUBLIC_CONTROLS = createDiagnosticsControls();
 
 export default function VisualizerPanel() {
     const player = useMusicPlayer();
     const [expanded, setExpanded] = useState(false);
     const [glCanvas, setGlCanvas] = useState<HTMLCanvasElement | null>(null);
     const [fallbackCanvas, setFallbackCanvas] = useState<HTMLCanvasElement | null>(null);
-    // `?viz-debug=1` opens it immediately; otherwise it is one click away inside the modal.
-    const [showDiagnostics, setShowDiagnostics] = useState(() => isVisualizerDebugEnabled());
-    const [controls, setControls] = useState<DiagnosticsControls>(createDiagnosticsControls);
 
-    // The kernel runs only while the modal is open. The diagnostics panel reports on this one rather
-    // than starting a second.
-    const { availability, readout, handle } = useKernelReadout(
+    // The public kernel runs only while the modal is open. Authoring and diagnostics controls belong
+    // to the checked-in Visualizer Lab, never to this playback surface.
+    const { availability, readout } = useKernelReadout(
         {
             getAudioElement: player.getAudioElement,
             playbackEngine: player.playbackEngine,
@@ -38,7 +33,7 @@ export default function VisualizerPanel() {
             canvas: glCanvas,
             getBufferHealth: player.getBufferHealth,
             artworkSrc: player.artworkSrc,
-            controls,
+            controls: PUBLIC_CONTROLS,
         },
         expanded,
     );
@@ -94,7 +89,7 @@ export default function VisualizerPanel() {
 
     const modal = expanded ? (
         <div
-            className={`visualizer-modal${showDiagnostics ? ' has-editor' : ''}`}
+            className="visualizer-modal"
             role="dialog"
             aria-modal="true"
             aria-label="Visualizer"
@@ -139,17 +134,6 @@ export default function VisualizerPanel() {
                 )}
 
                 <div className="visualizer-modal__chrome">
-                    {!unavailableMessage ? (
-                        <button
-                            type="button"
-                            className={`visualizer-modal__button${showDiagnostics ? ' is-active' : ''}`}
-                            onClick={() => setShowDiagnostics((open) => !open)}
-                            aria-pressed={showDiagnostics}
-                            title="Graph editor and diagnostics"
-                        >
-                            Editor
-                        </button>
-                    ) : null}
                     <button
                         type="button"
                         className="visualizer-modal__button"
@@ -161,19 +145,6 @@ export default function VisualizerPanel() {
                 </div>
 
             </div>
-
-            {!unavailableMessage && showDiagnostics && readout ? (
-                <Suspense fallback={null}>
-                    <GraphEditorDock
-                        readout={readout}
-                        faults={faults}
-                        controls={controls}
-                        onControls={setControls}
-                        handle={handle}
-                        onClose={() => setShowDiagnostics(false)}
-                    />
-                </Suspense>
-            ) : null}
         </div>
     ) : null;
 
