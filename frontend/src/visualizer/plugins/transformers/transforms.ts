@@ -422,6 +422,17 @@ export function createTilingTransform(
         fragment: TILING_FRAGMENT,
         uniforms: { uMode: TILING_MODES.indexOf(mode), uRepeat: 3 },
         parameters: { repeat: 3 },
+        bindings: [{
+            // The lattice count. Left static this transform produced one fixed tiling for as long as
+            // it was on screen.
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'repeat',
+            outputRange: [2, 6],
+            attack: 0.6,
+            release: 1.5,
+            curve: 'smooth',
+        }],
         character: character({ geometricOrder: 0.85, visualDensity: 0.75, motionEnergy: 0.25 }),
         activationWeight: 0.9,
         minimumDuration: 12,
@@ -471,7 +482,17 @@ export function createShockwaveTransform(
         uniforms: { uMode: SHOCKWAVE_MODES.indexOf(mode), uAmount: 1, uRadius: 0.3, uCentre: [0.5, 0.5] },
         parameters: { amount: 1, radius: 0.3 },
         bindings: [{
+            feature: 'onset',
+            role: 'burst',
+            mode: 'impulse',
+            parameter: 'amount',
+            outputRange: [0.2, 1.8],
+            attack: 0.01,
+            release: 0.3,
+            curve: 'sqrt',
+        }, {
             feature: 'spectralFlux',
+            role: 'burst',
             parameter: 'radius',
             outputRange: [0.05, 0.85],
             attack: 0.02,

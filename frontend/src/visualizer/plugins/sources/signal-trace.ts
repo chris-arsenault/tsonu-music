@@ -174,6 +174,15 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
         parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4 },
         defaultBindings: [
             {
+                feature: 'rmsExcite',
+                role: 'intensity',
+                parameter: 'thickness',
+                outputRange: [1.2, 3.8],
+                attack: 0.06,
+                release: 0.4,
+                curve: 'sqrt',
+            },
+            {
                 feature: 'rms',
                 parameter: 'amplitude',
                 outputRange: [0.15, 0.85],

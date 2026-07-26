@@ -202,7 +202,17 @@ export function createAlbumArtSource(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1, requiredAssets: ['album-art'], minimumDuration: 10 },
         parameters: { opacity: 1, zoom: 1 },
-        defaultBindings: [{
+        defaultBindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'opacity',
+                outputRange: [0.55, 1],
+                attack: 0.15,
+                release: 0.6,
+                curve: 'smooth',
+            },
+        {
             feature: 'bass',
             parameter: 'zoom',
             outputRange: [1, 1.12],
@@ -286,7 +296,17 @@ export function createAlbumArtEdges(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 2, requiredAssets: ['album-art'] },
         parameters: { strength: 1.5, threshold: 0.12 },
-        defaultBindings: [{
+        defaultBindings: [
+            {
+                feature: 'highMidExcite',
+                role: 'detail',
+                parameter: 'threshold',
+                outputRange: [0.2, 0.05],
+                attack: 0.05,
+                release: 0.4,
+                curve: 'sqrt',
+            },
+        {
             feature: 'treble',
             parameter: 'strength',
             outputRange: [0.8, 2.4],
@@ -321,6 +341,17 @@ export function createAlbumArtDisplacement(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1.5, requiredAssets: ['album-art'] },
         parameters: { scale: 1 },
+        defaultBindings: [
+            {
+                feature: 'bass',
+                role: 'large-scale-force',
+                parameter: 'scale',
+                outputRange: [0.5, 2.2],
+                attack: 0.1,
+                release: 0.5,
+                curve: 'smooth',
+            },
+        ],
         deactivationPolicy: 'fade',
         create: derivation({
             shaderId: DISPLACEMENT_SHADER,
@@ -348,6 +379,17 @@ export function createImageLuminanceField(): VisualPluginDefinition {
         },
         activationRules: { activationWeight: 1 },
         parameters: { scale: 1 },
+        defaultBindings: [
+            {
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'scale',
+                outputRange: [0.6, 1.8],
+                attack: 0.3,
+                release: 1,
+                curve: 'smooth',
+            },
+        ],
         deactivationPolicy: 'immediate',
         create: derivation({
             shaderId: LUMINANCE_SHADER,

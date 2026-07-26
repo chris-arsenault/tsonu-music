@@ -174,7 +174,17 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
         parameters: { gain: 6, brightness: 1.3 },
-        defaultBindings: [{
+        defaultBindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'gain',
+                outputRange: [3.5, 9.5],
+                attack: 0.12,
+                release: 0.5,
+                curve: 'smooth',
+            },
+        {
             feature: 'spectralCentroid',
             parameter: 'brightness',
             outputRange: [0.9, 1.9],

@@ -240,3 +240,65 @@ describe('uniform names do not collide', () => {
         expect(collisions, 'sampler and scalar sharing a uniform name').toEqual([]);
     });
 });
+
+/**
+ * A parameter nothing drives is a knob nailed down.
+ *
+ * The catalog reached a point where 153 of its 369 parameters had no binding at all, and they were
+ * disproportionately the ones that make a scene move: the feedback transform's trail length and
+ * rotation, the impulse field's onset — three of whose six modes multiply their entire output by it,
+ * so they emitted a field of exactly zero — the vector field's spatial scale, the shockwave's
+ * magnitude, the mixer's blend. Every one of those ran, and every one ran at a constant.
+ *
+ * The exemptions below are parameters that genuinely should not follow the music. Anything else must
+ * be bound, so a new plugin cannot quietly ship inert.
+ */
+describe('parameters are driven', () => {
+    /** Parameters deliberately left static, with the reason. */
+    const STATIC_PARAMETERS: Record<string, string> = {
+        'ToneMapper:exposure': 'output conversion, must not breathe with the music',
+        'ToneMapper:gamma': 'neutral: the kernel grade owns the output transfer',
+        'ToneMapper:blackLevel': 'output conversion',
+        'ToneMapper:grain': 'output conversion',
+        'MaskSignedDistanceField:invert': 'a switch, not a continuous value',
+        'MaskSignedDistanceField:searchRadius': 'sets the derivation cost, not its appearance',
+        'MaskContainmentField:outside': 'a switch, not a continuous value',
+        'MaskEffectStencil:edgeOnly': 'a switch, not a continuous value',
+        'ParticleSimulator:lifetime': 'changing it mid-flight retimes particles already alive',
+        'ParticleRenderer:pointSize': 'a vertex-stage constant, not a per-frame value',
+        'AlbumArtPalette:saturationFloor': 'a floor on extraction, not a visual parameter',
+        'ImpactCascadeSimulator:brightness': 'the cascade drives its own energy',
+    };
+
+    test('every parameter is bound to a feature or listed as deliberately static', () => {
+        const inert: string[] = [];
+
+        for (const definition of CATALOG) {
+            const bound = new Set((definition.defaultBindings ?? []).map((entry) => entry.parameter));
+            const family = definition.id.split(':')[0];
+
+            for (const parameter of Object.keys(definition.parameters ?? {})) {
+                if (bound.has(parameter) || STATIC_PARAMETERS[`${family}:${parameter}`]) {
+                    continue;
+                }
+
+                inert.push(`${family}:${parameter}`);
+            }
+        }
+
+        expect([...new Set(inert)], 'parameters nothing drives').toEqual([]);
+    });
+
+    test('every static exemption still names a declared parameter', () => {
+        for (const key of Object.keys(STATIC_PARAMETERS)) {
+            const [family, parameter] = key.split(':');
+            const matching = CATALOG.filter((definition) => definition.id.split(':')[0] === family);
+
+            expect(matching.length, `${family} is registered`).toBeGreaterThan(0);
+            expect(
+                matching.some((definition) => definition.parameters?.[parameter] !== undefined),
+                `${key} still exists`,
+            ).toBe(true);
+        }
+    });
+});

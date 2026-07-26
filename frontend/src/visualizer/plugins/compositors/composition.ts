@@ -424,6 +424,17 @@ export function createLayerMixer(
         fragment: LAYER_MIXER_FRAGMENT,
         uniforms: { uMode: LAYER_MIXER_MODES.indexOf(mode), uMix: 1 },
         parameters: { mix: 1 },
+        bindings: [{
+            // How far the blend is taken. A mixer pinned at full mix is a fixed composite however
+            // much its two branches move.
+            feature: 'rms',
+            role: 'intensity',
+            parameter: 'mix',
+            outputRange: [0.45, 1],
+            attack: 0.15,
+            release: 0.6,
+            curve: 'smooth',
+        }],
         character: character({ visualDensity: 0.5, geometricOrder: 0.5, dominance: 'supporting' }),
         activationWeight: 3,
     });
@@ -452,7 +463,17 @@ export function createMaskRouter(
         fragment: MASK_ROUTER_FRAGMENT,
         uniforms: { uMode: MASK_ROUTER_MODES.indexOf(mode) },
         parameters: { feather: 0.08, threshold: 0.5 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'trebleExcite',
+                role: 'detail',
+                parameter: 'feather',
+                outputRange: [0.03, 0.18],
+                attack: 0.05,
+                release: 0.4,
+                curve: 'sqrt',
+            },
+        {
             // Where the mask cuts. Moving it is what makes a routed effect breathe with the music
             // instead of holding one fixed silhouette.
             feature: 'mid',
@@ -484,7 +505,16 @@ export function createFeedbackInjector(
         uniforms: { uMode: FEEDBACK_INJECTOR_MODES.indexOf(mode), uAmount: 0.6, uDecay: 0.93 },
         parameters: { amount: 0.6, decay: 0.93 },
         bindings: [{
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'decay',
+            outputRange: [0.88, 0.98],
+            attack: 0.3,
+            release: 1,
+            curve: 'smooth',
+        }, {
             feature: 'rms',
+            role: 'intensity',
             parameter: 'amount',
             outputRange: [0.25, 0.85],
             attack: 0.1,
@@ -514,7 +544,17 @@ export function createPaletteMapper(): VisualPluginDefinition {
         fragment: PALETTE_MAPPER_FRAGMENT,
         uniforms: { uStrength: 0.8, uOffset: 0 },
         parameters: { strength: 0.8, offset: 0 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'strength',
+                outputRange: [0.55, 1],
+                attack: 0.2,
+                release: 0.8,
+                curve: 'smooth',
+            },
+        {
             // Centroid moves the palette, per the section 20 mapping table.
             feature: 'spectralCentroid',
             parameter: 'offset',

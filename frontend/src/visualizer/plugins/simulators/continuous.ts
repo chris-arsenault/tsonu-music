@@ -183,7 +183,27 @@ export function createReactionDiffusionSimulator(): VisualPluginDefinition {
         fragment: REACTION_DIFFUSION_FRAGMENT,
         uniforms: { uFeed: 0.037, uKill: 0.06, uImpulse: 0.6, uDelta: 1 / 60 },
         parameters: { feed: 0.037, kill: 0.06, impulse: 0.6 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'mid',
+                role: 'deformation',
+                parameter: 'kill',
+                outputRange: [0.055, 0.068],
+                attack: 0.6,
+                release: 1.8,
+                curve: 'smooth',
+            },
+            {
+                feature: 'onset',
+                role: 'burst',
+                mode: 'impulse',
+                parameter: 'impulse',
+                outputRange: [0.2, 1.4],
+                attack: 0.01,
+                release: 0.35,
+                curve: 'sqrt',
+            },
+        {
             // Small changes in feed rate change the pattern family entirely, so the range is tight.
             feature: 'lowMid',
             parameter: 'feed',
@@ -221,6 +241,17 @@ export function createReactionDiffusionView(): VisualPluginDefinition {
         fragment: REACTION_VIEW_FRAGMENT,
         uniforms: { uContrast: 3 },
         parameters: { contrast: 3 },
+        bindings: [
+            {
+                feature: 'highMid',
+                role: 'detail',
+                parameter: 'contrast',
+                outputRange: [1.8, 4.5],
+                attack: 0.15,
+                release: 0.6,
+                curve: 'smooth',
+            },
+        ],
         character: character({ visualDensity: 0.7, brightness: 0.6, dominance: 'supporting' }),
         activationWeight: 2,
         prefersWith: ['ReactionDiffusionSimulator'],
@@ -242,7 +273,26 @@ export function createWaveFieldSimulator(): VisualPluginDefinition {
         fragment: WAVE_FIELD_FRAGMENT,
         uniforms: { uDamping: 0.015, uSpeed: 0.4, uOnset: 0.5, uDelta: 1 / 60 },
         parameters: { damping: 0.015, speed: 0.4, onset: 0.5 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'damping',
+                outputRange: [0.004, 0.03],
+                attack: 0.3,
+                release: 1,
+                curve: 'smooth',
+            },
+            {
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'speed',
+                outputRange: [0.22, 0.62],
+                attack: 0.3,
+                release: 1,
+                curve: 'smooth',
+            },
+        {
             feature: 'spectralFlux',
             parameter: 'onset',
             outputRange: [0.05, 1.2],
@@ -278,6 +328,17 @@ export function createWaveFieldView(): VisualPluginDefinition {
         fragment: WAVE_VIEW_FRAGMENT,
         uniforms: { uGain: 2.5 },
         parameters: { gain: 2.5 },
+        bindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'gain',
+                outputRange: [1.4, 3.8],
+                attack: 0.12,
+                release: 0.5,
+                curve: 'smooth',
+            },
+        ],
         character: character({ visualDensity: 0.5, brightness: 0.6, dominance: 'supporting' }),
         activationWeight: 2,
         prefersWith: ['WaveFieldSimulator'],

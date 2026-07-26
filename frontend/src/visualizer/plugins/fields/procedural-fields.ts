@@ -123,15 +123,31 @@ export function createProceduralVectorField(
         fragment: VECTOR_FIELD_FRAGMENT,
         uniforms: { uMode: VECTOR_FIELD_MODES.indexOf(mode), uStrength: 1, uScale: 2 },
         parameters: { strength: 1, scale: 2 },
-        bindings: [{
-            // Bass drives large-scale force, per the section 20 mapping.
-            feature: 'bass',
-            parameter: 'strength',
-            outputRange: [0.4, 2.2],
-            attack: 0.1,
-            release: 0.45,
-            curve: 'smooth',
-        }],
+        bindings: [
+            {
+                // Bass drives large-scale force, per the section 20 mapping.
+                feature: 'bass',
+                role: 'large-scale-force',
+                parameter: 'strength',
+                outputRange: [0.4, 2.2],
+                attack: 0.1,
+                release: 0.45,
+                curve: 'smooth',
+            },
+            {
+                // The field's spatial frequency. Left static, the field is time-invariant, and a
+                // time-invariant field dragging an accumulation converges to a still smear — the
+                // whole apparatus running and the picture not moving. Changing the scale is what
+                // keeps the flow reorganizing instead of settling.
+                feature: 'mid',
+                role: 'deformation',
+                parameter: 'scale',
+                outputRange: [1.3, 4.5],
+                attack: 0.5,
+                release: 1.4,
+                curve: 'smooth',
+            },
+        ],
         // Produces no visible material of its own.
         character: character({ visualDensity: 0, motionEnergy: 0.6, brightness: 0, dominance: 'supporting' }),
         // Half resolution: a force field consumed by advection needs no pixel detail.
@@ -170,11 +186,43 @@ export function createAudioImpulseField(
             },
             {
                 feature: 'treble',
+                role: 'detail',
                 parameter: 'treble',
                 outputRange: [0, 1],
                 attack: 0.02,
                 release: 0.2,
                 curve: 'sqrt',
+            },
+            {
+                // Three of this plugin's six modes multiply their whole field by `uOnset`, so with
+                // nothing bound to it they produced a field of exactly zero — a shockwave that never
+                // fired, on every scene that selected one.
+                feature: 'onset',
+                role: 'burst',
+                mode: 'impulse',
+                parameter: 'onset',
+                outputRange: [0, 1],
+                attack: 0.01,
+                release: 0.32,
+                curve: 'sqrt',
+            },
+            {
+                feature: 'beatPhase',
+                role: 'repeating-motion',
+                parameter: 'beatPhase',
+                outputRange: [0, 1],
+                attack: 0,
+                release: 0,
+                curve: 'linear',
+            },
+            {
+                feature: 'stereoBalance',
+                role: 'lateral-force',
+                parameter: 'stereo',
+                outputRange: [-1, 1],
+                attack: 0.15,
+                release: 0.5,
+                curve: 'linear',
             },
         ],
         character: character({ visualDensity: 0, motionEnergy: 0.9, brightness: 0, dominance: 'supporting' }),

@@ -253,7 +253,17 @@ export function createProceduralTextureSource(
             uContrast: 1.2,
         },
         parameters: { scale: 2, contrast: 1.2 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'scale',
+                outputRange: [1.2, 3.4],
+                attack: 0.4,
+                release: 1.2,
+                curve: 'smooth',
+            },
+        {
             feature: 'mid',
             parameter: 'contrast',
             outputRange: [0.9, 2],
@@ -279,7 +289,17 @@ export function createParametricCurveSource(
         fragment: PARAMETRIC_CURVE_FRAGMENT,
         uniforms: { uMode: PARAMETRIC_CURVE_MODES.indexOf(mode), uThickness: 0.02, uFrequency: 7 },
         parameters: { thickness: 0.02, frequency: 7 },
-        bindings: [{
+        bindings: [
+            {
+                feature: 'rmsExcite',
+                role: 'intensity',
+                parameter: 'thickness',
+                outputRange: [0.012, 0.05],
+                attack: 0.05,
+                release: 0.4,
+                curve: 'sqrt',
+            },
+        {
             feature: 'beatPhase',
             parameter: 'frequency',
             outputRange: [5, 9],
@@ -308,6 +328,15 @@ export function createSdfShapeSource(
         uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1, uEnergy: 0.35 },
         parameters: { morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
         bindings: [
+            {
+                feature: 'subBass',
+                role: 'large-scale-force',
+                parameter: 'repeat',
+                outputRange: [1, 4],
+                attack: 0.8,
+                release: 2,
+                curve: 'smooth',
+            },
             {
                 feature: 'lowMid',
                 role: 'deformation',

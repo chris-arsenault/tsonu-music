@@ -163,6 +163,28 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 release: 0.4,
                 curve: 'smooth',
             },
+            {
+                // Trail length. Static, every scene smeared by exactly the same amount whatever the
+                // music did, which is most of why the accumulation read as a fixed haze.
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'decay',
+                outputRange: [0.9, 0.985],
+                attack: 0.25,
+                release: 0.9,
+                curve: 'smooth',
+            },
+            {
+                // The angle the warp turns through. Only the rotate mode reads it, and it read a
+                // constant.
+                feature: 'mid',
+                role: 'deformation',
+                parameter: 'rotation',
+                outputRange: [0.04, 0.55],
+                attack: 0.3,
+                release: 1,
+                curve: 'smooth',
+            },
         ],
         deactivationPolicy: 'handoff-feedback',
 

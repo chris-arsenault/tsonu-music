@@ -639,12 +639,12 @@ function advanceAccumulation(
         Math.max(1, Math.round(plan.height * MOTION_SCALE)),
     );
 
+    const survival = frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds);
+
     device.beginPass(write, 'none', true);
     device.bindTexture(program, 'uComposite', compositeTarget.texture, 0);
     device.bindTexture(program, 'uHistory', read.texture, 1);
     device.bindTexture(program, 'uMotion', motion.texture, 2);
-    const survival = frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds);
-
     device.setUniforms(program, {
         uResolution: [plan.width, plan.height],
         uSurvival: survival,
