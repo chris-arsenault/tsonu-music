@@ -28,7 +28,12 @@ export interface BuiltScene {
     wired: WiredScene;
     graph: CompiledGraph;
     bindings: DistributedBinding[];
-    /** Per-plugin starting parameters the theme dictates, applied over each plugin's own defaults. */
+    /**
+     * Per-instance starting parameters the theme dictates, applied over each plugin's own defaults.
+     *
+     * Keyed by instance id rather than definition id, so two instances of one plugin can start from
+     * different values. Keyed by definition they could not, on this path or any other.
+     */
     parameterOverrides: Record<string, Record<string, number>>;
 }
 
@@ -57,6 +62,31 @@ export function colourOverrides(
                 .map((mode) => [`ColorTransform:${mode}`, { amount: strength * 0.6 }]),
         ),
     };
+}
+
+/**
+ * Lands the theme's colour policy on the instances that are actually in the scene.
+ *
+ * `colourOverrides` above answers "which plugins does this policy address", which is a question about
+ * the catalog. This answers "which nodes does it reach", which is a question about one scene — so a
+ * definition present twice gets two entries that can subsequently diverge, and a definition the
+ * scheduler did not select gets none rather than an override addressed to nothing.
+ */
+export function instanceOverrides(
+    scene: WiredScene,
+    policy: VisualTheme['colorPolicy'],
+): Record<string, Record<string, number>> {
+    const byDefinition = colourOverrides(policy);
+    const overrides: Record<string, Record<string, number>> = {};
+
+    for (const node of scene.nodes) {
+        const values = byDefinition[node.definition.id];
+        if (values) {
+            overrides[node.instanceId] = { ...values };
+        }
+    }
+
+    return overrides;
 }
 
 /**
@@ -248,12 +278,12 @@ function buildSceneAttempt(
             wired,
             graph: compiled.graph,
             bindings: applyColourPolicy(
-                distributeReactivity(plugins, createRng(`${entropy}:bindings`)),
+                distributeReactivity(wired.nodes, createRng(`${entropy}:bindings`)),
                 effectiveTheme.colorPolicy,
             ),
             // The theme's colour policy reaches the plugins that map colour, so a theme asking for the
             // album palette at full strength actually gets it.
-            parameterOverrides: colourOverrides(effectiveTheme.colorPolicy),
+            parameterOverrides: instanceOverrides(wired, effectiveTheme.colorPolicy),
         },
     };
 }

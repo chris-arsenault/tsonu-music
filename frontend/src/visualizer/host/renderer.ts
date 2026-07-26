@@ -58,6 +58,8 @@ import { PRESENT_SHADER, PRESENT_SHADER_ID } from '../plugins/postprocess/tone-m
 import { createDevice, MAX_PIXEL_RATIO, type Device } from './device';
 import { createRuntime, type ActiveInstance, type RuntimeStats } from './runtime';
 import type { DistributedBinding } from '../core/audio-mapping';
+import type { ParameterBinding } from '../core/bindings';
+import type { VisualPluginDefinition } from '../core/plugin';
 
 export interface RendererFrame {
     clock: PlaybackClock;
@@ -332,12 +334,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
     /** Re-runs reactivity distribution in place. No instance is torn down. */
     const redistribute = (rng: Rng): void => {
-        const bindings = distributeReactivity(scene.plugins, rng);
+        const bindings = distributeReactivity(scene.wired.nodes, rng);
         scene = { ...scene, bindings };
 
         for (const entry of instances) {
-            entry.bindings = bindings.find((candidate) => candidate.pluginId === entry.node.definition.id)?.bindings
-                ?? entry.node.definition.defaultBindings;
+            entry.bindings = bindingsFor(bindings, entry.instanceId, entry.node.definition);
         }
     };
 
@@ -785,8 +786,7 @@ function instantiate(
             return {
                 ...existing,
                 node,
-                bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
-                    ?? definition.defaultBindings,
+                bindings: bindingsFor(bindings, node.instanceId, definition),
             };
         }
 
@@ -795,7 +795,7 @@ function instantiate(
             node,
             definition,
             bindings,
-            overrides[definition.id],
+            overrides[node.instanceId],
             sceneEntropy,
         );
     });
@@ -836,10 +836,24 @@ function createInstance(
             parameters: { ...(definition.parameters ?? {}), ...overrides },
             // The scheduler's redistributed bindings, so reactivity is spread rather than every plugin
             // reading the feature its author happened to pick.
-            bindings: bindings.find((entry) => entry.pluginId === definition.id)?.bindings
-                ?? definition.defaultBindings,
+            bindings: bindingsFor(bindings, node.instanceId, definition),
         };
     }
+}
+
+/**
+ * The bindings for one instance, falling back to what its plugin ships.
+ *
+ * Matched by instance, so two instances of one definition hold the two distinct assignments
+ * distribution made for them. Matched by definition, both read the first entry and moved together.
+ */
+function bindingsFor(
+    distributed: readonly DistributedBinding[],
+    instanceId: string,
+    definition: VisualPluginDefinition,
+): readonly ParameterBinding[] | undefined {
+    return distributed.find((entry) => entry.instanceId === instanceId)?.bindings
+        ?? definition.defaultBindings;
 }
 
 /**

@@ -35,8 +35,32 @@ export interface WiredScene {
     unsatisfied: { instanceId: string; port: string; type: string }[];
 }
 
-export function instanceIdFor(definition: VisualPluginDefinition, index: number): string {
-    return `${definition.id}#${index}`;
+/**
+ * Identity for one instance of a definition within a scene.
+ *
+ * `occurrence` counts how many instances of *this same definition* precede it, not how many nodes
+ * do. A global position made every id downstream of a change a different id: adding one plugin, or
+ * removing one, renumbered the rest of the scene, and `instantiate` reuses an instance only when its
+ * id and definition both match — so an incremental rebuild that was supposed to preserve the
+ * simulations it did not touch recreated all of them instead. Occurrence is stable against anything
+ * happening elsewhere in the graph.
+ */
+export function instanceIdFor(definition: VisualPluginDefinition, occurrence: number): string {
+    return `${definition.id}#${occurrence}`;
+}
+
+/** Nodes for an ordered definition list, each with its occurrence-stable id. */
+export function assignInstanceIds(
+    definitions: readonly VisualPluginDefinition[],
+): GraphNode[] {
+    const occurrences = new Map<string, number>();
+
+    return definitions.map((definition) => {
+        const occurrence = occurrences.get(definition.id) ?? 0;
+        occurrences.set(definition.id, occurrence + 1);
+
+        return { instanceId: instanceIdFor(definition, occurrence), definition };
+    });
 }
 
 /**
@@ -73,10 +97,7 @@ export function wireScene(
         assets,
     );
 
-    const nodes: GraphNode[] = ordered.map((definition, index) => ({
-        instanceId: instanceIdFor(definition, index),
-        definition,
-    }));
+    const nodes: GraphNode[] = assignInstanceIds(ordered);
 
     const edges: RenderGraphEdge[] = [];
     const assetBindings: WiredScene['assetBindings'] = [];

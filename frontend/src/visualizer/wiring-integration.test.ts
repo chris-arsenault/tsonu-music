@@ -225,17 +225,22 @@ describe('the theme colour policy reaches plugins', () => {
         expect(colourOverrides({ source: 'curated', strength: -1 }).PaletteMapper.strength).toBe(0);
     });
 
-    test('a built scene carries overrides naming registered plugins only', () => {
+    test('a built scene carries overrides addressed to instances that are in it', () => {
         for (const theme of THEMES) {
             const result = buildScene('colour', theme, CONTEXT, profileFor(0));
             if (!result.ok) continue;
 
-            for (const id of Object.keys(result.scene.parameterOverrides)) {
-                const definition = CATALOG.find((entry) => entry.id === id);
-                expect(definition, `${theme.id} overrides ${id}`).toBeDefined();
+            for (const instanceId of Object.keys(result.scene.parameterOverrides)) {
+                const node = result.scene.wired.nodes.find(
+                    (candidate) => candidate.instanceId === instanceId,
+                );
+                expect(node, `${theme.id} overrides ${instanceId}`).toBeDefined();
 
-                for (const parameter of Object.keys(result.scene.parameterOverrides[id])) {
-                    expect(definition!.parameters?.[parameter], `${id}.${parameter}`).toBeDefined();
+                for (const parameter of Object.keys(result.scene.parameterOverrides[instanceId])) {
+                    expect(
+                        node!.definition.parameters?.[parameter],
+                        `${instanceId}.${parameter}`,
+                    ).toBeDefined();
                 }
             }
         }
@@ -423,7 +428,7 @@ describe('mask dimensions', () => {
 
         const motion = graph?.resources.filter((resource) => isMotionSource(resource.type)) ?? [];
         expect(motion.map((resource) => resource.producedBy))
-            .toContain('MaskBoundaryField#2');
+            .toContain('MaskBoundaryField#0');
     });
 
     test('every mask field responds to audio rather than holding a fixed shape', () => {
