@@ -39,8 +39,11 @@ export const ORGANIC_FLOW_THEME: VisualTheme = {
         brightness: 0.45,
     },
     // Slower structural mutation: the family is about accumulation, while continuous parameter motion
-    // still keeps every layer breathing between swaps.
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 18 },
+    // still keeps every layer breathing between swaps. Slower than the default, not four times it —
+    // these intervals were set when a branch mutation discarded the whole scene, so they were pacing
+    // how often the image was allowed to be thrown away. A swap that leaves the rest of the graph
+    // running does not need to be rationed like that.
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 8 },
     colorPolicy: { source: 'album-palette', strength: 0.8 },
 };
 
@@ -54,7 +57,7 @@ export const COLLISION_ENERGY_THEME: VisualTheme = {
         brightness: 0.75,
         persistence: 0.3,
     },
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 10 },
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 4 },
     colorPolicy: { source: 'complementary', strength: 0.6 },
 };
 
@@ -68,7 +71,7 @@ export const IMAGE_DREAM_THEME: VisualTheme = {
         geometricOrder: 0.4,
         brightness: 0.5,
     },
-    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 16 },
+    mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 7 },
     colorPolicy: { source: 'album-palette', strength: 0.9 },
 };
 

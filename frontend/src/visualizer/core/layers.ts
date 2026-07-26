@@ -188,12 +188,27 @@ export function crossfadesBetween(
 ): Crossfade[] {
     const crossfades: Crossfade[] = [];
     const count = Math.max(departing.length, arriving.length);
+    const surviving = new Set(
+        arriving.filter((layer) => departing.some((other) => other.id === layer.id)).map((layer) => layer.id),
+    );
 
     for (let index = 0; index < count; index += 1) {
         const from = departing[index];
         const to = arriving[index];
 
         if (!from && !to) {
+            continue;
+        }
+
+        // A layer still present after the change is not fading anywhere. Pairing purely by position
+        // gave every surviving layer a crossfade from itself to itself, and a layer named as both the
+        // outgoing and incoming side takes the lower of the two weights — so it dimmed to half
+        // through the middle of every transition. With most mutations now changing one branch and
+        // leaving the rest running, that would pulse the whole frame on each one.
+        if (from && surviving.has(from.id)) {
+            continue;
+        }
+        if (to && surviving.has(to.id)) {
             continue;
         }
 

@@ -560,10 +560,24 @@ export function pickReplacement(
 /* -------------------------------------------------------------------------- */
 
 export const DEFAULT_MUTATION_POLICY: MutationPolicy = {
-    intervalSeconds: 8,
+    // Faster, because every mutation is now small. A branch change used to rebuild the whole scene,
+    // so the interval had to be long enough to make that bearable; with both structural mutations
+    // swapping plugins in place and leaving the rest of the graph running, a change every five
+    // seconds reads as an image that keeps evolving rather than as a series of scenes.
+    intervalSeconds: 5,
     // Weighted toward changes that are visible. At eight to three to two, three mutations in five
     // only redistributed which feature drove which parameter — nothing a viewer would read as the
     // scene shifting — so a structural change arrived about every thirty-four seconds.
-    weights: { parameter: 3, plugin: 4, branch: 3, scene: 0.6 },
-    minimumPluginAgeSeconds: 7,
+    //
+    // Scene replacement is now rare to the point of being an event. It is the only mutation that
+    // discards accumulated state, and at the previous weight one arrived every couple of minutes on
+    // top of a branch rebuild every half minute, which is what made the output read as a slideshow.
+    weights: { parameter: 2, plugin: 5, branch: 4, scene: 0.15 },
+    // Shorter than the interval, deliberately. This exists so a plugin is not swapped out moments
+    // after arriving, but when it exceeds the mutation interval it does something quite different:
+    // nothing in the scene qualifies, every structural mutation falls back to redistributing
+    // parameters, and the image stops changing for stretches far longer than the interval. Measured
+    // at six seconds against intervals of four to eight, gaps of forty seconds appeared between
+    // visible changes.
+    minimumPluginAgeSeconds: 3,
 };

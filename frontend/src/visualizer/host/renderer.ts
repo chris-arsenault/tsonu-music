@@ -39,17 +39,19 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
 import type { DiagnosticsControls } from '../core/diagnostics';
-import { buildFirstViableScene, buildScene, variedThemeOrder } from '../core/scene-builder';
+import { buildFirstViableScene, variedThemeOrder } from '../core/scene-builder';
 import { compileGraph } from '../core/graph';
 import { distributeReactivity } from '../core/audio-mapping';
 import { createRng, freshSceneEntropy, type Rng } from '../core/random';
 import {
     decideMutation,
+    pickReplacement,
     type ActivePluginRecord,
     type MutationKind,
     type MutationPolicy,
     type SchedulerContext,
 } from '../core/scheduler';
+import type { VisualPluginDefinition } from '../core/plugin';
 import { wireScene } from '../core/wiring';
 import { assetResourceId, type AssetResource } from '../core/wiring';
 import { createM1Registry } from '../plugins/registry';
@@ -178,22 +180,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         return buildFromEntropy(freshSceneEntropy(), profile);
     }
 
-    function buildFreshBranch(profile: QualityProfile) {
-        const entropy = freshSceneEntropy();
-        return buildScene(
-            entropy,
-            scene.theme,
-            {
-                available: registry.all(),
-                assets: assetIds,
-                assetResources,
-                capabilities: deviceCapabilities,
-                history: {},
-                playbackTime: lastClock.playbackTime,
-            },
-            profile,
-        );
-    }
+    // A `buildFreshBranch` stood here: a full scene build with fresh entropy, called by the branch
+    // mutation. Fresh entropy redraws the family, the plugin set, the wiring and the palette, so
+    // "replace a branch" discarded the entire image. It is gone; branch mutation now swaps a
+    // connected group of plugins in place.
 
     const initial = buildFresh(options.profile);
     if (!initial.ok) {
@@ -347,15 +337,62 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * Rebuilt through the normal wire-and-compile path so the swap is validated exactly as an assembled
      * scene would be, and rejected rather than applied if the result does not compile.
      */
-    const swapPlugin = (instanceId: string, replacementId: string): boolean => {
-        const target = instances.find((entry) => entry.instanceId === instanceId);
-        const replacement = registry.get(replacementId);
-        if (!target || !replacement) {
+    /**
+     * Instances forming one branch around `instanceId`: itself and its immediate neighbours.
+     *
+     * A branch is a chain — something generates, something transforms it, something composes it — so
+     * replacing a generator without the transform reading it, or the reverse, changes half a thought.
+     * Bounded to the immediate neighbourhood because the point is that the rest of the scene keeps
+     * running: this is meant to be a part of the image changing, not the image.
+     */
+    const branchGroupFor = (instanceId: string, limit: number): string[] => {
+        const group = [instanceId];
+
+        for (const edge of scene.wired.edges) {
+            if (group.length >= limit) {
+                break;
+            }
+            if (edge.feedback) {
+                continue;
+            }
+
+            const neighbour = edge.from.instanceId === instanceId ? edge.to.instanceId
+                : edge.to.instanceId === instanceId ? edge.from.instanceId
+                : undefined;
+
+            if (neighbour && !group.includes(neighbour)) {
+                group.push(neighbour);
+            }
+        }
+
+        return group;
+    };
+
+    /**
+     * Replaces several plugins at once, keeping every instance the new set still uses.
+     *
+     * The branch mutation used to call a full scene build with fresh entropy — a different family
+     * draw, a different plugin set, a different palette, everything at once. It is weighted at nearly
+     * a third of all mutations on an eight second timer, so roughly every half minute the entire
+     * image was discarded and replaced rather than evolving. That is the wholesale jump; nothing
+     * about the old implementation was scoped to a branch except its name.
+     */
+    const swapPlugins = (swaps: readonly { instanceId: string; replacementId: string }[]): boolean => {
+        if (swaps.length === 0) {
             return false;
         }
 
-        const plugins = scene.plugins.map((definition) =>
-            definition.id === target.node.definition.id ? replacement : definition);
+        const replacements = new Map<string, VisualPluginDefinition>();
+        for (const swap of swaps) {
+            const target = instances.find((entry) => entry.instanceId === swap.instanceId);
+            const replacement = registry.get(swap.replacementId);
+            if (!target || !replacement) {
+                return false;
+            }
+            replacements.set(target.node.definition.id, replacement);
+        }
+
+        const plugins = scene.plugins.map((definition) => replacements.get(definition.id) ?? definition);
 
         const wired = wireScene(plugins, assetResources);
         if (wired.unsatisfied.length > 0) {
@@ -645,20 +682,51 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                             ? 'scene'
                             : 'none';
 
-                    case 'branch':
-                        // Rebuild inside the current family and retain any instances the new branch
-                        // still uses. This changes several connected nodes while preserving compatible
-                        // feedback and simulation state elsewhere.
-                        return applyBuild(buildFreshBranch(profile))
-                            ? 'branch'
-                            : 'none';
+                    case 'branch': {
+                        // One connected group of plugins, replaced together. Everything else in the
+                        // scene keeps its instance, and therefore its simulation state, its feedback
+                        // buffer, and its accumulated image.
+                        if (!decision.targetInstanceId) {
+                            return 'none';
+                        }
+
+                        const group = branchGroupFor(decision.targetInstanceId, 3);
+                        const context = schedulerContext(playbackTime, profile);
+                        const active = records();
+
+                        const swaps = group.flatMap((instanceId) => {
+                            const instance = instances.find((entry) => entry.instanceId === instanceId);
+                            const current = instance && registry.get(instance.node.definition.id);
+                            const replacement = pickReplacement(rng, current, active, context);
+
+                            return replacement ? [{ instanceId, replacementId: replacement.id }] : [];
+                        });
+
+                        // Shrinking the group until one wires, rather than abandoning the mutation.
+                        //
+                        // Several simultaneous swaps are more likely to leave some port unsatisfiable
+                        // than one is, and giving up on the whole change when that happens wastes the
+                        // interval — measured, every branch mutation was falling back to a single
+                        // plugin changing, because the three-way attempt failed and nothing was tried
+                        // in between.
+                        for (let size = swaps.length; size >= 1; size -= 1) {
+                            if (swapPlugins(swaps.slice(0, size))) {
+                                return 'branch';
+                            }
+                        }
+
+                        return 'none';
+                    }
 
                     case 'plugin': {
                         if (!decision.targetInstanceId || !decision.replacement) {
                             return 'none';
                         }
 
-                        const swapped = swapPlugin(decision.targetInstanceId, decision.replacement.id);
+                        const swapped = swapPlugins([{
+                            instanceId: decision.targetInstanceId,
+                            replacementId: decision.replacement.id,
+                        }]);
                         return swapped ? decision.kind : 'none';
                     }
 
