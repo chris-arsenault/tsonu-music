@@ -59,6 +59,53 @@ export function colourOverrides(
     };
 }
 
+/**
+ * Scales the colour-mapping bindings by the theme's declared colour strength.
+ *
+ * `colourOverrides` above writes the same strength into those parameters' starting values, but both
+ * parameters are *bound* — `PaletteMapper.strength` to overall level, `ColorTransform.amount` to a
+ * band — so the resolver treats the override as nothing more than an initial condition and smooths it
+ * away over the binding's own attack and release, a matter of a second at most. The theme's colour
+ * policy had no steady-state effect on anything.
+ *
+ * Scaling the output range is what makes it durable: at zero the parameter cannot leave zero however
+ * loud the track, at one the binding keeps the range its author wrote, and in between the music still
+ * drives the parameter across a proportionally smaller span. The starting values remain useful, since
+ * they are where the parameter begins before the first frame of audio arrives.
+ */
+export function applyColourPolicy(
+    bindings: DistributedBinding[],
+    policy: VisualTheme['colorPolicy'],
+): DistributedBinding[] {
+    if (!policy) {
+        return bindings;
+    }
+
+    const strength = policy.strength <= 0 ? 0 : policy.strength > 1 ? 1 : policy.strength;
+    if (strength === 1) {
+        return bindings;
+    }
+
+    const scaled = (id: string, parameter: string): boolean =>
+        (id === 'PaletteMapper' && parameter === 'strength')
+        || (id.startsWith('ColorTransform:') && parameter === 'amount');
+
+    return bindings.map((entry) => ({
+        ...entry,
+        bindings: entry.bindings.map((binding) => (
+            scaled(entry.pluginId, binding.parameter)
+                ? {
+                    ...binding,
+                    outputRange: [
+                        binding.outputRange[0] * strength,
+                        binding.outputRange[1] * strength,
+                    ] as [number, number],
+                }
+                : binding
+        )),
+    }));
+}
+
 export type SceneBuildFailure =
     | { reason: 'grammar'; detail: string }
     | { reason: 'unsatisfied-inputs'; detail: string }
@@ -196,7 +243,10 @@ function buildSceneAttempt(
             plugins,
             wired,
             graph: compiled.graph,
-            bindings: distributeReactivity(plugins, createRng(`${entropy}:bindings`)),
+            bindings: applyColourPolicy(
+                distributeReactivity(plugins, createRng(`${entropy}:bindings`)),
+                effectiveTheme.colorPolicy,
+            ),
             // The theme's colour policy reaches the plugins that map colour, so a theme asking for the
             // album palette at full strength actually gets it.
             parameterOverrides: colourOverrides(effectiveTheme.colorPolicy),

@@ -21,7 +21,7 @@ judged once their inputs have a usable range.
 | 10 | Composition reach: branch count, spectrum gain, injection | 1.8, 1.3, 1.11 | done |
 | 11 | Sampler binding correctness | 1.9, 2.5, 2.13, 2.14 | done |
 | 12 | Lifecycle: accumulation clear, context loss, activation, retirement | 2.3, 2.4, 2.7, 2.8 | done |
-| 13 | Colour: accent assignment and policy strength | 2.10, 2.9 | pending |
+| 13 | Colour: accent assignment and policy strength | 2.10, 2.9 | done |
 | 14 | Crossfades | 2.12 | pending |
 | 15 | Duplicated and discarded work | 2.15 | pending |
 | 16 | Severity-3 sweep | S3 | pending |

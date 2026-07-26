@@ -173,4 +173,46 @@ describe('drift stays inside the scheme', () => {
         expect(wrapTurns(1.25)).toBeCloseTo(0.25, 6);
         expect(wrapTurns(-0.25)).toBeCloseTo(0.75, 6);
     });
+
+    test('drift moves every branch at every point in the cycle', () => {
+        // A scheme with fewer inks than branches has to repeat one, and walking the branch list
+        // directly landed a branch back on its own colour at every whole step — drift that did
+        // nothing for a measurable share of its cycle. Walking the distinct colours avoids it.
+        for (const palette of CURATED_PALETTES) {
+            const scene = scenePaletteFrom(palette, 1, 4);
+            const distinct = new Set(scene.entries.map((entry) => entry.mid.join(',')));
+            if (distinct.size < 2) {
+                continue;
+            }
+
+            let still = 0;
+            for (let turn = 0.05; turn < 1; turn += 0.05) {
+                const drifted = driftPalette(scene, turn);
+                if (drifted.entries.every((entry, index) => entry.mid.join(',') === scene.entries[index].mid.join(','))) {
+                    still += 1;
+                }
+            }
+
+            expect(still, `${palette.id} holds still mid-drift`).toBe(0);
+        }
+    });
+});
+
+describe('accent placement', () => {
+    test('the accent lands on the last branch whatever the ink count', () => {
+        for (const palette of CURATED_PALETTES) {
+            for (const count of [2, 3, 4, 5, 6]) {
+                const scene = scenePaletteFrom(palette, 1, count);
+                const mids = scene.entries.map((entry) => entry.mid);
+                const last = mids[mids.length - 1];
+
+                // The accent is the most chromatic ink, so no other branch may out-chroma the last.
+                const chroma = (colour: readonly number[]) => Math.max(...colour) - Math.min(...colour);
+                for (const mid of mids.slice(0, -1)) {
+                    expect(chroma(mid), `${palette.id} at ${count} branches`)
+                        .toBeLessThanOrEqual(chroma(last) + 1e-9);
+                }
+            }
+        }
+    });
 });

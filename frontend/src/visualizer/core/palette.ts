@@ -129,11 +129,16 @@ export function scenePaletteFrom(
     );
     const accent = ordered[accentIndex];
     const supporting = ordered.filter((_, index) => index !== accentIndex);
-    const assignment = supporting.length > 0 ? [...supporting, accent] : [accent];
 
     const entries: PaletteEntry[] = [];
     for (let index = 0; index < count; index += 1) {
-        const ink = assignment[index % assignment.length];
+        // The accent goes on the last branch, chosen rather than fallen into. Cycling the whole
+        // assignment with a modulo only landed it last when the ink count happened to divide the
+        // branch count: with three inks and four branches it landed on branch two and branch three
+        // repeated a supporting colour, and a scheme with fewer inks than that could drop the accent
+        // entirely — which is the opposite of using it sparingly.
+        const isAccent = index === count - 1 || supporting.length === 0;
+        const ink = isAccent ? accent : supporting[index % supporting.length];
 
         entries.push({
             shadow,
@@ -162,24 +167,35 @@ export function driftPalette(
     /** Turns through the scheme's colours. One whole turn returns every branch to where it began. */
     turns: number,
 ): ScenePalette {
-    const count = palette.entries.length;
-    if (count === 0) {
+    // The distinct colours in play, not the branches. A scheme with fewer inks than branches has to
+    // repeat one, and walking the branch list directly then lands a branch back on its own colour at
+    // every whole step — drift that measurably does nothing for a third of its cycle.
+    const stops: Rgb[] = [];
+    for (const entry of palette.entries) {
+        if (!stops.some((stop) => sameRgb(stop, entry.mid))) {
+            stops.push(entry.mid);
+        }
+    }
+
+    if (stops.length < 2) {
+        // One colour has nowhere to walk to. Holding still is the honest result.
         return palette;
     }
 
-    const position = wrapTurns(turns) * count;
+    const position = wrapTurns(turns) * stops.length;
     const step = Math.floor(position);
     const blend = position - step;
 
     return {
         ...palette,
         entries: palette.entries.map((entry, index) => {
-            const next = palette.entries[(index + step + 1) % count];
-            const current = palette.entries[(index + step) % count];
+            const start = stops.findIndex((stop) => sameRgb(stop, entry.mid));
+            const from = stops[(start + step) % stops.length];
+            const to = stops[(start + step + 1) % stops.length];
 
             return {
                 shadow: entry.shadow,
-                mid: mixRgb(current.mid, next.mid, blend),
+                mid: mixRgb(from, to, blend),
                 highlight: entry.highlight,
             };
         }),
@@ -228,6 +244,10 @@ function anchorShadow(colour: Rgb): Rgb {
 export function wrapTurns(value: number): number {
     const wrapped = value % 1;
     return wrapped < 0 ? wrapped + 1 : wrapped;
+}
+
+function sameRgb(a: Rgb, b: Rgb): boolean {
+    return a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 }
 
 function mixRgb(from: Rgb, to: Rgb, amount: number): Rgb {
