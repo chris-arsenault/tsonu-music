@@ -63,6 +63,65 @@ export const PERSISTENCE_SHADER_ID = 'kernel-persistence';
  * the material that was most saturated: bold colour becomes pastel and then white. Holding the ratio
  * between channels is what keeps a deep hue deep as it brightens.
  */
+/**
+ * Metering: reduces the whole accumulation to one texel holding its average luminance.
+ *
+ * A fixed exposure cannot serve a catalog this varied. Measured across five consecutive scenes, mean
+ * frame luminance ran from 3.7 to 160.7 of 255 — one scene nearly black with seven percent of the
+ * frame lit, another saturated across all of it. Both were composed correctly; they simply contain
+ * different amounts of material, and a constant multiplier has no way to know that.
+ *
+ * Averaged from a grid of taps rather than a mip chain, because generating mipmaps for a half-float
+ * target is not portable, and blended with its own previous value so exposure drifts toward a scene
+ * rather than snapping and pumping. One texel, sampled once per pixel by the grade — the whole thing
+ * costs one small pass.
+ */
+export const METER_SHADER_ID = 'kernel-meter';
+
+export const METER_SHADER = {
+    id: METER_SHADER_ID,
+    vertex: QUAD_VERTEX_SHADER,
+    fragment: `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uHistory;
+uniform vec2 uResolution;
+uniform float uDelta;
+/** Seconds for the meter to travel most of the way to a new level. */
+uniform float uAdaptSeconds;
+
+const int TAPS = 12;
+
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+void main() {
+    float total = 0.0;
+
+    // A grid inset by half a step, so the taps sample cell centres and none lands on the border.
+    for (int y = 0; y < TAPS; y += 1) {
+        for (int x = 0; x < TAPS; x += 1) {
+            vec2 uv = (vec2(float(x), float(y)) + 0.5) / float(TAPS);
+            total += luminance(max(texture(uSource, uv).rgb, vec3(0.0)));
+        }
+    }
+
+    float measured = total / float(TAPS * TAPS);
+    float previous = texture(uHistory, vec2(0.5)).r;
+
+    // Exponential approach, framerate independent. A first frame with no history starts at the
+    // measurement rather than crawling up from zero and blowing the exposure out on the way.
+    float rate = uAdaptSeconds <= 0.0 ? 1.0 : 1.0 - exp(-uDelta / uAdaptSeconds);
+    float blended = previous <= 0.0 ? measured : mix(previous, measured, clamp(rate, 0.0, 1.0));
+
+    fragColor = vec4(vec3(blended), 1.0);
+}`,
+};
+
 export const GRADE_SHADER_ID = 'kernel-grade';
 
 export const GRADE_SHADER = {
@@ -74,9 +133,11 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
+/** One texel holding the scene's smoothed average luminance. See METER_SHADER. */
+uniform sampler2D uMeter;
 uniform vec2 uResolution;
 uniform float uExposure;
-/** Above one, deepens the mid-tones. This is the output transfer; nothing after it lifts. */
+/** Above one, separates values either side of the pivot. Does not move overall brightness. */
 uniform float uContrast;
 /** Above one, pushes colour away from grey before compression. */
 uniform float uSaturation;
@@ -89,22 +150,61 @@ float dither(vec2 position) {
     return fract(sin(dot(position, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
+/** Luminance the contrast curve pivots about, so raising contrast does not also darken the frame. */
+const float PIVOT = 0.42;
+
+/** Below this, luminance passes through untouched; above it, the highlight roll-off takes over. */
+const float KNEE = 0.72;
+
+/** Average luminance the metered exposure aims the frame at. */
+const float TARGET = 0.30;
+
+/**
+ * How far metering is allowed to move the exposure.
+ *
+ * Bounded in both directions: a nearly empty scene should read as sparse rather than have its few lit
+ * pixels amplified into noise, and a dense one should not be dimmed until it reads as grey.
+ */
+const float MIN_GAIN = 0.55;
+const float MAX_GAIN = 6.0;
+
 void main() {
-    vec3 colour = max(texture(uSource, vUv).rgb, vec3(0.0)) * uExposure;
+    // Metered, then scaled by the bound exposure parameter. The meter sets the operating point and
+    // the binding moves it around from there, which is what lets a transient lift the frame without
+    // the frame's own average deciding how bright a scene is allowed to be.
+    float average = max(texture(uMeter, vec2(0.5)).r, 1e-4);
+    float gain = clamp(TARGET / average, MIN_GAIN, MAX_GAIN);
+
+    vec3 colour = max(texture(uSource, vUv).rgb, vec3(0.0)) * uExposure * gain;
 
     float light = luminance(colour);
     colour = mix(vec3(light), colour, uSaturation);
+
+    // Contrast about a pivot, which is what contrast means: differences either side of the pivot get
+    // larger and the pivot itself does not move.
+    //
+    // This was pow(colour, uContrast), which is a darkening gamma wearing the name. With the
+    // parameter above one it pulled every value down and pulled the darker ones down hardest, so
+    // "more contrast" meant "dimmer, with less separation between neighbours" — the exact opposite of
+    // the thing it is bound to bass to deliver.
+    colour = PIVOT + (colour - PIVOT) * uContrast;
+
+    // Roll off only what is actually above the knee.
+    //
+    // Reinhard across the whole range maps one to a half. That is correct for scene-referred input
+    // running well past one, and wrong here: plugins write display-referred values, so the accumulation
+    // sits mostly inside nought to one and the curve simply halved the picture. Measured through this
+    // pass, mean luminance fell from 149 to 25 of 255 and neighbour-to-neighbour detail fell by more
+    // than three times — a bright, detailed composite arriving at the canvas dim and smooth.
+    //
+    // Still applied to luminance and rescaled as a scalar, so a hue keeps its ratio between channels
+    // through the roll-off rather than being flattened toward white by per-channel compression.
     light = max(luminance(colour), 1e-5);
+    float rolled = light <= KNEE
+        ? light
+        : KNEE + (1.0 - KNEE) * ((light - KNEE) / (light - KNEE + (1.0 - KNEE)));
 
-    // Reinhard on luminance alone, applied to the colour as a scalar, so hue and saturation survive
-    // the roll-off instead of being flattened by it.
-    colour *= (light / (1.0 + light)) / light;
-
-    // Deepening rather than lifting. Raising to one over gamma here treats the accumulation as
-    // linear light, which it is not: every plugin writes display-referred values. ToneMapper applied
-    // the same curve inside the graph, so the two compounded to an exponent near a fifth — a
-    // hundredth arrived as four tenths, and the whole frame sat at half scale with nothing black.
-    colour = pow(clamp(colour, 0.0, 1.0), vec3(uContrast));
+    colour *= rolled / light;
     colour += (dither(vUv * uResolution) - 0.5) * 0.004;
 
     fragColor = vec4(clamp(colour, 0.0, 1.0), 1.0);

@@ -47,6 +47,8 @@ import type { Device, RenderTarget } from './device';
 import {
     GRADE_SHADER,
     GRADE_SHADER_ID,
+    METER_SHADER,
+    METER_SHADER_ID,
     MOTION_SUM_SHADER,
     MOTION_SUM_SHADER_ID,
     PERSISTENCE_SHADER,
@@ -60,6 +62,20 @@ import {
 const COMPOSITE_KEY = 'kernel:composite';
 const MOTION_KEY = 'kernel:motion';
 const ACCUMULATE_KEYS = ['kernel:accumulate#0', 'kernel:accumulate#1'] as const;
+
+/** Whichever accumulation slot currently holds the presented image, as an inspectable name. */
+const ACCUMULATE_KEY = 'kernel:accumulate';
+
+const METER_KEYS = ['kernel:meter#0', 'kernel:meter#1'] as const;
+
+/** One texel. The grid of taps happens inside the shader, not across pixels. */
+const METER_SIZE = 1;
+
+/** Seconds for metered exposure to travel most of the way to a new scene's level. */
+const METER_ADAPT_SECONDS = 0.9;
+
+/** Kernel stages the diagnostics overlay can present directly, in the order they run. */
+export const KERNEL_STAGES: readonly string[] = [COMPOSITE_KEY, MOTION_KEY, ACCUMULATE_KEY];
 
 /** The motion field is a force, not an image; it needs no pixel detail. */
 const MOTION_SCALE = 0.5;
@@ -156,10 +172,12 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
      * frames that advance while the counter increments on every one.
      */
     let accumulationSlot: 0 | 1 = 0;
+    let meterSlot: 0 | 1 = 0;
 
     device.registerShader(MOTION_SUM_SHADER);
     device.registerShader(PERSISTENCE_SHADER);
     device.registerShader(GRADE_SHADER);
+    device.registerShader(METER_SHADER);
 
     function resolveTexture(plan: RenderPlan, resource: ResourceId | undefined, previous: boolean): WebGLTexture | undefined {
         if (!resource) {
@@ -438,6 +456,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Inspecting an intermediate resource replaces the composed output, which is how a field,
             // mask, or depth texture is examined directly.
             const inspected = frame.controls?.inspectResource;
+
             if (inspected && plan.writeKeys[inspected]) {
                 presentSingle(device, plan, inspected, presentShaderId, stats);
             } else {
@@ -483,7 +502,31 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     accumulationPrimed = true;
                 }
 
-                presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, frame.grade, stats);
+                // The kernel's own stages are inspectable by name, alongside plugin resources.
+                //
+                // Without this the composition is a black box between the layers and the canvas, and
+                // every question about where a layer's brightness or detail goes had to be answered
+                // by comparing the two ends and inferring the middle. That is how the accumulation
+                // went unexamined while it was removing eight ninths of the particle layer's spatial
+                // detail. Presented ungraded, so what is shown is what the stage holds.
+                if (inspected === COMPOSITE_KEY || inspected === MOTION_KEY) {
+                    presentKernelStage(device, inspected, plan, presentShaderId, stats);
+                } else if (inspected === ACCUMULATE_KEY) {
+                    presentKernelStage(device, ACCUMULATE_KEYS[accumulationSlot], plan, presentShaderId, stats);
+                } else {
+                    const meterWrite = advanceAccumulationSlot(meterSlot, true);
+                    advanceMeter(
+                        device,
+                        ACCUMULATE_KEYS[accumulationSlot],
+                        plan,
+                        deltaSeconds,
+                        { write: meterWrite, read: meterSlot },
+                        stats,
+                    );
+                    meterSlot = meterWrite;
+
+                    presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, frame.grade, meterSlot, stats);
+                }
             }
 
             stats.pendingShaders = device.pendingShaderCount();
@@ -497,6 +540,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             device.registerShader(MOTION_SUM_SHADER);
             device.registerShader(PERSISTENCE_SHADER);
             device.registerShader(GRADE_SHADER);
+            device.registerShader(METER_SHADER);
             accumulationPrimed = false;
 
             for (const active of instances) {
@@ -515,6 +559,33 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 }
 
 /** Draws one resource straight to the canvas, bypassing composition. */
+/** Draws one of the kernel's own targets straight to the canvas, ungraded. */
+function presentKernelStage(
+    device: Device,
+    key: string,
+    plan: RenderPlan,
+    presentShaderId: string,
+    stats: RuntimeStats,
+): void {
+    const program = device.useProgram(presentShaderId);
+    if (!program) {
+        stats.skippedPasses += 1;
+        return;
+    }
+
+    const target = device.acquireTarget(key, plan.width, plan.height);
+
+    device.beginPass(null, 'none', true);
+    device.bindTexture(program, 'uSource', target.texture, 0);
+    device.setUniforms(program, {
+        uOpacity: 1,
+        uResolution: [device.canvas.width, device.canvas.height],
+        uChromatic: 0,
+    });
+    device.drawFullscreen();
+    stats.passesExecuted += 1;
+}
+
 function presentSingle(
     device: Device,
     plan: RenderPlan,
@@ -724,11 +795,47 @@ function advanceAccumulation(
  * before the accumulation and cannot be the last word: whatever it rolled off was accumulated back
  * into clipping and then presented with no compression at all.
  */
+/**
+ * Reduces the presented image to one texel of average luminance, smoothed against its own last value.
+ *
+ * Ping-ponged like the accumulation, because the smoothing reads the previous frame's meter.
+ */
+function advanceMeter(
+    device: Device,
+    sourceKey: string,
+    plan: RenderPlan,
+    deltaSeconds: number,
+    slots: { write: 0 | 1; read: 0 | 1 },
+    stats: RuntimeStats,
+): void {
+    const program = device.useProgram(METER_SHADER_ID);
+    if (!program) {
+        stats.skippedPasses += 1;
+        return;
+    }
+
+    const source = device.acquireTarget(sourceKey, plan.width, plan.height);
+    const history = device.acquireTarget(METER_KEYS[slots.read], METER_SIZE, METER_SIZE);
+    const target = device.acquireTarget(METER_KEYS[slots.write], METER_SIZE, METER_SIZE);
+
+    device.beginPass(target, 'none', true);
+    device.bindTexture(program, 'uSource', source.texture, 0);
+    device.bindTexture(program, 'uHistory', history.texture, 1);
+    device.setUniforms(program, {
+        uResolution: [METER_SIZE, METER_SIZE],
+        uDelta: Math.max(0, deltaSeconds),
+        uAdaptSeconds: METER_ADAPT_SECONDS,
+    });
+    device.drawFullscreen();
+    stats.passesExecuted += 1;
+}
+
 function presentTarget(
     device: Device,
     key: string,
     plan: RenderPlan,
     grade: Readonly<Record<string, number>>,
+    meterSlot: 0 | 1,
     stats: RuntimeStats,
 ): void {
     const program = device.useProgram(GRADE_SHADER_ID);
@@ -738,9 +845,11 @@ function presentTarget(
     }
 
     const target = device.acquireTarget(key, plan.width, plan.height);
+    const meter = device.acquireTarget(METER_KEYS[meterSlot], METER_SIZE, METER_SIZE);
 
     device.beginPass(null, 'none', true);
     device.bindTexture(program, 'uSource', target.texture, 0);
+    device.bindTexture(program, 'uMeter', meter.texture, 1);
     // Bound and modulated like a plugin's parameters, so exposure lifts on a hit and saturation
     // follows intensity rather than sitting at whatever constant was typed here.
     device.setUniforms(program, {
