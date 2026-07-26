@@ -3,6 +3,7 @@ import { instanceIdFor, wireScene } from './wiring';
 import { compileGraph } from './graph';
 import {
     distributeReactivity,
+    featureKind,
     peakConcentration,
     reactivitySpread,
     ROLE_FEATURES,
@@ -258,6 +259,32 @@ describe('reactivity distribution', () => {
 
             expect(rewritten.role).toBe('intensity');
             expect(ROLE_FEATURES.intensity).toContain(rewritten.feature);
+        }
+    });
+
+    test('a level binding is never rewritten onto an excitation channel, or the reverse', () => {
+        // The two kinds have incompatible distributions — a level rides continuously around the
+        // middle of its range, an excitation channel is a gate that spends most of its time at zero
+        // and clears its headroom on any percussive hit. `inputRange`, `outputRange`, and `curve`
+        // are authored against one or the other, and distribution rescales none of them, so a swap
+        // across the boundary turns a smooth rider into a binary toggle.
+        for (const role of ['large-scale-force', 'deformation', 'detail'] as const) {
+            const levels = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === 'level');
+            const excited = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === 'excitation');
+            expect(levels.length, `${role} needs both kinds to make this test meaningful`).toBeGreaterThan(0);
+            expect(excited.length).toBeGreaterThan(0);
+
+            for (const authored of ROLE_FEATURES[role]) {
+                for (const seed of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
+                    const subject = plugin('k', 'field', [], undefined, {
+                        parameters: { amount: 0 },
+                        defaultBindings: [{ ...binding, feature: authored, role }],
+                    });
+                    const rewritten = distributeReactivity([subject], createRng(seed))[0].bindings[0];
+
+                    expect(featureKind(rewritten.feature)).toBe(featureKind(authored));
+                }
+            }
         }
     });
 

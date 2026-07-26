@@ -40,6 +40,24 @@ export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
 const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat'];
 
 /**
+ * Whether a feature reads as a standing level or as a departure from one.
+ *
+ * Level channels are peak-normalized: they ride continuously, spending most of their time somewhere
+ * in the middle of their range. Excitation channels report how far a measure sits above its own
+ * recent mean in units of its own recent deviation, so on percussive material they clear the
+ * headroom constant entirely and read as a gate. Measured: `bass` has a median of 0.204 and a 95th
+ * percentile of 0.402, while `bassExcite` has a median of 0.000 and a 95th percentile of 1.000.
+ *
+ * Derived from the name rather than tabulated, so a new excitation channel cannot be added without
+ * being classified.
+ */
+export type FeatureKind = 'level' | 'excitation';
+
+export function featureKind(feature: string): FeatureKind {
+    return feature.endsWith('Excite') ? 'excitation' : 'level';
+}
+
+/**
  * The role a feature belongs to, so a binding written before roles existed keeps its meaning.
  *
  * This is what lets role-based distribution take effect across the whole catalog without editing
@@ -111,7 +129,17 @@ export function distributeReactivity(
                 return { ...binding };
             }
 
-            return { ...binding, role, feature: claim(ROLE_FEATURES[role], binding.feature) };
+            // Within the role, only among features of the binding's own kind. `inputRange`,
+            // `outputRange`, and `curve` are authored against a distribution, and the two kinds do
+            // not share one: substituting `bassExcite` for `bass` turns a parameter written to ride
+            // smoothly at a fifth of its range into a binary toggle between its extremes, decided by
+            // a per-scene die roll. This is the same guard the impulse branch above applies to
+            // events, for the same reason — distribution spreads reactivity, it does not reinterpret
+            // what a binding meant.
+            const kind = featureKind(binding.feature);
+            const pool = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === kind);
+
+            return { ...binding, role, feature: claim(pool, binding.feature) };
         }),
     }));
 }

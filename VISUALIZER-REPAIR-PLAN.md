@@ -9,8 +9,8 @@ judged once their inputs have a usable range.
 
 | # | Step | Audit items | Status |
 | --- | --- | --- | --- |
-| 1 | Feature normalisation and band boundaries | 1.2, 2.11 | pending |
-| 2 | Binding input ranges and level/excitation compatibility | 1.2, 1.10 | pending |
+| 1 | Feature normalisation and band boundaries | 1.2, 2.11 | done |
+| 2 | Binding input ranges and level/excitation compatibility | 1.2, 1.10 | done |
 | 3 | Beat events, beat phase, and transient reachability | 1.1, S3 channels | pending |
 | 4 | Modulation depth as a fraction of headroom | 1.7 | pending |
 | 5 | Frame delta: kernel authority and clamping | 2.1, 2.2 | pending |
@@ -45,7 +45,42 @@ Each fix is checked the same way — against the `devlab` harness where the effe
 is visual, against the pure `core/` functions where it is not. A fix that only
 looks correct is what produced this audit.
 
+## Measurements
+
+Channel medians before and after step 1, over twenty-four seconds of a pink bed
+with a kick every half second and a hat every eighth, run through the real
+`core/` code:
+
+| channel | p50 before | p50 after |
+| --- | --- | --- |
+| `treble` | 0.0002 | 0.638 |
+| `highMid` | 0.0016 | 0.392 |
+| `mid` | 0.0081 | 0.204 |
+| `lowMid` | 0.038 | 0.138 |
+
+## Considered and not changed
+
+**No `inputRange` was added to any binding.** The audit is right that no binding
+sets one, but the reason every consumer sat at its floor was a producer that
+emitted four channels in the bottom one percent of their nominal range. With that
+fixed the ranges are usable, and adding per-binding input ranges on top would be
+tuning against a distribution nobody has measured per parameter — the kind of
+constant that silently goes stale. Revisit if a specific binding is shown to need
+one.
+
+**`EXCITATION_HEADROOM` was left at 2.** Excitation channels still read as gates
+(median 0.000, 95th percentile 1.000) because two deviations above the running
+mean is exceeded by any percussive hit. That is what an excitation channel is
+for, and step 2 makes it safe by ensuring only bindings authored against one ever
+receive one. Softening it would blur the event detection that `detail` and
+`burst` depend on.
+
+**`CENTROID_CEILING_HZ` at 8000 saturates on bright material** — measured median
+0.999 on the hat-heavy surrogate above. The surrogate is brighter than real
+music, so this is not yet evidence of a defect; noted for the empirical pass in
+step 10.
+
 ## Deferred
 
-Nothing. Items judged not worth changing are recorded in place with the reason,
+Nothing. Items judged not worth changing are recorded above with the reason,
 rather than dropped silently.
