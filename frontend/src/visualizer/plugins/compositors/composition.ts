@@ -436,9 +436,21 @@ export function createLayerMixer(
             curve: 'smooth',
         }],
         character: character({ visualDensity: 0.5, geometricOrder: 0.5, dominance: 'supporting' }),
-        activationWeight: 3,
+        // Modes that can only add light are drawn less often than the rest.
+        //
+        // All eight were equally weighted, so half of every scene's mixers brightened by
+        // construction — and mixers chain, so two or three of them compound. Branches were joined by
+        // repeatedly making the frame lighter until it was white, which is the additive pile that
+        // gets reported as washout. Not removed: screen and add are the right join for sparks over a
+        // dark field. Just no longer the coin-flip default.
+        activationWeight: BRIGHTENING_MIXER_MODES.includes(mode) ? 1.5 : 3.5,
     });
 }
+
+/** Mixer modes whose output is never darker than the brighter of their two inputs. */
+const BRIGHTENING_MIXER_MODES: readonly typeof LAYER_MIXER_MODES[number][] = [
+    'add', 'screen', 'lighten',
+];
 
 export function createMaskRouter(
     mode: typeof MASK_ROUTER_MODES[number] = 'feather',

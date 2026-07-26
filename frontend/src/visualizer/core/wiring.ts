@@ -83,20 +83,28 @@ export function wireScene(
     const unsatisfied: WiredScene['unsatisfied'] = [];
     /** Most recent producer per port type, freshest last. */
     const producers = new Map<string, { instanceId: string; port: string }[]>();
+    /** Outputs registered but not yet read by anything, so later inputs can fold them into the chain. */
+    const unconsumed = new Set<string>();
 
     for (const node of nodes) {
         // A two-input compositor needs two branches. Without reserving the first producer, both
         // `source` and `overlay` resolve to the same newest texture and the mixer becomes a no-op.
         const usedProducerResources = new Map<PluginPort['type'], Set<string>>();
+        let inputsWired = 0;
 
         for (const port of node.definition.inputs) {
             const excluded = usedProducerResources.get(port.type) ?? new Set<string>();
-            const source = findProducer(producers, port, excluded);
+            // The first input continues whatever chain this node is part of; the rest reach for a
+            // branch nothing has read, which is what folds separate generators into one image instead
+            // of leaving each to be summed in at the end.
+            const source = findProducer(producers, port, excluded, inputsWired > 0 ? unconsumed : undefined);
 
             if (source) {
                 edges.push({ from: source, to: { instanceId: node.instanceId, port: port.name } });
                 excluded.add(`${source.instanceId}.${source.port}`);
                 usedProducerResources.set(port.type, excluded);
+                unconsumed.delete(`${source.instanceId}.${source.port}`);
+                inputsWired += 1;
                 continue;
             }
 
@@ -139,6 +147,7 @@ export function wireScene(
             const existing = producers.get(port.type) ?? [];
             existing.push({ instanceId: node.instanceId, port: port.name });
             producers.set(port.type, existing);
+            unconsumed.add(`${node.instanceId}.${port.name}`);
         }
 
         // A feedback-capable transformer reads its own output even when an upstream source existed.
@@ -233,7 +242,29 @@ function findProducer(
     producers: Map<string, { instanceId: string; port: string }[]>,
     port: PluginPort,
     excluded: ReadonlySet<string> = new Set(),
+    /**
+     * Outputs nothing has read yet, preferred over the newest when set.
+     *
+     * This is what turns a scene into a chain instead of a pile. Taking the newest producer for every
+     * input means the first transform consumes the last source and each later transform consumes the
+     * previous transform — a chain, but one that only ever contains a single generator. Every other
+     * generator is left unread, becomes a terminal layer of its own, and is summed into the frame at
+     * the end. Three generators then meant three images made separately, each modified on its own,
+     * added together: no generator ever passing through anything another one made.
+     *
+     * A node's first input still takes the newest, which is what continues the chain it is part of.
+     * Its later inputs reach for something unconsumed, so a compositor folds a waiting generator into
+     * the chain rather than mixing two stages of the same one.
+     */
+    unconsumed?: ReadonlySet<string>,
 ): { instanceId: string; port: string } | undefined {
+    if (unconsumed) {
+        const preferred = findProducerIn(producers, port, excluded, unconsumed);
+        if (preferred) {
+            return preferred;
+        }
+    }
+
     const exact = producers.get(port.type);
     if (exact && exact.length > 0) {
         for (let index = exact.length - 1; index >= 0; index -= 1) {
@@ -254,6 +285,45 @@ function findProducer(
             const candidate = candidates[index];
             if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)) {
                 return candidate;
+            }
+        }
+    }
+
+    return undefined;
+}
+
+/** The same search as `findProducer`, restricted to a set of candidate outputs. */
+function findProducerIn(
+    producers: Map<string, { instanceId: string; port: string }[]>,
+    port: PluginPort,
+    excluded: ReadonlySet<string>,
+    allowed: ReadonlySet<string>,
+): { instanceId: string; port: string } | undefined {
+    const search = (candidates: readonly { instanceId: string; port: string }[]) => {
+        for (let index = candidates.length - 1; index >= 0; index -= 1) {
+            const candidate = candidates[index];
+            const key = `${candidate.instanceId}.${candidate.port}`;
+            if (allowed.has(key) && !excluded.has(key)) {
+                return candidate;
+            }
+        }
+
+        return undefined;
+    };
+
+    const exact = producers.get(port.type);
+    if (exact) {
+        const match = search(exact);
+        if (match) {
+            return match;
+        }
+    }
+
+    for (const [type, candidates] of producers) {
+        if (portsCompatible(type as PluginPort['type'], port.type)) {
+            const match = search(candidates);
+            if (match) {
+                return match;
             }
         }
     }

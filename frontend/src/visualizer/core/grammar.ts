@@ -257,7 +257,11 @@ export const ORGANIC_FLOW: SceneGrammar = {
     fieldCount: [1, 2],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
-    compositorCount: [1, 2],
+    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
+    // branch of its own and is summed into the frame at the end, which is the additive pile the
+    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
+    // mixer, most of them never pass through anything another one made.
+    compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
@@ -276,7 +280,11 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     // No dense simulator: the family is about clean geometry.
     simulatorCount: [0, 0],
     transformerCount: [2, 4],
-    compositorCount: [1, 2],
+    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
+    // branch of its own and is summed into the frame at the end, which is the additive pile the
+    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
+    // mixer, most of them never pass through anything another one made.
+    compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
@@ -296,7 +304,8 @@ export const COLLISION_ENERGY: SceneGrammar = {
     fieldCount: [1, 3],
     simulatorCount: [1, 2],
     transformerCount: [1, 3],
-    compositorCount: [1, 2],
+    // See the note on organic flow: one mixer joins two branches and leaves the rest to be summed.
+    compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 2,
@@ -314,7 +323,11 @@ export const IMAGE_DREAM: SceneGrammar = {
     fieldCount: [1, 3],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
-    compositorCount: [1, 2],
+    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
+    // branch of its own and is summed into the frame at the end, which is the additive pile the
+    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
+    // mixer, most of them never pass through anything another one made.
+    compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,

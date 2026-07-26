@@ -55,6 +55,7 @@ const WELL_FORMED: VisualPluginDefinition[] = [
     plugin('trn', 'transformer', { capabilities: ['feedback'] }),
     plugin('trn-b', 'transformer'),
     plugin('mix', 'compositor'),
+    plugin('mix-b', 'compositor'),
     plugin('post', 'postprocess'),
 ];
 
@@ -63,7 +64,7 @@ describe('category counting', () => {
         const counts = countByCategory(WELL_FORMED);
 
         expect(counts).toEqual({
-            source: 3, field: 1, simulator: 0, transformer: 2, compositor: 1, postprocess: 1,
+            source: 3, field: 1, simulator: 0, transformer: 2, compositor: 2, postprocess: 1,
         });
     });
 

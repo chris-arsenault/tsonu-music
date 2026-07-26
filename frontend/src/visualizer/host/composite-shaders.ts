@@ -162,10 +162,15 @@ const float TARGET = 0.30;
 /**
  * How far metering is allowed to move the exposure.
  *
- * Bounded in both directions: a nearly empty scene should read as sparse rather than have its few lit
- * pixels amplified into noise, and a dense one should not be dimmed until it reads as grey.
+ * Bounded above so a nearly empty scene reads as sparse rather than having its few lit pixels
+ * amplified into noise. The lower bound is loose, because the thing it has to be able to correct is a
+ * genuinely bright composite: several branches chained through mixers arrive at an average of about
+ * three quarters of full scale, and reaching the target from there needs a gain near four tenths. At
+ * a floor of 0.55 the meter simply could not get there — frames measured at 194 and 214 of 255 with
+ * saturation collapsed to 0.13, which is the wash this whole stage exists to prevent, produced by the
+ * one control that was supposed to prevent it.
  */
-const float MIN_GAIN = 0.55;
+const float MIN_GAIN = 0.12;
 const float MAX_GAIN = 6.0;
 
 void main() {
