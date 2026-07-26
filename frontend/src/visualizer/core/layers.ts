@@ -102,13 +102,21 @@ export function composeLayers(
     const sorted = [...layers].sort((left, right) =>
         left.order === right.order ? left.id.localeCompare(right.id) : left.order - right.order);
 
-    const steps = sorted
-        .map((layer, index): CompositionStep => ({
-            layer,
-            opacity: clamp01(layer.opacity) * crossfadeWeight(layer.id, crossfades),
-            blendMode: index === 0 ? 'normal' : layer.blendMode,
-        }))
-        .filter((step) => step.opacity > 0 && step.layer.color !== undefined);
+    // Filtered before the bottom layer is decided, not after.
+    //
+    // The index used to come from the pre-filter list, so a transparent or colourless layer at the
+    // bottom left the first *drawn* layer keeping its own blend mode — and the bottom layer has
+    // nothing beneath it to blend against, which is the whole reason it is forced to normal.
+    const drawn = sorted.filter(
+        (layer) => clamp01(layer.opacity) * crossfadeWeight(layer.id, crossfades) > 0
+            && layer.color !== undefined,
+    );
+
+    const steps = drawn.map((layer, index): CompositionStep => ({
+        layer,
+        opacity: clamp01(layer.opacity) * crossfadeWeight(layer.id, crossfades),
+        blendMode: index === 0 ? 'normal' : layer.blendMode,
+    }));
 
     const feedbackContributors = sorted
         .filter((layer): layer is VisualLayer & { color: ResourceId } =>

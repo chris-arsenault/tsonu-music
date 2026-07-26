@@ -505,18 +505,39 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
                     continue;
                 }
 
-                if (value.length === 2) {
-                    gl.uniform2fv(location, value as number[]);
-                } else if (value.length === 3) {
-                    gl.uniform3fv(location, value as number[]);
-                } else if (value.length === 4) {
-                    gl.uniform4fv(location, value as number[]);
-                } else if (value.length === 9) {
-                    gl.uniformMatrix3fv(location, false, value as number[]);
-                } else if (value.length === 16) {
-                    gl.uniformMatrix4fv(location, false, value as number[]);
-                } else {
-                    gl.uniform1fv(location, value as number[]);
+                // Arrays dispatch on the declared type too, for the same reason scalars do. Guessing
+                // from the JavaScript length cannot tell a `float[9]` from a `mat3` or a `vec4[4]`
+                // from a `mat4`, and it guessed the matrix in both cases — an immediate
+                // GL_INVALID_OPERATION that leaves the uniform at whatever it held. Nothing in the
+                // catalog passes such an array today, which is exactly why it would be missed.
+                const values = value as number[];
+                switch (slot.type) {
+                    case gl.FLOAT_VEC2:
+                        gl.uniform2fv(location, values);
+                        break;
+                    case gl.FLOAT_VEC3:
+                        gl.uniform3fv(location, values);
+                        break;
+                    case gl.FLOAT_VEC4:
+                        gl.uniform4fv(location, values);
+                        break;
+                    case gl.FLOAT_MAT3:
+                        gl.uniformMatrix3fv(location, false, values);
+                        break;
+                    case gl.FLOAT_MAT4:
+                        gl.uniformMatrix4fv(location, false, values);
+                        break;
+                    case gl.FLOAT:
+                        gl.uniform1fv(location, values);
+                        break;
+                    case gl.INT:
+                    case gl.BOOL:
+                        gl.uniform1iv(location, values.map(Math.round));
+                        break;
+                    default:
+                        // A sampler, or a type this device does not upload. The static contract check
+                        // is where a disagreement of that kind is caught.
+                        break;
                 }
             }
         },

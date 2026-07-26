@@ -143,8 +143,20 @@ async function createTap(element: HTMLMediaElement): Promise<AudioTap> {
                 return snapshot;
             }
 
+            // A worklet that stops posting is a flatline too, and on this path `noteSilence` only
+            // ever runs from the message handler — so the one failure it most needs to report, the
+            // analysis thread dying, was the one it could not. Counted here, where the frame loop
+            // asks once per frame whether or not anything arrived.
             const snapshot = latest;
             latest = undefined;
+
+            if (!snapshot) {
+                silentFrames += 1;
+                if (silentFrames >= FLATLINE_FRAME_LIMIT) {
+                    flatlined = true;
+                }
+            }
+
             return snapshot;
         },
 

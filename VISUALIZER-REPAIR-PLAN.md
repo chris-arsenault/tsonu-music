@@ -24,7 +24,7 @@ judged once their inputs have a usable range.
 | 13 | Colour: accent assignment and policy strength | 2.10, 2.9 | done |
 | 14 | Crossfades | 2.12 | done |
 | 15 | Duplicated and discarded work | 2.15 | done |
-| 16 | Severity-3 sweep | S3 | pending |
+| 16 | Severity-3 sweep | S3 | done |
 
 ## Principles for this pass
 
@@ -57,6 +57,41 @@ with a kick every half second and a hat every eighth, run through the real
 | `highMid` | 0.0016 | 0.392 |
 | `mid` | 0.0081 | 0.204 |
 | `lowMid` | 0.038 | 0.138 |
+
+## Severity-3 items left in place, with reasons
+
+**`frameParity` advancing on frozen frames.** The exposure was a ping-pong
+producer being skipped while its consumers kept alternating slots at refresh
+rate. Step 9 removes the case that produced it: a skipped producer now strands
+its consumers, so they are skipped with it. Advancing parity on a frozen frame is
+otherwise harmless, since a frozen frame still executes its passes with a zero
+delta.
+
+**`totalImpactEnergy` and `packImpacts` have no non-test caller.** Both are
+plausible pieces of an impact-uniform path that a plugin could want, and both are
+tested. Deleting a correct, tested helper on the grounds that nothing calls it yet
+is a different judgement from deleting a duplicated constant that disagreed with
+its twin. Left, and recorded here so they are not mistaken for live code.
+
+**`presentSingle` leaving stale ramp uniforms.** Gated out by `uChromatic: 0`, and
+that gate is the thing the diagnostics path depends on for a raw view. Fixing the
+staleness would not change any pixel.
+
+**`uResolution` declared and unused in about fifteen shader bodies.** Cosmetic.
+
+**`smoothstep` with inverted edges in `mask-fields.ts`.** Formally unspecified in
+GLSL ES 3.00 but implemented as the intended inversion on every mainstream
+driver, and the audit could not test real hardware. Changing it on that basis
+risks trading a working behaviour for a guess.
+
+**`estimatedTextureBytes` overstating half-resolution fields.** A diagnostics
+figure with no effect on rendering.
+
+**Channels with no consumer** — `leftLevel`, `rightLevel`, `beatConfidence`,
+`sectionChange`. These are producer-side and cheap, and three of the four are the
+raw material for `stereoBalance` and the beat path. `sectionChange` is declared
+and never emitted, which is honest about a feature that is not implemented rather
+than wrong.
 
 ## Considered and not changed
 

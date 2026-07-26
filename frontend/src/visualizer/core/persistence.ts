@@ -143,7 +143,10 @@ export function persistenceSettings(input: PersistenceInput): PersistenceSetting
         // Low energy rather than slow: the image still accumulates, but it is not dragged far and it
         // does not punch.
         return {
-            survivalPerSecond: Math.min(survival, 0.35),
+            // No clamp: SURVIVAL_CEILING is 0.25, so a minimum against 0.35 could never bind. It was
+            // left behind when the ceiling came down from 0.8 and read as a safeguard that was doing
+            // nothing. Removing it changes no value this function can produce.
+            survivalPerSecond: survival,
             motionScale: MOTION_FLOOR * 0.5,
             transientPunch: 0,
         };

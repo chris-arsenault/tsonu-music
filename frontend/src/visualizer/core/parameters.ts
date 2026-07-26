@@ -68,8 +68,10 @@ export function readFeature(features: AudioFeatureBus, name: string): number | u
     return typeof value === 'number' ? value : undefined;
 }
 
-/** Event channels an impulse binding may fire from. */
-export const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat', 'sectionChange'];
+// A second IMPULSE_FEATURES lived here, exported, imported by nothing, and disagreeing with the one
+// distribution actually uses: it listed `sectionChange`, which the bus has never emitted. Two lists
+// of the same name for the same concept, one of them wrong, is worse than one — `audio-mapping.ts`
+// holds the only copy now.
 
 /**
  * Strongest event on a channel this frame, or undefined when nothing fired.

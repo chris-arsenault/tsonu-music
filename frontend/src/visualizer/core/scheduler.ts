@@ -438,6 +438,10 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         const visible = eligible.filter((definition) =>
             isVisibleSource(definition)
             && !conflictsWith(chosen, definition)
+            // Checked here as the feedback and motion repairs above both do. Without it this repair
+            // could push the source count past its own maximum, failing the assembly it was added to
+            // rescue.
+            && !wouldViolate(chosen, definition, grammar)
             && inputsSatisfiable(chosen, definition, assetTypes));
         const picked = rng.weighted(
             visible,

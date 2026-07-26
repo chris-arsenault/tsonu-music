@@ -199,8 +199,12 @@ function buildSceneAttempt(
     // Category counts alone are not enough: an optional field can be selected without anything ever
     // reading it. Keep only plugins that contribute to a terminal colour layer, then re-check the
     // grammar so an allegedly full scene cannot spend passes on disconnected decoration.
+    // Compared against the number of distinct definitions in the scene, not the number of nodes.
+    // `contributingPluginIds` returns definition ids, so two instances of one definition made the set
+    // smaller than the node count on their own and triggered a prune pass that had nothing to prune.
     const contributing = contributingPluginIds(wired);
-    if (contributing.size < wired.nodes.length) {
+    const distinctDefinitions = new Set(wired.nodes.map((node) => node.definition.id)).size;
+    if (contributing.size < distinctDefinitions) {
         plugins = plugins.filter((definition) => contributing.has(definition.id));
         const violations = grammarViolations(plugins, effectiveTheme.grammar);
         if (violations.length > 0) {

@@ -188,7 +188,7 @@ export function driftPalette(
 
     return {
         ...palette,
-        entries: palette.entries.map((entry, index) => {
+        entries: palette.entries.map((entry) => {
             const start = stops.findIndex((stop) => sameRgb(stop, entry.mid));
             const from = stops[(start + step) % stops.length];
             const to = stops[(start + step + 1) % stops.length];
