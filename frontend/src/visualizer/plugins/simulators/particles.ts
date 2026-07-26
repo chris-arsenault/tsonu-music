@@ -165,7 +165,10 @@ void main() {
     // Size carries speed. At a fixed size the only cue that a particle is moving is that it is
     // somewhere else next frame, which at these speeds — eight to thirty pixels between frames, with
     // no trail — reads as a different particle rather than the same one having travelled.
-    gl_PointSize = uPointSize * (0.7 + min(vSpeed * 2.2, 1.6));
+    //
+    // A floor of three device pixels regardless: below that a particle is a fleck whatever else is
+    // true of it, and the whole field reads as grain.
+    gl_PointSize = max(3.0, uPointSize * (0.55 + min(vSpeed * 2.6, 1.75)));
     gl_Position = vec4(state.xy, 0.0, 1.0);
 }`;
 
@@ -427,15 +430,33 @@ export function createParticleRenderer(
             activationWeight: 5,
             prefersWith: ['ParticleSimulator', 'MaskSignedDistanceField'],
         },
-        parameters: { pointSize: 2.5, brightness: 1.2 },
-        defaultBindings: [{
-            feature: 'treble',
-            parameter: 'brightness',
-            outputRange: [0.7, 2],
-            attack: 0.03,
-            release: 0.3,
-            curve: 'sqrt',
-        }],
+        // Nine device pixels at rest, against two and a half before. At the old size, scaled by the
+        // speed term and then divided by the device pixel ratio, a particle occupied one to four CSS
+        // pixels — visible only as a fleck, and indistinguishable from sensor noise once a dozen of
+        // them overlapped. A particle has to be large enough to read as a body before any amount of
+        // correct physics makes it look like one is moving.
+        parameters: { pointSize: 9, brightness: 1.2 },
+        defaultBindings: [
+            {
+                feature: 'treble',
+                parameter: 'brightness',
+                outputRange: [0.7, 2],
+                attack: 0.03,
+                release: 0.3,
+                curve: 'sqrt',
+            },
+            {
+                // Size answers to the music as well as to speed. Held on a large-scale force so the
+                // field swells and contracts as a body rather than flickering per particle.
+                feature: 'bass',
+                role: 'large-scale-force',
+                parameter: 'pointSize',
+                outputRange: [6, 17],
+                attack: 0.2,
+                release: 0.8,
+                curve: 'smooth',
+            },
+        ],
         deactivationPolicy: 'fade',
 
         create(context): VisualPluginInstance {
