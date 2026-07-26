@@ -98,6 +98,20 @@ export interface Device {
      * that fetch fails.
      */
     bindEmptySamplers(program: Program, bound: ReadonlySet<string>, startUnit: number): void;
+    /**
+     * The most recent completed readback of a target, and queues another.
+     *
+     * Returns data that is a frame or two old, which is the price of not stalling. `readPixels`
+     * straight to client memory blocks until the GPU has finished everything queued ahead of it —
+     * tens of milliseconds at the wrong moment — so the read goes into a pixel buffer object, a fence
+     * is placed after it, and the result is collected on a later frame once the fence has passed.
+     *
+     * This exists so simulation can run on the CPU against fields the GPU produced. A force field or
+     * a mask boundary is a texture, and a particle solver that has to answer "what is pushing this
+     * body" and "is there a surface here" cannot see one. Staleness is not a problem for either: a
+     * field is smooth over the distance a body travels in two frames.
+     */
+    readTarget(key: string, width: number, height: number): Float32Array | undefined;
 
     drawFullscreen(): void;
     drawGeometry(program: Program, geometryId: string, primitive: Primitive, vertexCount: number): void;
@@ -152,6 +166,15 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
     const targets = new Map<string, RenderTarget>();
     const assetTextures = new Map<string, WebGLTexture>();
     const geometries = new Map<string, { buffer: WebGLBuffer; vao: WebGLVertexArrayObject; stride: number }>();
+    /** In-flight and completed target readbacks, keyed by target. See `readTarget`. */
+    const readbacks = new Map<string, {
+        buffer: WebGLBuffer | null;
+        sync: WebGLSync | null;
+        data: Float32Array;
+        ready: boolean;
+        width: number;
+        height: number;
+    }>();
 
     const quadBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
@@ -181,6 +204,9 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
         targets.clear();
         assetTextures.clear();
         geometries.clear();
+        // The fences and pixel buffers belonged to the dead context too, and a sync object from it
+        // never signals.
+        readbacks.clear();
         empty = null;
     });
 
@@ -553,6 +579,56 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             gl.uniform1i(location, unit);
         },
 
+        readTarget(key, width, height) {
+            const target = targets.get(key);
+            if (!target) {
+                return undefined;
+            }
+
+            let read = readbacks.get(key);
+            if (!read || read.width !== width || read.height !== height) {
+                if (read?.buffer) {
+                    gl.deleteBuffer(read.buffer);
+                }
+                read = {
+                    buffer: gl.createBuffer(),
+                    sync: null,
+                    data: new Float32Array(width * height * 4),
+                    ready: false,
+                    width,
+                    height,
+                };
+                readbacks.set(key, read);
+            }
+
+            // Collect the previous request if the GPU has reached the fence. Never waited on: a
+            // timeout of zero asks whether it is done, and if it is not the caller keeps last
+            // frame's data for another frame.
+            if (read.sync) {
+                const state = gl.clientWaitSync(read.sync, 0, 0);
+                if (state === gl.ALREADY_SIGNALED || state === gl.CONDITION_SATISFIED) {
+                    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, read.buffer);
+                    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, read.data);
+                    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+                    gl.deleteSync(read.sync);
+                    read.sync = null;
+                    read.ready = true;
+                }
+            }
+
+            if (!read.sync && read.buffer) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, read.buffer);
+                gl.bufferData(gl.PIXEL_PACK_BUFFER, read.data.byteLength, gl.STREAM_READ);
+                gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, 0);
+                gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+                read.sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+                gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+            }
+
+            return read.ready ? read.data : undefined;
+        },
+
         bindEmptySamplers(program, bound, startUnit) {
             let unit = startUnit;
 
@@ -596,6 +672,16 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
                 gl.deleteTexture(target.texture);
             }
             targets.clear();
+
+            for (const read of readbacks.values()) {
+                if (read.buffer) {
+                    gl.deleteBuffer(read.buffer);
+                }
+                if (read.sync) {
+                    gl.deleteSync(read.sync);
+                }
+            }
+            readbacks.clear();
 
             for (const entry of geometries.values()) {
                 gl.deleteBuffer(entry.buffer);

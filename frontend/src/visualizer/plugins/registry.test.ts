@@ -50,6 +50,9 @@ function frameContext(overrides: Partial<FrameContext> = {}) {
             publishImpacts: (published: readonly ImpactEvent[]) => {
                 impacts.push(...published);
             },
+            inputs: {},
+            // Deliberately absent, because that is the state on the first frames of every scene.
+            readField: () => undefined,
             ...overrides,
         },
         impacts,

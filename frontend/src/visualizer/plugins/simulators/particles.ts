@@ -9,16 +9,15 @@
  */
 
 import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
-import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
+import type { FieldSample, VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
-import { QUAD_VERTEX_SHADER } from '../../host/device';
+import { createParticleWorld, stepParticles } from '../../core/particle-physics';
 
 // Only the two hand-written plugins need explicit shader ids; the rest go through
 // `defineShaderPlugin`, which derives the id from the plugin's own id.
-const SIMULATOR_SHADER = 'particle-simulator';
 const RENDERER_SHADER = 'particle-renderer';
-const BIN_SHADER = 'particle-bins';
-const BIN_GEOMETRY_ID = 'particle-bin-indices';
+const STATE_SHADER = 'particle-state-upload';
+const STATE_GEOMETRY_ID = 'particle-bodies';
 
 /**
  * Each texel is one particle: xy position in clip space, zw velocity.
@@ -35,249 +34,135 @@ const BIN_GEOMETRY_ID = 'particle-bin-indices';
  * patterns were sampled once and never again, its rate binding did nothing, and a field that decayed
  * into a corner had no mechanism to refill.
  */
-const SIMULATOR_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uState;
-uniform sampler2D uForce;
-uniform sampler2D uBoundary;
-uniform sampler2D uSpawn;
-/** Previous frame's spatial bins: one particle's position and velocity per grid cell. */
-uniform sampler2D uBins;
-uniform vec2 uResolution;
-uniform vec2 uBinResolution;
-uniform float uDelta;
-uniform float uDrag;
-uniform float uLifetime;
-uniform float uTime;
-uniform float uSeed;
-/** Contact radius in clip units. One cell of the bin grid is one diameter across. */
-uniform float uRadius;
-/** How much of the closing speed is returned on contact. Zero is dead clay, one is billiards. */
-uniform float uRestitution;
-/** Zero disables contact resolution entirely, for the cheapest rung of the quality ladder. */
-uniform float uContact;
-uniform bool uHasBoundary;
-uniform bool uHasSpawn;
-${GLSL_COMMON}
-
-/** Distinct groups a particle can be born into when no emitter is supplying positions. */
-const float SEED_CLUSTERS = 7.0;
-
-/** Cells searched either side for a contact. Must match CONTACT_SEARCH below the shader. */
-const int CONTACT_SEARCH = 1;
-
-/**
- * Where a particle is born when nothing else says.
- *
- * Clustered, not uniform over the frame. Sixteen thousand independent uniform-random dots are
- * statistically identical to sixteen thousand others, so a field of them reshuffling frame to frame
- * has nothing in it to track: captures four hundred milliseconds apart were indistinguishable, and
- * dots crossing eight to thirty pixels per frame read as twinkle rather than travel. Motion is only
- * legible against structure, so particles are born in groups that a force field then carries, folds,
- * and pulls apart as recognisable bodies.
- */
-/**
- * A generation number folded into the unit interval.
- *
- * The raw count climbs with playback time, and it was being added straight into hash arguments. The
- * hash is a sine of a dot product, so once the constant term reaches the tens the variation between
- * neighbouring texels — a sixty-fourth — is far below the resolution left in the argument, and whole
- * runs of texels return the same value. Particles were then born at byte-identical positions:
- * seventy-six exact coincidences measured in one frame. Two bodies at the same point have a
- * separation of zero, which contact resolution reads as a particle finding itself and skips, so they
- * stayed welded together for the rest of their lives.
- *
- * Multiplying by the golden ratio and taking the fraction keeps successive generations well spread
- * while the argument stays bounded.
- */
-float generationSeed(float generation) {
-    return fract(generation * 0.6180339887);
-}
-
-vec2 seedPosition(vec2 uv, float generation) {
-    float gen = generationSeed(generation);
-    float group = floor(hash(uv + uSeed + 5.3) * SEED_CLUSTERS);
-
-    // Keyed to the generation, not to continuous time: a cluster has to hold still long enough for
-    // the particles in it to read as belonging together. Each turnover moves the clusters somewhere
-    // new, so the composition keeps changing without the field ever becoming uniform.
-    vec2 centre = vec2(
-        hash(vec2(group, uSeed + gen)),
-        hash(vec2(group + 41.0, uSeed + gen))
-    ) * 1.6 - 0.8;
-
-    float angle = hash(uv + uSeed + 8.1 + gen) * 6.2831853;
-    float radius = hash(uv + uSeed + 2.9 + gen) * 0.26;
-
-    // A displacement unique to this texel, so two particles can never be born at exactly the same
-    // point however the hashes fall. Far below the contact diameter, so it does not disturb the
-    // pattern — it only guarantees that bodies which should push each other apart are able to.
-    vec2 unique = (uv - 0.5) * 0.006;
-
-    return centre + vec2(cos(angle), sin(angle)) * radius + unique;
-}
+const STATE_VERTEX = `#version 300 es
+in vec2 aSlot;
+in vec4 aBody;
+out vec4 vBody;
 
 void main() {
-    vec4 state = texture(uState, vUv);
-    vec2 position = state.xy;
-    vec2 velocity = state.zw;
+    vBody = aBody;
+    gl_PointSize = 1.0;
+    // One point per particle, landing on that particle's own texel of the state texture.
+    gl_Position = vec4(aSlot * 2.0 - 1.0, 0.0, 1.0);
+}`;
 
-    // Age without storing it: the particle's own cycle position, offset per particle so respawns are
-    // spread evenly through the lifetime rather than the whole field turning over at once. A cycle
-    // completed within this frame is a rebirth. Playback time is the clock, so a paused track ages
-    // nothing.
-    float lifetime = max(uLifetime, 0.05);
-    float birth = hash(vUv + uSeed + 19.7);
-    float cycles = uTime / lifetime + birth;
-    bool aged = floor(cycles) > floor((uTime - uDelta) / lifetime + birth);
+const STATE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec4 vBody;
+out vec4 fragColor;
 
-    // A particle that has left the frame is reborn rather than wrapped.
-    //
-    // Wrapping looked like the way to avoid piling particles on an edge, but for any divergent field
-    // — repel, attract, spiral, gravity, wind — the seam is a trap: crossing it reverses the force
-    // relative to the velocity, so particles oscillate about the boundary instead of passing through.
-    // Measured, the fraction of particles sitting within three percent of an edge reached 0.18 in
-    // repel scenes against 0.0003 elsewhere, and ensemble speed decayed from 0.242 to 0.042 clip
-    // units per second over about 250 frames, leaving a hollow rectangle of noise around a black
-    // centre that did not change from frame to frame.
-    bool escaped = any(greaterThan(abs(position), vec2(1.06)));
+void main() {
+    fragColor = vBody;
+}`;
 
-    // An uninitialized texel starts as a seeded position rather than at the origin, so the first frame
-    // does not show every particle stacked in one place.
-    if (aged || escaped || (position == vec2(0.0) && velocity == vec2(0.0))) {
-        float generation = floor(cycles);
-        float gen = generationSeed(generation);
-        vec4 spawn = uHasSpawn ? texture(uSpawn, vUv) : vec4(0.0);
-        // The per-texel displacement applies to emitter positions too: a point emitter hands every
-        // particle the identical position, which is the worst case for coincidence.
-        position = uHasSpawn && spawn.a > 0.0
-            ? spawn.xy + (vUv - 0.5) * 0.006
-            : seedPosition(vUv, generation);
 
-        // Born moving, in a random direction. A birth speed of a twentieth of a clip unit per second
-        // is nothing against field forces an order of magnitude larger, which is survivable when
-        // particles are born once — but they are now born throughout the scene, and a point emitter
-        // hands every one of them the same position. Without a real initial velocity that emitter
-        // renders as a single dot: measured at one tenth of one percent of the frame lit, unchanging.
-        // With one it is a fountain, which is what a point emitter is for.
-        float launch = hash(vUv + 3.3 + gen) * 6.2831853;
-        float speed = 0.22 + hash(vUv + 17.9 + gen) * 0.45;
-        velocity = vec2(cos(launch), sin(launch)) * speed;
+/** Clip units per second per unit of field magnitude. */
+const FORCE_SCALE = 2.4;
+
+/** Collision-field proximity below which a point counts as clear of the surface. */
+const SURFACE_THRESHOLD = 0.04;
+
+/** Scratch for one field read, so sampling allocates nothing per particle. */
+const sampled: [number, number, number] = [0, 0, 0];
+
+/**
+ * A bilinear sampler over a field read back from the GPU, in clip coordinates.
+ *
+ * Bilinear rather than nearest because the field is a fraction of the screen resolution and a body
+ * crosses several texels a second; nearest sampling makes a smooth field into a staircase and the
+ * whole ensemble twitches on texel boundaries.
+ */
+function sampleField(
+    field: FieldSample | undefined,
+): ((x: number, y: number, out: [number, number, number]) => void) | undefined {
+    if (!field || field.width < 2 || field.height < 2) {
+        return undefined;
     }
 
-    // The force field is sampled in field space, which is the same 0..1 domain as the screen.
-    vec2 forceUv = position * 0.5 + 0.5;
-    vec2 force = texture(uForce, clamp(forceUv, 0.0, 1.0)).xy;
+    const { width, height, data } = field;
 
-    velocity += force * uDelta;
-    velocity *= (1.0 - uDrag * uDelta);
+    return (x, y, out) => {
+        const u = Math.min(width - 1.001, Math.max(0, (x * 0.5 + 0.5) * (width - 1)));
+        const v = Math.min(height - 1.001, Math.max(0, (y * 0.5 + 0.5) * (height - 1)));
+        const x0 = Math.floor(u);
+        const y0 = Math.floor(v);
+        const fx = u - x0;
+        const fy = v - y0;
 
-    // Collision fields carry boundary proximity in blue and an outward normal in red/green. A mask is
-    // a surface, so a particle is turned away from it and then moved clear of it — reflecting the
-    // velocity alone lets a fast particle travel through the wall within a single step and arrive on
-    // the far side still moving away from it, which is how a solid object becomes a suggestion.
-    if (uHasBoundary) {
-        vec4 boundary = texture(uBoundary, clamp(forceUv, 0.0, 1.0));
-        float proximity = boundary.b;
-        vec2 normal = length(boundary.rg) > 0.0001 ? normalize(boundary.rg) : vec2(0.0);
-        if (proximity > 0.04) {
-            if (dot(velocity, normal) < 0.0) {
-                velocity = reflect(velocity, normal) * mix(0.72, 0.94, proximity);
-            }
-            // Positional, not a force: penetration is removed outright rather than discouraged.
-            position += normal * proximity * uRadius * 1.5;
+        for (let channel = 0; channel < 3; channel += 1) {
+            const a = data[(y0 * width + x0) * 4 + channel];
+            const b = data[(y0 * width + x0 + 1) * 4 + channel];
+            const c = data[((y0 + 1) * width + x0) * 4 + channel];
+            const d = data[((y0 + 1) * width + x0 + 1) * 4 + channel];
+            out[channel] = (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy;
         }
+    };
+}
+
+/**
+ * Where bodies are born: from an emitter's buffer when one is wired, otherwise in clusters.
+ *
+ * Clustered rather than uniform because motion is only legible against structure. Sixteen thousand
+ * independent uniform-random dots are statistically identical to sixteen thousand others, so a field
+ * of them reshuffling has nothing in it to track — captures four hundred milliseconds apart were
+ * indistinguishable. Bodies born in groups get carried, folded and pulled apart as recognisable
+ * things.
+ */
+function createSpawner(seed: number) {
+    const CLUSTERS = 7;
+    let emitter: ((x: number, y: number, out: [number, number, number]) => void) | undefined;
+    let generation = 0;
+    let centres = clusterCentres(seed, generation);
+
+    function clusterCentres(base: number, turn: number): number[] {
+        const out: number[] = [];
+        for (let index = 0; index < CLUSTERS; index += 1) {
+            out.push(
+                Math.sin((base + turn * 0.618 + index) * 12.9898) * 0.8,
+                Math.cos((base + turn * 0.618 + index) * 78.233) * 0.8,
+            );
+        }
+
+        return out;
     }
 
-    position += velocity * uDelta;
+    return {
+        setEmitter(field: ((x: number, y: number, out: [number, number, number]) => void) | undefined) {
+            emitter = field;
+        },
 
-    // Contact against the neighbours sharing this patch of the frame.
-    //
-    // Resolved as position-based dynamics, which is what makes these read as objects rather than as
-    // charges: an overlap is corrected by moving both bodies apart by half of it, immediately, and the
-    // component of relative velocity along the contact normal is reversed and damped. A repulsive
-    // force would instead let two particles pass through one another whenever they arrived fast
-    // enough, and would make every particle a soft haze at rest. Solid means the overlap is not
-    // allowed to persist, which is a statement about position, not about force.
-    if (uContact > 0.0) {
-        vec2 bounce = vec2(0.0);
-        /** Total positional correction across every pass, read back as velocity below. */
-        vec2 resolved = vec2(0.0);
-        float diameter = uRadius * 2.0;
-        vec2 step_uv = vec2(1.0) / uBinResolution;
+        /** Advances to a new arrangement of clusters, so the composition keeps changing. */
+        turnOver() {
+            generation += 1;
+            centres = clusterCentres(seed, generation);
+        },
 
-        // Relaxed repeatedly against the same neighbours, Jacobi style.
-        //
-        // A single pass moves this body half of one overlap and stops, which is right only if nothing
-        // is pushing back. Something always is: the force field that drew the pile together is still
-        // pulling while the contact is being resolved, so one pass per frame settles at an
-        // equilibrium with the overlap still in it. Measured that way, median nearest-neighbour
-        // distance stayed at the value a random field of this density gives — another way of saying
-        // the contacts were holding nothing apart. Each further pass removes half of what is left.
-        for (int iteration = 0; iteration < 4; iteration += 1) {
-            // Summed over the neighbourhood. Resolving only the deepest overlap per pass was tried,
-            // on the reasoning that opposing corrections cancel in a dense clump; measured over two
-            // scenes it was slightly worse than summing, so the simpler form stands.
-            vec2 correction = vec2(0.0);
+        place(index: number, total: number, out: [number, number]) {
+            if (emitter) {
+                // The emitter buffer is indexed by particle, so read it at this body's own texel.
+                const u = ((index % PARTICLE_TEXTURE_SIDE) + 0.5) / PARTICLE_TEXTURE_SIDE;
+                const v = (Math.floor(index / PARTICLE_TEXTURE_SIDE) + 0.5) / PARTICLE_TEXTURE_SIDE;
+                emitter(u * 2 - 1, v * 2 - 1, sampled);
 
-            // Snapped to the centre of the cell this particle is in, then stepped a whole cell at a
-            // time. Sampling at a continuous coordinate reads between texels, and under linear
-            // filtering that returns the average of four neighbouring particles' positions — a point
-            // where nothing is, which is never in contact with anything.
-            vec2 cell = (floor((position * 0.5 + 0.5) * uBinResolution) + 0.5) * step_uv;
-
-            for (int dy = -CONTACT_SEARCH; dy <= CONTACT_SEARCH; dy += 1) {
-                for (int dx = -CONTACT_SEARCH; dx <= CONTACT_SEARCH; dx += 1) {
-                    vec4 other = texture(uBins, cell + vec2(float(dx), float(dy)) * step_uv);
-
-                    vec2 apart = position - other.xy;
-                    float gap = length(apart);
-
-                    // A gap of zero is this particle finding itself; an empty cell reads as the
-                    // origin, which the radius test rejects unless something is genuinely there.
-                    if (gap > 1e-5 && gap < diameter) {
-                        vec2 normal = apart / gap;
-                        correction += normal * (diameter - gap) * 0.5;
-
-                        // Restitution is collected on the first pass only. The later passes resolve
-                        // position against a snapshot; counting the same impact again each time
-                        // would multiply one collision into four.
-                        if (iteration == 0) {
-                            float closing = dot(velocity - other.zw, normal);
-                            if (closing < 0.0) {
-                                bounce += normal * (-closing) * uRestitution;
-                            }
-                        }
-                    }
+                if (Math.abs(sampled[0]) <= 1 && Math.abs(sampled[1]) <= 1) {
+                    // Displaced by a hair, unique per body. A point emitter hands every particle the
+                    // identical position, and bodies at exactly the same place have no direction to
+                    // separate along — the case that used to weld them together permanently.
+                    out[0] = sampled[0] + ((index % 97) / 97 - 0.5) * CONTACT_RADIUS;
+                    out[1] = sampled[1] + ((index % 89) / 89 - 0.5) * CONTACT_RADIUS;
+                    return;
                 }
             }
 
-            position += correction;
-            resolved += correction;
-        }
+            const cluster = index % CLUSTERS;
+            const angle = (index / total) * Math.PI * 2 + cluster;
+            const radius = ((index * 37) % 101) / 101 * 0.26;
 
-        // The separation becomes motion.
-        //
-        // Moving a body out of an overlap and leaving its velocity alone makes the correction
-        // transient: the force field that pushed the pair together is unchanged, so next frame it
-        // pushes them back, the correction is applied again, and the system settles at a steady state
-        // that still contains the overlap. Measured that way the contact solver was invisible — a
-        // tenfold correction produced no change in the distribution at all, while an instrumented
-        // build proved the neighbours were being found. Position-based dynamics closes this by
-        // reading the correction back as the velocity it implies.
-        //
-        // Damped, because the correction is resolved against a snapshot and several bodies may be
-        // answering the same overlap; taking the whole implied velocity lets a dense pack pump itself
-        // apart.
-        velocity += resolved / max(uDelta, 1.0 / 240.0) * 0.4;
-        velocity += bounce;
-    }
-
-    fragColor = vec4(position, velocity);
-}`;
+            out[0] = centres[cluster * 2] + Math.cos(angle) * radius;
+            out[1] = centres[cluster * 2 + 1] + Math.sin(angle) * radius;
+        },
+    };
+}
 
 /** Draws the state texture as points, one vertex per particle. */
 const RENDERER_VERTEX = `#version 300 es
@@ -328,45 +213,12 @@ void main() {
     fragColor = vec4(vec3(energy), energy);
 }`;
 
-/**
- * Spatial binning: each particle writes itself into the grid cell it occupies.
- *
- * This is what makes particle-to-particle contact affordable. Testing every particle against every
- * other is two hundred and sixty-eight million pairs at this count; testing against the nine cells
- * around you is nine texture reads. The grid is sized so one cell is one particle diameter, which
- * makes at most one particle fit per cell in a resting pack and turns "the neighbours that could be
- * touching me" into a fixed, tiny neighbourhood.
- *
- * The winner of a contested cell is whichever particle draws last. That is arbitrary, and it is the
- * standard trade: a cell holding two particles means a contact is missed for one frame, and the pair
- * separates on the next one because the overlap is still there.
- */
-const BIN_VERTEX = `#version 300 es
-in vec2 aIndex;
-out vec4 vBody;
-
-uniform sampler2D uState;
-
-void main() {
-    vec4 state = texture(uState, aIndex);
-    vBody = state;
-
-    // Position in clip space maps directly to a cell, because the grid covers the same square.
-    gl_PointSize = 1.0;
-    gl_Position = vec4(clamp(state.xy, -0.999, 0.999), 0.0, 1.0);
-}`;
-
-const BIN_FRAGMENT = `#version 300 es
-precision highp float;
-in vec4 vBody;
-out vec4 fragColor;
-
-void main() {
-    // Position and velocity of whoever holds this cell. Alpha is unused: an empty cell reads as all
-    // zeroes, and a particle at exactly the origin with exactly zero velocity is the uninitialised
-    // state the simulator overwrites on its first frame anyway.
-    fragColor = vBody;
-}`;
+// A pair of shaders that binned particles into a texture-backed spatial grid stood here. The grid
+// itself was right — a uniform grid is the standard broad phase — but a texel holds four floats and
+// four floats is one particle, so a cell could only ever remember one occupant, and a fragment shader
+// cannot write to another particle, so a contact could never be resolved once with both bodies
+// moving. Both limits belonged to the container rather than to the algorithm. See
+// `core/particle-physics.ts`.
 
 const EMITTER_FRAGMENT = `#version 300 es
 precision highp float;
@@ -549,21 +401,14 @@ export function createParticleSimulator(): VisualPluginDefinition {
             { name: 'force', type: 'vector-field', required: true },
             { name: 'boundary', type: 'collision-field', required: false },
             { name: 'spawn', type: 'particle-buffer', required: false },
-            { name: 'history', type: 'particle-buffer', required: false },
-            // This plugin's own bins from the previous frame, which is what it collides against.
-            { name: 'crowd', type: 'particle-buffer', required: false, feedbackFrom: 'bins' },
         ],
         outputs: [
             { name: 'state', type: 'particle-buffer', required: false },
-            { name: 'bins', type: 'particle-buffer', required: false, internal: true },
         ],
-        capabilities: ['particles', 'feedback'],
+        capabilities: ['particles'],
         requiredCapabilities: ['float-textures'],
-        // Two passes and a second buffer: the step, then the binning that makes contact affordable.
-        // GPU cost stays at two — the bin pass draws sixteen thousand single-pixel points into a
-        // 128-square target, which is nothing beside the step itself, and three would cross the
-        // high-cost threshold and make particle scenes rarer for no real expense.
-        cost: { gpu: 2, cpu: 0, memory: 3, renderPasses: 2, qualityScalable: true, dominant: false },
+        // One pass, and it only uploads: the simulation is CPU work, so the cost is in `cpu`.
+        cost: { gpu: 1, cpu: 2, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
         character: character({
             visualDensity: 0.7,
             motionEnergy: 0.8,
@@ -590,113 +435,126 @@ export function createParticleSimulator(): VisualPluginDefinition {
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
-            let playbackTime = 0;
-            let contactEnabled = 1;
+            const count = PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE;
+            const world = createParticleWorld(count);
+            const spawner = createSpawner(context.seed);
 
-            // One vertex per particle holding its own lookup coordinate, for the binning pass.
-            const indices = new Float32Array(PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE * 2);
+            // Interleaved per particle: the texel it owns, then its position and velocity. Uploaded
+            // every frame, which is the whole GPU cost of the simulation now — 4096 points into a
+            // 64-square target.
+            const bodies = new Float32Array(count * 6);
             for (let y = 0; y < PARTICLE_TEXTURE_SIDE; y += 1) {
                 for (let x = 0; x < PARTICLE_TEXTURE_SIDE; x += 1) {
-                    const offset = (y * PARTICLE_TEXTURE_SIDE + x) * 2;
-                    indices[offset] = (x + 0.5) / PARTICLE_TEXTURE_SIDE;
-                    indices[offset + 1] = (y + 0.5) / PARTICLE_TEXTURE_SIDE;
+                    const offset = (y * PARTICLE_TEXTURE_SIDE + x) * 6;
+                    bodies[offset] = (x + 0.5) / PARTICLE_TEXTURE_SIDE;
+                    bodies[offset + 1] = (y + 0.5) / PARTICLE_TEXTURE_SIDE;
                 }
             }
-            let uploaded = false;
+
+            let active = count;
 
             return {
                 initialize() {
                     context.registerShader({
-                        id: SIMULATOR_SHADER,
-                        vertex: QUAD_VERTEX_SHADER,
-                        fragment: SIMULATOR_FRAGMENT,
-                    });
-                    context.registerShader({
-                        id: BIN_SHADER,
-                        vertex: BIN_VERTEX,
-                        fragment: BIN_FRAGMENT,
+                        id: STATE_SHADER,
+                        vertex: STATE_VERTEX,
+                        fragment: STATE_FRAGMENT,
                     });
                 },
 
                 activate() {
-                    // The simulation state lives in the ping-ponged target, not here.
-                    uploaded = false;
+                    world.positions.fill(0);
+                    world.velocities.fill(0);
+                    world.ages.fill(0);
                 },
 
                 update(frame) {
-                    // Playback time, so lifetimes advance with the music and hold when it does.
-                    playbackTime = frame.clock.playbackTime;
+                    // The ladder's particle scale thins the field by simulating and drawing fewer
+                    // bodies, which reduces the contact work quadratically rather than turning the
+                    // physics off.
+                    active = Math.max(0, Math.min(count, Math.round(count * (frame.particleScale ?? 1))));
 
-                    // Contact is the expensive half. The ladder's particle scale is the signal that
-                    // the machine is struggling, and a thinned field has few contacts to resolve
-                    // anyway, so it is the first thing given up rather than the frame rate.
-                    contactEnabled = (frame.particleScale ?? 1) >= 0.6 ? 1 : 0;
+                    const force = sampleField(frame.readField(frame.inputs?.force));
+                    const boundary = sampleField(frame.readField(frame.inputs?.boundary));
+                    const emitted = sampleField(frame.readField(frame.inputs?.spawn));
 
-                    if (!uploaded) {
-                        frame.uploadGeometry({
-                            id: BIN_GEOMETRY_ID,
-                            data: indices,
-                            attributes: [{ name: 'aIndex', components: 2 }],
-                        });
-                        uploaded = true;
+                    spawner.setEmitter(emitted);
+
+                    stepParticles(world, {
+                        deltaSeconds: frame.deltaSeconds,
+                        radius: CONTACT_RADIUS,
+                        restitution: 0.45,
+                        drag: frame.parameters.drag ?? 0.4,
+                        lifetimeSeconds: Math.max(0.4, frame.parameters.lifetime ?? 4),
+                        iterations: 4,
+                        force: force
+                            // A vector field carries its direction in red and green, over the same
+                            // zero-to-one domain as the screen.
+                            ? (x, y, out) => {
+                                force(x, y, sampled);
+                                out[0] = sampled[0] * FORCE_SCALE;
+                                out[1] = sampled[1] * FORCE_SCALE;
+                            }
+                            // No field read back yet, which is the state for the first frames of a
+                            // scene. A gentle drift beats standing still.
+                            : (_x, _y, out) => { out[0] = 0; out[1] = 0; },
+                        spawn: (index, out) => spawner.place(index, count, out),
+                        // Collision fields carry an outward normal in red and green and how far inside
+                        // the surface a point is in blue. That is exactly a penetration depth and a
+                        // normal, which is what a solid surface is.
+                        surface: boundary
+                            ? (x, y, out) => {
+                                boundary(x, y, sampled);
+                                const length = Math.hypot(sampled[0], sampled[1]);
+                                if (length < 1e-4 || sampled[2] <= SURFACE_THRESHOLD) {
+                                    return 0;
+                                }
+                                out[0] = sampled[0] / length;
+                                out[1] = sampled[1] / length;
+                                return (sampled[2] - SURFACE_THRESHOLD) * CONTACT_RADIUS * 2;
+                            }
+                            : undefined,
+                    });
+
+                    for (let i = 0; i < count; i += 1) {
+                        const offset = i * 6;
+                        bodies[offset + 2] = world.positions[i * 2];
+                        bodies[offset + 3] = world.positions[i * 2 + 1];
+                        bodies[offset + 4] = world.velocities[i * 2];
+                        bodies[offset + 5] = world.velocities[i * 2 + 1];
                     }
+
+                    frame.uploadGeometry({
+                        id: STATE_GEOMETRY_ID,
+                        data: bodies,
+                        attributes: [
+                            { name: 'aSlot', components: 2 },
+                            { name: 'aBody', components: 4 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
-                    const force = render.inputs.force;
-                    if (!force) {
+                    // The physics does not need a force field to run — bodies still fall out of
+                    // emitters and collide — but a particle scene without one is not a scene worth
+                    // assembling, so the port stays required and this stays a hard stop.
+                    if (!render.inputs.force || !render.outputs.state || active === 0) {
                         return [];
                     }
-                    const boundary = render.inputs.boundary;
-                    const spawn = render.inputs.spawn;
-                    const crowd = render.previous.crowd;
 
-                    const passes: RenderPass[] = [{
-                        kind: 'fullscreen',
-                        shader: SIMULATOR_SHADER,
-                        inputs: {
-                            uForce: force,
-                            uState: render.previous.history ?? render.outputs.state,
-                            ...(boundary ? { uBoundary: boundary } : {}),
-                            ...(spawn ? { uSpawn: spawn } : {}),
-                            ...(crowd ? { uBins: crowd } : {}),
-                        },
+                    // The only GPU work left: copy the bodies into the texture the renderer reads.
+                    // Everything that decides where they are happened in `update`, on the CPU, where
+                    // both halves of a contact can be moved.
+                    return [{
+                        kind: 'geometry',
+                        shader: STATE_SHADER,
+                        geometry: STATE_GEOMETRY_ID,
+                        primitive: 'points',
+                        vertexCount: active,
                         output: render.outputs.state,
                         blend: 'none',
-                        clear: false,
-                        uniforms: {
-                            // No `uDelta`: the kernel supplies the frame's delta, already clamped
-                            // against the long steps a hidden tab or a stall produces.
-                            uDrag: 0.4,
-                            uLifetime: 4,
-                            uTime: playbackTime,
-                            uSeed: context.seed,
-                            uRadius: CONTACT_RADIUS,
-                            uRestitution: 0.45,
-                            uBinResolution: [BIN_SIDE, BIN_SIDE],
-                            uContact: crowd ? contactEnabled : 0,
-                            uHasBoundary: boundary !== undefined,
-                            uHasSpawn: spawn !== undefined,
-                        },
+                        clear: true,
                     }];
-
-                    // Binning runs after the step, so next frame's contacts are resolved against
-                    // where everything actually ended up rather than where it started.
-                    if (render.outputs.bins) {
-                        passes.push({
-                            kind: 'geometry',
-                            shader: BIN_SHADER,
-                            geometry: BIN_GEOMETRY_ID,
-                            primitive: 'points',
-                            vertexCount: PARTICLE_TEXTURE_SIDE * PARTICLE_TEXTURE_SIDE,
-                            inputs: { uState: render.outputs.state },
-                            output: render.outputs.bins,
-                            blend: 'none',
-                            clear: true,
-                        });
-                    }
-
-                    return passes;
                 },
 
                 deactivate() {

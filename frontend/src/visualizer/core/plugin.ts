@@ -115,6 +115,13 @@ export interface FrameContext {
     seed: number;
     renderWidth: number;
     renderHeight: number;
+    /**
+     * Resource bound to each declared input port, as `RenderContext` also reports.
+     *
+     * Available during update because a plugin simulating on the CPU has to read its inputs where the
+     * simulation happens, not where the draw is described.
+     */
+    inputs: Readonly<Record<string, ResourceId | undefined>>;
     /** Resolved parameter values after bindings have been applied. */
     parameters: Readonly<Record<string, number>>;
     /** Uploads geometry for a `GeometryPass` to draw. */
@@ -127,6 +134,26 @@ export interface FrameContext {
     impacts: ImpactBus;
     /** Publishes impacts for other plugins to consume. */
     publishImpacts(impacts: readonly ImpactEvent[]): void;
+    /**
+     * A field this plugin consumes, as RGBA floats the CPU can read, or undefined until one arrives.
+     *
+     * For simulation that runs on the CPU rather than in a shader. A force field and a mask boundary
+     * are textures, and a solver answering "what is pushing this body" or "is there a surface here"
+     * cannot see one — so a plugin doing real physics needs the field in memory. Delivered a frame or
+     * two late, because a synchronous read would stall the pipeline; a field is smooth over the
+     * distance a body travels in that time.
+     *
+     * Undefined on the first frames a resource exists, before any read has completed. A caller must
+     * behave sensibly without it rather than waiting.
+     */
+    readField(resource: ResourceId | undefined): FieldSample | undefined;
+}
+
+/** A field read back from the GPU: RGBA per texel, row-major from the bottom-left. */
+export interface FieldSample {
+    width: number;
+    height: number;
+    data: Float32Array;
 }
 
 export interface RenderContext {

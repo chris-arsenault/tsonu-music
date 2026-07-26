@@ -61,6 +61,10 @@ function frame(overrides: Partial<FrameContext> = {}): { frame: FrameContext; im
             uploadGeometry: () => undefined,
             impacts: createImpactBus(),
             publishImpacts: (published) => impacts.push(...published),
+            inputs: {},
+            // No field readback in a headless catalog check: a plugin must cope with the field not
+            // having arrived yet, since that is the state on the first frames of every scene.
+            readField: () => undefined,
             ...overrides,
         },
     };

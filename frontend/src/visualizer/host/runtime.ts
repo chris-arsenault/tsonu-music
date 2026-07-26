@@ -200,6 +200,27 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         return device.acquireTarget(key, size.width, size.height).texture;
     }
 
+    /**
+     * A resource as CPU-readable floats, for plugins simulating outside a shader.
+     *
+     * Reads the slot most recently written, so a field produced earlier this frame is the one seen.
+     * The device answers with whatever readback has completed, which lags by a frame or two.
+     */
+    function readField(plan: RenderPlan, resource: ResourceId | undefined) {
+        if (!resource) {
+            return undefined;
+        }
+
+        const key = plan.readKeys[resource] ?? plan.writeKeys[resource];
+        const size = plan.sizes[resource];
+        if (!key || !size) {
+            return undefined;
+        }
+
+        const data = device.readTarget(key, size.width, size.height);
+        return data ? { width: size.width, height: size.height, data } : undefined;
+    }
+
     function executePass(
         pass: RenderPass,
         node: CompiledNode,
@@ -411,6 +432,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     seed: active.seed,
                     renderWidth: plan.width,
                     renderHeight: plan.height,
+                    inputs: node.inputs,
                     parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
                     particleScale: frame.profile?.particleScale,
@@ -419,6 +441,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     publishImpacts: (published) => {
                         impacts = publishImpacts(impacts, published);
                     },
+                    readField: (resource) => readField(plan, resource),
                 });
 
                 const passes = active.instance.render({
@@ -452,6 +475,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     seed: active.seed,
                     renderWidth: plan.width,
                     renderHeight: plan.height,
+                    inputs: active.node.inputs,
                     parameters: renderedParameters,
                     uploadGeometry: (upload) => device.uploadGeometry(upload),
                     // A draining plugin keeps simulating but stops emitting new material.
@@ -459,6 +483,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     historyDepth: frame.profile?.historyDepth,
                     impacts,
                     publishImpacts: () => undefined,
+                    readField: (resource) => readField(plan, resource),
                 });
 
                 for (const pass of active.instance.render({
