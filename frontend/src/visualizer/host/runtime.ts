@@ -442,6 +442,18 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 presentSingle(device, plan, inspected, presentShaderId, stats);
             } else {
                 if (frame.clearAccumulation) {
+                    // Actually cleared, not merely re-primed.
+                    //
+                    // Setting the primed flag alone only forces the accumulation pass to run, and on
+                    // a seek the clock is frozen: survival over a zero delta is exactly 1 and the
+                    // black floor is exactly 0, so that pass copied the whole pre-seek image forward
+                    // with about one percent of the new composite mixed in. That is precisely the
+                    // outcome this call exists to prevent — the previous passage dragged across the
+                    // new one.
+                    for (const key of ACCUMULATE_KEYS) {
+                        const target = device.acquireTarget(key, plan.width, plan.height);
+                        device.beginPass(target, 'none', true);
+                    }
                     accumulationPrimed = false;
                 }
 

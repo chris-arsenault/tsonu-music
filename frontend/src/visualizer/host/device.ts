@@ -50,7 +50,7 @@ export interface Program {
 }
 
 /** Highest pixel ratio the visualizer renders at. Full retina is not worth the fill cost. */
-const MAX_PIXEL_RATIO = 1.5;
+export const MAX_PIXEL_RATIO = 1.5;
 
 export class DeviceLostError extends Error {
     constructor() {
@@ -166,6 +166,22 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
     canvas.addEventListener('webglcontextlost', (event) => {
         event.preventDefault();
         lost = true;
+    });
+
+    // Without this the loss is permanent. `lost` was set and never cleared, and `registerShader`
+    // returns early while it is set, so the renderer's recovery path re-registered nothing and the
+    // canvas stayed a black rectangle for the rest of the session — after a driver reset that
+    // resolves itself in a second. Preventing the default on the loss event is what makes the browser
+    // send this at all.
+    canvas.addEventListener('webglcontextrestored', () => {
+        lost = false;
+        // Every GL object from the old context is gone; the caches must not hand out stale handles.
+        programs.clear();
+        pending.clear();
+        targets.clear();
+        assetTextures.clear();
+        geometries.clear();
+        empty = null;
     });
 
     /** One-by-one transparent black, shared by every sampler nothing supplied. See bindEmptySamplers. */

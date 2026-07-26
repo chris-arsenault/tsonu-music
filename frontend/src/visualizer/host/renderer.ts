@@ -46,7 +46,7 @@ import { assetResourceId, type AssetResource } from '../core/wiring';
 import { createM1Registry } from '../plugins/registry';
 import { satisfiableThemes } from '../plugins/themes';
 import { PRESENT_SHADER, PRESENT_SHADER_ID } from '../plugins/postprocess/tone-mapper';
-import { createDevice, type Device } from './device';
+import { createDevice, MAX_PIXEL_RATIO, type Device } from './device';
 import { createRuntime, type ActiveInstance, type RuntimeStats } from './runtime';
 import type { DistributedBinding } from '../core/audio-mapping';
 
@@ -80,7 +80,12 @@ export interface Renderer {
     resourceIds(): string[];
     /** Graph edges as `from -> to`, feedback marked. */
     edgeSummary(): string[];
-    gpuCapabilities(): { floatRenderTargets: boolean; maxTextureSize: number; maxPixelRatio: number };
+    gpuCapabilities(): {
+        floatRenderTargets: boolean;
+        maxTextureSize: number;
+        maxPixelRatio: number;
+        contextLost: boolean;
+    };
     renderSize(): { width: number; height: number };
     estimatedTextureBytes(): number;
     themeId(): string;
@@ -267,7 +272,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     };
 
     function sizeCanvas(): void {
-        const ratio = device!.capabilities.maxPixelRatio;
+        // Re-read rather than taken from the capabilities snapshot, which is captured once when the
+        // device is created. Moving the window to a display with a different pixel density, or
+        // zooming, changes `devicePixelRatio` and fires a resize — which then recomputed the backing
+        // store at the ratio from session start and rendered soft for the rest of the session.
+        const ratio = Math.min(
+            MAX_PIXEL_RATIO,
+            typeof window === 'undefined' ? 1 : window.devicePixelRatio || 1,
+        );
         const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
         const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
 
@@ -414,13 +426,30 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         }
 
         instances = rebuilt.instances;
+
+        // Departures are forgotten before arrivals are recorded, not after.
+        //
+        // Instance ids are the definition id and an index, so a rebuild that replaces the whole
+        // graph — which is every non-preserving rebuild — routinely lands a new plugin on an id a
+        // departing one just gave up. Setting first and deleting second removed the arrival's
+        // timestamp along with the departure's, leaving it at the epoch. `ToneMapper` has an
+        // activation weight of ten and is in nearly every scene, so it drew that id constantly. The
+        // scheduler then read a one-second-old plugin as arbitrarily mature and its minimum plugin
+        // age, which exists to stop the graph churning, did nothing.
+        // A timestamp survives only where the same definition holds the same id: that is the same
+        // plugin still running, not a new one inheriting a slot.
+        const arriving = new Map(
+            instances.map((entry) => [entry.instanceId, entry.node.definition.id] as const),
+        );
+        for (const departing of departingInstances) {
+            if (arriving.get(departing.instanceId) !== departing.node.definition.id) {
+                activatedAt.delete(departing.instanceId);
+            }
+        }
         for (const entry of instances) {
             if (!activatedAt.has(entry.instanceId)) {
                 activatedAt.set(entry.instanceId, lastClock.playbackTime);
             }
-        }
-        for (const departing of departingInstances) {
-            activatedAt.delete(departing.instanceId);
         }
         if (!preserveInstances) {
             mutationCount = 0;
@@ -662,6 +691,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     floatRenderTargets: device.capabilities.floatRenderTargets,
                     maxTextureSize: device.capabilities.maxTextureSize,
                     maxPixelRatio: device.capabilities.maxPixelRatio,
+                    contextLost: device.isLost(),
                 };
             },
 
@@ -685,6 +715,15 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             },
 
             dispose() {
+                // Retiring instances are the renderer's, not the runtime's, so `runtime.dispose()`
+                // never reached them. Closing the modal mid-drain skipped `destroy()` on every plugin
+                // still finishing its retirement, and anything they owned outside the GL device
+                // outlived the visualizer.
+                for (const entry of retiring) {
+                    entry.active.instance.destroy();
+                }
+                retiring.length = 0;
+
                 runtime.dispose();
                 device.dispose();
             },

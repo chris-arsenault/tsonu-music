@@ -109,6 +109,8 @@ export interface KernelReadout {
         maxPixelRatio: number;
         renderWidth: number;
         renderHeight: number;
+        /** True while the GL context is gone. The fallback ladder reads this to pick a tier. */
+        contextLost: boolean;
     };
 }
 
@@ -354,7 +356,15 @@ export function startKernel(options: KernelOptions): KernelHandle {
 
         const profile = currentProfile();
 
-        if (renderer) {
+        // Nothing is rebuilt or mutated while suspended, because nothing renders while suspended.
+        //
+        // `renderFrame` returns before the retirement drain when the profile is suspended, but the
+        // mutation timer below kept running and kept pushing entries onto the retiring list that were
+        // never advanced and never destroyed. The rebuild test fed it: the suspended profile is the
+        // ladder's last rung and declares a reduced grammar, so comparing it against the previous
+        // *level* reported a grammar change on every frame the page was hidden, rebuilding the entire
+        // scene each time.
+        if (renderer && !profile.suspended) {
             // A track change reseeds the scene (section 6.4). A quality step that changes the grammar
             // rebuilds too, since the scene has to be assembled within the new budget. Freezing
             // mutations suppresses both, so a scene can be studied without shifting underneath.

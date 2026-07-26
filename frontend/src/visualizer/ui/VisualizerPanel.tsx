@@ -72,7 +72,9 @@ export default function VisualizerPanel() {
             webgl2Available: readout.renderFailure !== 'no-webgl2',
             floatRenderTargets: readout.gpu?.floatRenderTargets
                 ?? readout.renderFailure !== 'no-float-render-targets',
-            contextLost: false,
+            // Reported by the device rather than hardcoded. Pinned false, a lost context selected no
+            // fallback tier at all, so a driver reset left a black rectangle with no degradation.
+            contextLost: readout.gpu?.contextLost ?? false,
             shaderErrorCount: readout.render?.problems.length ?? 0,
             analysisFlatlined: readout.flatlined,
             audioContextState: readout.contextState,
