@@ -9,7 +9,13 @@ import {
     type FeatureSnapshot,
 } from './features';
 import { initialClock, type ClockEffect, type PlaybackClock } from './clock';
-import { PINK_BAND_WEIGHTS, SPECTRAL_BANDS, type BandName } from './analysis';
+import {
+    createBeatTracker,
+    observeOnset,
+    PINK_BAND_WEIGHTS,
+    SPECTRAL_BANDS,
+    type BandName,
+} from './analysis';
 
 const LATENCY = 0.02;
 
@@ -286,6 +292,88 @@ describe('clock effects', () => {
         expect(state.bus.continuous.beatConfidence).toBe(0);
         expect(state.bus.continuous.beatPhase).toBe(0);
         expect(state.beat.periodSeconds).toBe(0);
+    });
+});
+
+describe('beat presentation against a live tracker', () => {
+    /**
+     * Runs the bus with an anchor produced by the real beat tracker rather than a pinned constant.
+     *
+     * Every other test in this file supplies `beatAnchorAudioTime` as a fixed number, which cannot
+     * happen at runtime: the tracker re-evaluates its anchor on every onset. Pinning it hid a defect
+     * that made beat events almost entirely stop firing — the tests asserted a situation the
+     * producer never creates.
+     */
+    function play(seconds: number, beatPeriod: number) {
+        let tracker = createBeatTracker();
+        let state = createFeatureBusState();
+        let audioTime = 100;
+        const emitted: number[] = [];
+        const phases: number[] = [];
+        let nextOnsetAt = audioTime;
+
+        for (let frame = 0; frame * (1 / 60) < seconds; frame += 1) {
+            audioTime += 1 / 60;
+
+            // An onset on every beat, plus one halfway between — a kick and an off-beat hat, which
+            // is what makes the anchor move if anything does.
+            const onsets: { audioTime: number; strength: number }[] = [];
+            while (nextOnsetAt <= audioTime) {
+                tracker = observeOnset(tracker, nextOnsetAt);
+                onsets.push({ audioTime: nextOnsetAt, strength: 0.8 });
+                nextOnsetAt += beatPeriod / 2;
+            }
+
+            state = advanceFeatureBus(state, input({
+                currentAudioTime: audioTime,
+                snapshot: snapshot({
+                    audioTime,
+                    onsets,
+                    beatPeriodSeconds: tracker.periodSeconds,
+                    beatConfidence: tracker.confidence,
+                    beatAnchorAudioTime: tracker.anchorTime,
+                }),
+            }));
+
+            for (const event of state.bus.events.beat) {
+                emitted.push(event.audioTime);
+            }
+            if (tracker.confidence > 0) {
+                phases.push(state.bus.continuous.beatPhase);
+            }
+        }
+
+        return { emitted, phases, tracker };
+    }
+
+    test('beats keep firing for the length of a passage', () => {
+        const { emitted, tracker } = play(20, 0.5);
+
+        expect(tracker.confidence).toBeGreaterThan(0);
+        // Twenty seconds at half-second beats, less the few seconds the tracker needs to lock.
+        expect(emitted.length).toBeGreaterThan(30);
+    });
+
+    test('no beat is emitted twice', () => {
+        const { emitted } = play(20, 0.5);
+
+        for (let i = 1; i < emitted.length; i += 1) {
+            expect(emitted[i] - emitted[i - 1]).toBeGreaterThan(0.25);
+        }
+    });
+
+    test('phase sweeps the whole cycle rather than stalling partway', () => {
+        const { phases } = play(20, 0.5);
+
+        expect(Math.max(...phases)).toBeGreaterThan(0.9);
+        expect(Math.min(...phases)).toBeLessThan(0.1);
+    });
+
+    test('the grid anchor holds while onsets land on it', () => {
+        const tracker = play(20, 0.5).tracker;
+
+        // Anchored early and left alone, rather than dragged to the most recent onset.
+        expect(tracker.anchorTime).toBeLessThan(110);
     });
 });
 

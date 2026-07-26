@@ -182,8 +182,12 @@ export interface FeatureBusState {
     beat: { periodSeconds: number; confidence: number; anchorAudioTime: number };
     /** audioTime + offset = playbackTime. Re-observed while playing. */
     audioToPlaybackOffset: number;
-    /** Index of the last beat whose event was emitted, so each beat fires once. */
-    lastEmittedBeatIndex: number;
+    /**
+     * Audio time of the last beat whose event was emitted, so each beat fires once.
+     *
+     * A time rather than an index because the grid anchor moves, which renumbers every index.
+     */
+    lastEmittedBeatAudioTime: number;
 }
 
 /**
@@ -228,7 +232,7 @@ export function createFeatureBusState(): FeatureBusState {
         transientGateUntilAudioTime: 0,
         beat: { periodSeconds: 0, confidence: 0, anchorAudioTime: 0 },
         audioToPlaybackOffset: 0,
-        lastEmittedBeatIndex: -1,
+        lastEmittedBeatAudioTime: Number.NEGATIVE_INFINITY,
     };
 }
 
@@ -260,7 +264,7 @@ function applyEffects(state: FeatureBusState, input: FeatureBusInput): FeatureBu
         next = {
             ...next,
             beat: { periodSeconds: 0, confidence: 0, anchorAudioTime: 0 },
-            lastEmittedBeatIndex: -1,
+            lastEmittedBeatAudioTime: Number.NEGATIVE_INFINITY,
             bus: {
                 ...next.bus,
                 continuous: { ...next.bus.continuous, beatConfidence: 0, beatPhase: 0 },
@@ -413,7 +417,7 @@ function presentEvents(state: FeatureBusState, input: FeatureBusInput): FeatureB
         strength: onset.strength,
     }));
 
-    const { beatEvents, lastEmittedBeatIndex, beatPhase } = advanceBeat(state, input, audible);
+    const { beatEvents, lastEmittedBeatAudioTime, beatPhase } = advanceBeat(state, input, audible);
 
     // One envelope over everything that just struck. Rises to the strongest onset released this
     // frame and falls over a fixed time, so it reads as a hit rather than as a level.
@@ -426,7 +430,7 @@ function presentEvents(state: FeatureBusState, input: FeatureBusInput): FeatureB
     return {
         ...state,
         pendingOnsets: held,
-        lastEmittedBeatIndex,
+        lastEmittedBeatAudioTime,
         bus: {
             ...state.bus,
             continuous: { ...state.bus.continuous, beatPhase, transient },
@@ -444,14 +448,14 @@ function advanceBeat(
     state: FeatureBusState,
     input: FeatureBusInput,
     audible: number,
-): { beatEvents: TimedFeatureEvent[]; lastEmittedBeatIndex: number; beatPhase: number } {
+): { beatEvents: TimedFeatureEvent[]; lastEmittedBeatAudioTime: number; beatPhase: number } {
     const { periodSeconds, confidence, anchorAudioTime } = state.beat;
 
     // No confident tempo, or a frozen clock, holds phase still rather than free-running.
     if (periodSeconds <= 0 || confidence <= 0 || input.deltaSeconds <= 0) {
         return {
             beatEvents: [],
-            lastEmittedBeatIndex: state.lastEmittedBeatIndex,
+            lastEmittedBeatAudioTime: state.lastEmittedBeatAudioTime,
             beatPhase: periodSeconds > 0 && confidence > 0 ? state.bus.continuous.beatPhase : 0,
         };
     }
@@ -459,12 +463,24 @@ function advanceBeat(
     const elapsedBeats = (audible - anchorAudioTime) / periodSeconds;
     const beatIndex = Math.floor(elapsedBeats);
     const phase = elapsedBeats - beatIndex;
-
-    if (beatIndex <= state.lastEmittedBeatIndex || audible < state.transientGateUntilAudioTime) {
-        return { beatEvents: [], lastEmittedBeatIndex: Math.max(state.lastEmittedBeatIndex, beatIndex), beatPhase: phase };
-    }
-
     const beatAudioTime = anchorAudioTime + beatIndex * periodSeconds;
+
+    // Deduplicated by the beat's own position in time, not by its index.
+    //
+    // An index is only meaningful relative to an anchor, and the anchor moves — see `anchorFor`. A
+    // monotone high-water mark over a renumbered index is unrecoverable in one direction: once the
+    // mark was set high, every later re-anchor restarted the count below it and no beat ever fired
+    // again. Half a period of separation is enough to reject the same grid position seen on
+    // consecutive frames while accepting the next one.
+    const alreadyEmitted = beatAudioTime <= state.lastEmittedBeatAudioTime + periodSeconds * 0.5;
+
+    if (alreadyEmitted || audible < state.transientGateUntilAudioTime) {
+        return {
+            beatEvents: [],
+            lastEmittedBeatAudioTime: state.lastEmittedBeatAudioTime,
+            beatPhase: phase,
+        };
+    }
 
     return {
         beatEvents: [{
@@ -473,7 +489,7 @@ function advanceBeat(
             playbackTime: beatAudioTime + state.audioToPlaybackOffset,
             strength: confidence,
         }],
-        lastEmittedBeatIndex: beatIndex,
+        lastEmittedBeatAudioTime: beatAudioTime,
         beatPhase: phase,
     };
 }

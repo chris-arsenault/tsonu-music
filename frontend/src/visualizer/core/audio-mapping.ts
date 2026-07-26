@@ -24,13 +24,19 @@ import type { Rng } from './random';
  * Excitation features appear where a role is about *events* — detail and burst want the transient,
  * not the standing level. Level features appear where a role is about *presence* — a large-scale
  * force should hold while the bass holds.
+ *
+ * `transient` is the onset envelope itself, and belongs to the two event roles for the reason above.
+ * It was absent from every pool despite that claim, so the only channel in the bus that is both
+ * event-driven and continuously valued was reachable by nothing: three hard-coded reads in the
+ * renderer and the kernel, and no binding anywhere. It counts as a level for distribution because it
+ * is an envelope with a real mid-range, not a gate — unlike the `*Excite` channels beside it.
  */
 export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
     intensity: ['rms', 'peak', 'rmsExcite'],
     'large-scale-force': ['bass', 'subBass', 'bassExcite', 'subBassExcite'],
     deformation: ['mid', 'lowMid', 'midExcite', 'lowMidExcite'],
-    detail: ['trebleExcite', 'highMidExcite', 'treble', 'highMid'],
-    burst: ['spectralFlux', 'trebleExcite', 'bassExcite', 'rmsExcite'],
+    detail: ['trebleExcite', 'highMidExcite', 'treble', 'highMid', 'transient'],
+    burst: ['spectralFlux', 'transient', 'trebleExcite', 'bassExcite', 'rmsExcite'],
     'repeating-motion': ['beatPhase'],
     complexity: ['spectralCentroid'],
     'lateral-force': ['stereoBalance'],

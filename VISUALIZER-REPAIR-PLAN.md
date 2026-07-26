@@ -11,7 +11,7 @@ judged once their inputs have a usable range.
 | --- | --- | --- | --- |
 | 1 | Feature normalisation and band boundaries | 1.2, 2.11 | done |
 | 2 | Binding input ranges and level/excitation compatibility | 1.2, 1.10 | done |
-| 3 | Beat events, beat phase, and transient reachability | 1.1, S3 channels | pending |
+| 3 | Beat events, beat phase, and transient reachability | 1.1, S3 channels | done |
 | 4 | Modulation depth as a fraction of headroom | 1.7 | pending |
 | 5 | Frame delta: kernel authority and clamping | 2.1, 2.2 | pending |
 | 6 | Quality ladder recovery | 1.6 | pending |

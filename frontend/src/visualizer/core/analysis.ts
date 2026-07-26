@@ -378,6 +378,8 @@ export interface BeatTrackerState {
     readonly periodSeconds: number;
     readonly confidence: number;
     readonly anchorTime: number;
+    /** Consecutive onsets that missed the current grid. See `anchorFor`. */
+    readonly offGridRun: number;
 }
 
 export function createBeatTracker(): BeatTrackerState {
@@ -386,6 +388,7 @@ export function createBeatTracker(): BeatTrackerState {
         periodSeconds: 0,
         confidence: 0,
         anchorTime: 0,
+        offGridRun: 0,
     };
 }
 
@@ -428,8 +431,54 @@ export function observeOnset(state: BeatTrackerState, time: number): BeatTracker
         onsetTimes,
         periodSeconds: bestPeriod,
         confidence: clamp01(bestScore / onsetTimes.length),
-        anchorTime: time,
+        ...anchorFor(state, bestPeriod, time),
     };
+}
+
+/**
+ * How many consecutive onsets must miss the grid before it is moved.
+ *
+ * Not one, because most music puts something between the beats — an off-beat hat alternates on-grid
+ * and off-grid onsets forever, and re-anchoring on each miss flips the grid by half a beat every
+ * other onset. A genuine tempo or phase change produces a run of misses instead, which this clears.
+ */
+const OFF_GRID_RUN_TO_REANCHOR = 3;
+
+/**
+ * Where the beat grid starts.
+ *
+ * This used to be the most recent onset, unconditionally. That moves the anchor several times a
+ * second, and everything downstream reads phase and beat number against it: elapsed beats since the
+ * anchor was therefore almost always less than one, so phase never swept past roughly a half and the
+ * beat index sat at zero. Measured over twenty seconds of 120 bpm material with onsets every quarter
+ * second, one beat event was emitted where forty were due.
+ *
+ * The anchor is a phase reference, not a record of the last thing that happened. It is kept while
+ * onsets keep landing on the grid it defines, and moved only once several in a row do not — which
+ * also absorbs drift from a slightly-off period estimate, since drift eventually pushes a run of
+ * onsets off the grid.
+ */
+function anchorFor(
+    state: BeatTrackerState,
+    period: number,
+    time: number,
+): { anchorTime: number; offGridRun: number } {
+    if (state.periodSeconds <= 0 || state.confidence <= 0) {
+        return { anchorTime: time, offGridRun: 0 };
+    }
+
+    const beats = (time - state.anchorTime) / period;
+    const offGrid = Math.abs(beats - Math.round(beats)) * period;
+
+    if (offGrid <= GRID_TOLERANCE) {
+        return { anchorTime: state.anchorTime, offGridRun: 0 };
+    }
+
+    const run = state.offGridRun + 1;
+
+    return run >= OFF_GRID_RUN_TO_REANCHOR
+        ? { anchorTime: time, offGridRun: 0 }
+        : { anchorTime: state.anchorTime, offGridRun: run };
 }
 
 function scoreGrid(onsetTimes: readonly number[], period: number, anchor: number): number {
