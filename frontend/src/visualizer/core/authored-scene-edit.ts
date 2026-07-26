@@ -13,10 +13,14 @@ import type { ParameterBinding } from './bindings';
 import {
     edgeIdFor,
     type AuthoredEdge,
+    type AuthoredKernel,
     type AuthoredNode,
     type AuthoredNodePosition,
     type AuthoredScene,
 } from './authored-scene';
+import { COMPOSITE_BINDINGS } from './composite-grade';
+import type { LayerOverride } from './layers';
+import type { PersistenceOverrides } from './persistence';
 import type { VisualPluginDefinition } from './plugin';
 
 /** Resolves a plugin id to its definition. Operations need port shapes, not the whole registry. */
@@ -241,6 +245,127 @@ export function setPresent(
     present: { node: string; port: string } | undefined,
 ): AuthoredScene {
     return { ...scene, present };
+}
+
+/** Shows a parameter as a socket rather than as a row, or puts it back. */
+export function setPromoted(
+    scene: AuthoredScene,
+    nodeId: string,
+    parameter: string,
+    promoted: boolean,
+): AuthoredScene {
+    return updateNode(scene, nodeId, (node) => {
+        const current = node.promoted ?? [];
+        const next = promoted
+            ? (current.includes(parameter) ? current : [...current, parameter])
+            : current.filter((name) => name !== parameter);
+
+        return { ...node, promoted: next.length > 0 ? next : undefined };
+    });
+}
+
+export function isPromoted(node: AuthoredNode, parameter: string): boolean {
+    return (node.promoted ?? []).includes(parameter);
+}
+
+/* -------------------------------------------------------------------------- */
+/* The kernel tail                                                            */
+/* -------------------------------------------------------------------------- */
+
+function updateKernel(
+    scene: AuthoredScene,
+    change: (kernel: AuthoredKernel) => AuthoredKernel,
+): AuthoredScene {
+    return { ...scene, kernel: change(scene.kernel ?? {}) };
+}
+
+/** Sets one of the grade's own parameters, which resolve exactly as a plugin's do. */
+export function setGradeParameter(
+    scene: AuthoredScene,
+    parameter: string,
+    value: number,
+): AuthoredScene {
+    return updateKernel(scene, (kernel) => ({
+        ...kernel,
+        grade: {
+            ...kernel.grade,
+            parameters: { ...(kernel.grade?.parameters ?? {}), [parameter]: value },
+        },
+    }));
+}
+
+export function setGradeBinding(
+    scene: AuthoredScene,
+    binding: ParameterBinding,
+): AuthoredScene {
+    return updateKernel(scene, (kernel) => ({
+        ...kernel,
+        grade: {
+            ...kernel.grade,
+            bindings: [
+                ...(kernel.grade?.bindings ?? COMPOSITE_BINDINGS)
+                    .filter((entry) => entry.parameter !== binding.parameter),
+                binding,
+            ],
+        },
+    }));
+}
+
+export function removeGradeBinding(scene: AuthoredScene, parameter: string): AuthoredScene {
+    return updateKernel(scene, (kernel) => ({
+        ...kernel,
+        grade: {
+            ...kernel.grade,
+            bindings: (kernel.grade?.bindings ?? COMPOSITE_BINDINGS)
+                .filter((entry) => entry.parameter !== parameter),
+        },
+    }));
+}
+
+/**
+ * Pins one accumulation value, or releases it back to the theme and the audio.
+ *
+ * Released rather than set to zero: the three are decided per frame from the theme, the layer stack
+ * and three audio channels, and a zero is a value while an absence is a question left to the kernel.
+ */
+export function setPersistencePin(
+    scene: AuthoredScene,
+    name: keyof PersistenceOverrides,
+    value: number | undefined,
+): AuthoredScene {
+    return updateKernel(scene, (kernel) => {
+        const persistence = { ...(kernel.persistence ?? {}) };
+
+        if (value === undefined) {
+            delete persistence[name];
+        } else {
+            persistence[name] = value;
+        }
+
+        return {
+            ...kernel,
+            persistence: Object.keys(persistence).length > 0 ? persistence : undefined,
+        };
+    });
+}
+
+/** Overrides how one layer is presented, or clears the override. */
+export function setLayerOverride(
+    scene: AuthoredScene,
+    layerId: string,
+    override: LayerOverride | undefined,
+): AuthoredScene {
+    return updateKernel(scene, (kernel) => {
+        const layers = { ...(kernel.layers ?? {}) };
+
+        if (override && Object.keys(override).length > 0) {
+            layers[layerId] = override;
+        } else {
+            delete layers[layerId];
+        }
+
+        return { ...kernel, layers: Object.keys(layers).length > 0 ? layers : undefined };
+    });
 }
 
 /* -------------------------------------------------------------------------- */

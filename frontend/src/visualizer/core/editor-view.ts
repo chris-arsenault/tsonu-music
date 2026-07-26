@@ -32,7 +32,38 @@ export const ACCUMULATE_NODE = 'kernel:accumulate';
 export const GRADE_NODE = 'kernel:grade';
 export const CANVAS_NODE = 'kernel:canvas';
 
-export type EditorNodeKind = 'plugin' | 'asset' | 'kernel';
+export type EditorNodeKind = 'plugin' | 'asset' | 'kernel' | 'feature' | 'constant';
+
+/** Prefix for the socket a promoted parameter is reached through. */
+export const PARAMETER_PORT = 'param:';
+
+export function parameterPortFor(parameter: string): string {
+    return `${PARAMETER_PORT}${parameter}`;
+}
+
+export function parameterFromPort(port: string): string | undefined {
+    return port.startsWith(PARAMETER_PORT) ? port.slice(PARAMETER_PORT.length) : undefined;
+}
+
+/** The node that drives a promoted parameter. Derived from the binding, not stored beside it. */
+export function driverNodeId(nodeId: string, parameter: string): string {
+    return `driver:${nodeId}:${parameter}`;
+}
+
+export function driverTarget(id: string): { node: string; parameter: string } | undefined {
+    if (!id.startsWith('driver:')) {
+        return undefined;
+    }
+
+    // A node id may itself contain colons — plugin ids do, as `Family:mode#0` — so the parameter is
+    // taken from the end and the node id is whatever remains.
+    const rest = id.slice('driver:'.length);
+    const split = rest.lastIndexOf(':');
+
+    return split < 0
+        ? undefined
+        : { node: rest.slice(0, split), parameter: rest.slice(split + 1) };
+}
 
 export type EditorEdgeKind =
     /** A declared edge between two plugin ports. */
@@ -46,7 +77,9 @@ export type EditorEdgeKind =
     /** A motion-typed resource reaching the motion sum. Implicit: read whether or not consumed. */
     | 'motion'
     /** Between two kernel stages. Fixed, and the same for every scene. */
-    | 'kernel';
+    | 'kernel'
+    /** A feature or a constant driving a promoted parameter. */
+    | 'parameter';
 
 export interface EditorPort {
     name: string;
@@ -55,6 +88,8 @@ export interface EditorPort {
     required: boolean;
     multiple?: boolean;
     connected: boolean;
+    /** A promoted parameter's socket, which takes a value rather than a resource. */
+    parameter?: string;
 }
 
 export interface EditorParameterRow {
@@ -77,6 +112,8 @@ export interface EditorNode {
     inputs: EditorPort[];
     outputs: EditorPort[];
     parameters: EditorParameterRow[];
+    /** Non-numeric facts about the node, shown as rows beneath its parameters. */
+    details?: { label: string; value: string }[];
     /** The resource to show when this node is inspected. Absent means it cannot be shown alone. */
     inspect?: ResourceId;
     muted?: boolean;
@@ -152,6 +189,7 @@ export function buildEditorView(input: EditorViewInput): EditorView {
 
         const bindings = node.bindings ?? definition.defaultBindings ?? [];
         const values = { ...(definition.parameters ?? {}), ...(node.parameters ?? {}) };
+        const promoted = (node.promoted ?? []).filter((name) => values[name] !== undefined);
 
         nodes.push({
             id: node.id,
@@ -160,13 +198,23 @@ export function buildEditorView(input: EditorViewInput): EditorView {
             subtitle: definition.category,
             category: definition.category,
             position: node.position,
-            inputs: definition.inputs.map((port) => ({
-                name: port.name,
-                type: port.type,
-                required: port.required,
-                multiple: port.multiple,
-                connected: connectedInputs.has(`${node.id}.${port.name}`),
-            })),
+            inputs: [
+                ...definition.inputs.map((port) => ({
+                    name: port.name,
+                    type: port.type,
+                    required: port.required,
+                    multiple: port.multiple,
+                    connected: connectedInputs.has(`${node.id}.${port.name}`),
+                })),
+                // A promoted parameter is a socket at the end of the column, exactly where a widget
+                // converted to an input lands in ComfyUI.
+                ...promoted.map((name) => ({
+                    name: parameterPortFor(name),
+                    required: false,
+                    connected: true,
+                    parameter: name,
+                })),
+            ],
             outputs: definition.outputs
                 // An internal output exists only to close a loop inside its own plugin and is offered
                 // to nobody, so drawing it as a socket would invite a connection that cannot be made.
@@ -177,14 +225,18 @@ export function buildEditorView(input: EditorViewInput): EditorView {
                     required: false,
                     connected: connectedOutputs.has(`${node.id}.${port.name}`),
                 })),
-            parameters: Object.keys(values).sort().map((name) => ({
-                name,
-                value: values[name],
-                ...(live?.[node.id]?.[name] !== undefined ? { live: live[node.id][name] } : {}),
-                ...(bindings.find((binding) => binding.parameter === name)
-                    ? { binding: bindings.find((binding) => binding.parameter === name) }
-                    : {}),
-            })),
+            // A promoted parameter has left the rows for the sockets; showing it in both places
+            // would be two controls for one value.
+            parameters: Object.keys(values).sort()
+                .filter((name) => !promoted.includes(name))
+                .map((name) => ({
+                    name,
+                    value: values[name],
+                    ...(live?.[node.id]?.[name] !== undefined ? { live: live[node.id][name] } : {}),
+                    ...(bindings.find((binding) => binding.parameter === name)
+                        ? { binding: bindings.find((binding) => binding.parameter === name) }
+                        : {}),
+                })),
             inspect: firstColourOutput(definition.outputs)
                 ? `${node.id}.${firstColourOutput(definition.outputs)}`
                 : undefined,
@@ -203,6 +255,8 @@ export function buildEditorView(input: EditorViewInput): EditorView {
         });
     }
 
+    edges.push(...driverNodesAndEdges(document, registry, nodes, live));
+
     edges.push(...assetNodesAndEdges(document, nodes));
 
     if (graph) {
@@ -210,6 +264,99 @@ export function buildEditorView(input: EditorViewInput): EditorView {
     }
 
     return { nodes, edges };
+}
+
+const DRIVER_OFFSET_X = 300;
+const DRIVER_ROW_HEIGHT = 96;
+
+/**
+ * A node per promoted parameter: the feature driving it, or the constant it sits at.
+ *
+ * The binding is not stored beside the parameter — it is the parameter's driver — so these are
+ * derived rather than declared, and moving one means rebinding rather than moving a node. Placed left
+ * of the node they feed, stacked so several promotions on one node do not overlap.
+ */
+function driverNodesAndEdges(
+    document: AuthoredScene,
+    registry: PluginRegistry,
+    nodes: EditorNode[],
+    live: EditorViewInput['live'],
+): EditorEdge[] {
+    const edges: EditorEdge[] = [];
+
+    for (const node of document.nodes) {
+        const definition = registry.get(node.pluginId);
+        const promoted = node.promoted ?? [];
+        if (!definition || promoted.length === 0) {
+            continue;
+        }
+
+        const bindings = node.bindings ?? definition.defaultBindings ?? [];
+        const values = { ...(definition.parameters ?? {}), ...(node.parameters ?? {}) };
+
+        promoted.forEach((parameter, index) => {
+            if (values[parameter] === undefined) {
+                return;
+            }
+
+            const binding = bindings.find((entry) => entry.parameter === parameter);
+            const id = driverNodeId(node.id, parameter);
+            const position = {
+                x: node.position.x - DRIVER_OFFSET_X,
+                y: node.position.y + index * DRIVER_ROW_HEIGHT,
+            };
+
+            nodes.push(binding
+                ? {
+                    id,
+                    kind: 'feature',
+                    title: binding.feature,
+                    subtitle: binding.mode ?? 'value',
+                    position,
+                    inputs: [],
+                    outputs: [{ name: 'value', required: false, connected: true }],
+                    parameters: [
+                        { name: 'attack', value: binding.attack },
+                        { name: 'release', value: binding.release },
+                    ],
+                    details: [
+                        { label: 'range', value: `${binding.outputRange[0]} … ${binding.outputRange[1]}` },
+                        { label: 'curve', value: binding.curve },
+                        ...(binding.role ? [{ label: 'role', value: binding.role }] : []),
+                        ...(binding.polarity === -1 ? [{ label: 'polarity', value: 'inverted' }] : []),
+                        { label: 'drives', value: `${node.id}.${parameter}` },
+                    ],
+                    problems: [],
+                }
+                : {
+                    id,
+                    kind: 'constant',
+                    title: parameter,
+                    subtitle: 'constant',
+                    position,
+                    inputs: [],
+                    outputs: [{ name: 'value', required: false, connected: true }],
+                    parameters: [{
+                        name: parameter,
+                        value: values[parameter],
+                        ...(live?.[node.id]?.[parameter] !== undefined
+                            ? { live: live[node.id][parameter] }
+                            : {}),
+                    }],
+                    details: [{ label: 'drives', value: `${node.id}.${parameter}` }],
+                    problems: [],
+                });
+
+            edges.push({
+                id: `parameter:${node.id}:${parameter}`,
+                kind: 'parameter',
+                from: { node: id, port: 'value' },
+                to: { node: node.id, port: parameterPortFor(parameter) },
+            });
+        });
+    }
+
+    return edges;
 }
 
 /** One node per distinct host texture, placed left of whatever first consumes it. */

@@ -22,6 +22,9 @@ export function nodeAccent(node: EditorNode): string {
     if (node.kind === 'asset') {
         return '#8a6a3f';
     }
+    if (node.kind === 'feature' || node.kind === 'constant') {
+        return '#c9a35f';
+    }
 
     return (node.category && CATEGORY_COLOURS[node.category]) || '#4a4a55';
 }
@@ -61,9 +64,15 @@ export default function GraphNodeBody({ node, selected }: GraphNodeBodyProps) {
                 </div>
             ) : null}
 
-            {node.parameters.length > 0 ? (
+            {node.parameters.length > 0 || (node.details && node.details.length > 0) ? (
                 <div className="viz-node__params">
                     {node.parameters.map((row) => <Parameter key={row.name} row={row} />)}
+                    {(node.details ?? []).map((detail) => (
+                        <div className="viz-node__param" key={detail.label}>
+                            <span className="viz-node__param-name">{detail.label}</span>
+                            <span className="viz-node__param-value">{detail.value}</span>
+                        </div>
+                    ))}
                 </div>
             ) : null}
 

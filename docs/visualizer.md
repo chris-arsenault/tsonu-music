@@ -32,6 +32,25 @@ motion-typed resource whether or not the graph reads it, are drawn as dashed edg
 stages that consume them. Composite, motion sum, accumulation and grade appear as nodes, each
 inspectable, and each showing the values it is running with.
 
+While a document is in control the graph is editable. Nodes drag, links are drawn between sockets and
+cut with Delete, double-clicking the canvas opens a searchable catalog, and dropping a link on empty
+canvas opens the same search narrowed to plugins that could take it. A link the canvas refuses is one
+the compiler would have rejected: both ask `portsCompatible`. Derived connections — the layer stack,
+the motion bus, the kernel chain — cannot be cut, and say so rather than appearing to work.
+
+Selecting a node opens an inspector beside the canvas: its parameters, what drives each of them with
+the binding's feature, mode, range, curve, attack, release and polarity, its seed, and mute, clone and
+remove. A parameter can be converted to an input, which draws its driver as a node wired into a socket
+— ComfyUI's convert-widget-to-input, and promotion is per parameter so the one under investigation
+becomes visible wiring while the rest stay as rows. The accumulation's three values are pinned or
+released individually, the grade's are ordinary parameters, and each layer's blend mode and opacity
+can be overridden from the composite stage. Ctrl+Z and Ctrl+Shift+Z step the history.
+
+A parameter or binding change reaches the running instance without recompiling, so a value can be
+dragged while watching what it does; a topology change recompiles and keeps the instances it did not
+touch, so editing one edge does not reset the simulations around it. An edit that does not resolve
+leaves the previous graph rendering and reports why, against the node or edge at fault.
+
 A captured document is autosaved and reopened by **Restore last**, exported as a JSON file, and
 imported from one. **Copy fixture** writes the scene to the clipboard as a test file that resolves it
 against the live catalog, so a fault found by watching becomes a test that fails when it returns.

@@ -10,16 +10,23 @@ import {
     createHistory,
     disconnect,
     freeNodeId,
+    isPromoted,
     MAX_HISTORY,
     redo,
     removeBinding,
+    removeGradeBinding,
     removeNode,
     setBinding,
     setFeedback,
+    setGradeBinding,
+    setGradeParameter,
+    setLayerOverride,
     setMuted,
     setParameter,
+    setPersistencePin,
     setPosition,
     setPresent,
+    setPromoted,
     setSeed,
     undo,
     type PluginLookup,
@@ -273,6 +280,84 @@ describe('parameters and bindings', () => {
 
         expect(moved.nodes[0].position).toEqual({ x: 5, y: 7 });
         expect(moved.edges).toEqual([]);
+    });
+});
+
+describe('promotion', () => {
+    test('promoting and demoting round-trips to no list at all', () => {
+        const promoted = setPromoted(twoNodes(), 'src#0', 'amount', true);
+
+        expect(promoted.nodes[0].promoted).toEqual(['amount']);
+        expect(setPromoted(promoted, 'src#0', 'amount', false).nodes[0].promoted).toBeUndefined();
+    });
+
+    test('promoting twice does not list it twice', () => {
+        const once = setPromoted(twoNodes(), 'src#0', 'amount', true);
+
+        expect(setPromoted(once, 'src#0', 'amount', true).nodes[0].promoted).toEqual(['amount']);
+    });
+
+    test('isPromoted answers for a node that has never been promoted', () => {
+        expect(isPromoted(twoNodes().nodes[0], 'amount')).toBe(false);
+    });
+});
+
+describe('the kernel tail', () => {
+    const base = emptyAuthoredScene('kernel');
+
+    test('a grade parameter is set over whatever was there', () => {
+        const scene = setGradeParameter(setGradeParameter(base, 'exposure', 1.2), 'contrast', 2);
+
+        expect(scene.kernel?.grade?.parameters).toEqual({ exposure: 1.2, contrast: 2 });
+    });
+
+    test('a grade binding replaces the one on its parameter, keeping the others', () => {
+        const scene = setGradeBinding(base, { ...binding, parameter: 'exposure', feature: 'peak' });
+        const bindings = scene.kernel?.grade?.bindings ?? [];
+
+        expect(bindings.filter((entry) => entry.parameter === 'exposure')).toHaveLength(1);
+        expect(bindings.find((entry) => entry.parameter === 'exposure')?.feature).toBe('peak');
+        // The kernel's own bindings for the other parameters are still there.
+        expect(bindings.length).toBeGreaterThan(1);
+    });
+
+    test('removing a grade binding leaves the rest of the kernel default set', () => {
+        const scene = removeGradeBinding(base, 'exposure');
+
+        expect(scene.kernel?.grade?.bindings?.some((entry) => entry.parameter === 'exposure'))
+            .toBe(false);
+        expect(scene.kernel?.grade?.bindings?.length).toBeGreaterThan(0);
+    });
+
+    test('a persistence value can be pinned and released independently', () => {
+        let scene = setPersistencePin(base, 'survivalPerSecond', 0.9);
+        scene = setPersistencePin(scene, 'motionScale', 0.1);
+
+        expect(scene.kernel?.persistence).toEqual({ survivalPerSecond: 0.9, motionScale: 0.1 });
+
+        scene = setPersistencePin(scene, 'survivalPerSecond', undefined);
+        expect(scene.kernel?.persistence).toEqual({ motionScale: 0.1 });
+    });
+
+    test('releasing the last pin removes the section rather than leaving an empty one', () => {
+        // An absence is a question left to the kernel; an empty object is a claim to have answered it.
+        const pinned = setPersistencePin(base, 'survivalPerSecond', 0.9);
+
+        expect(setPersistencePin(pinned, 'survivalPerSecond', undefined).kernel?.persistence)
+            .toBeUndefined();
+    });
+
+    test('a zero pin is a pin', () => {
+        expect(setPersistencePin(base, 'motionScale', 0).kernel?.persistence)
+            .toEqual({ motionScale: 0 });
+    });
+
+    test('a layer override is set and cleared by the layer it names', () => {
+        const scene = setLayerOverride(base, 'src#0', { opacity: 0, blendMode: 'add' });
+
+        expect(scene.kernel?.layers).toEqual({ 'src#0': { opacity: 0, blendMode: 'add' } });
+        expect(setLayerOverride(scene, 'src#0', undefined).kernel?.layers).toBeUndefined();
+        expect(setLayerOverride(scene, 'src#0', {}).kernel?.layers).toBeUndefined();
     });
 });
 

@@ -64,6 +64,7 @@ function canonicalScene(scene: AuthoredScene): Record<string, unknown> {
             position: { x: node.position.x, y: node.position.y },
             seed: node.seed,
             muted: node.muted,
+            promoted: node.promoted && [...node.promoted],
             parameters: node.parameters && sortedNumbers(node.parameters),
             bindings: node.bindings?.map(canonicalBinding),
         })),
@@ -327,6 +328,13 @@ function validateNode(
 
     if (entry.muted === true) {
         node.muted = true;
+    }
+
+    if (Array.isArray(entry.promoted)) {
+        const promoted = entry.promoted.filter((name): name is string => typeof name === 'string');
+        if (promoted.length > 0) {
+            node.promoted = promoted;
+        }
     }
 
     if (entry.parameters !== undefined) {

@@ -46,6 +46,26 @@ export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
 const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat'];
 
 /**
+ * Every channel a binding may name, for an editor offering the choice.
+ *
+ * The role table plus the event channels plus the few continuous measures no role admits — a role
+ * exists to constrain what *distribution* may substitute, and choosing a feature by hand is not
+ * distribution. `beatConfidence` is the case in point: nothing should be moved onto it at random, and
+ * binding something to it deliberately is perfectly reasonable.
+ */
+export const BINDABLE_FEATURES: readonly string[] = [
+    ...new Set([
+        ...Object.values(ROLE_FEATURES).flat(),
+        ...IMPULSE_FEATURES,
+        'beatConfidence',
+    ]),
+].sort();
+
+export function isEventFeature(feature: string): boolean {
+    return IMPULSE_FEATURES.includes(feature);
+}
+
+/**
  * Whether a feature reads as a standing level or as a departure from one.
  *
  * Level channels are peak-normalized: they ride continuously, spending most of their time somewhere

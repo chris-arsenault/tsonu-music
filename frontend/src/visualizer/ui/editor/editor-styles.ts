@@ -143,6 +143,151 @@ const EDITOR_CSS = `
     padding: 1rem;
 }
 
+.viz-editor__split { display: flex; height: 100%; min-height: 0; }
+.viz-editor__canvas { position: relative; flex: 1 1 auto; min-width: 0; }
+
+/* Inspector -------------------------------------------------------------- */
+
+.viz-inspector {
+    flex: 0 0 264px;
+    border-left: 1px solid #26262c;
+    overflow-y: auto;
+    padding: 0.5rem 0.6rem 1rem;
+    background: #131317;
+}
+
+.viz-inspector__head {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid #26262c;
+    margin-bottom: 0.5rem;
+}
+
+.viz-inspector__head strong { color: #f0f0f4; overflow-wrap: anywhere; }
+.viz-inspector__head span { color: #8a8a94; font-size: 0.65rem; }
+
+.viz-inspector__problems {
+    background: #26130f;
+    border: 1px solid #4a2c22;
+    border-radius: 0.2rem;
+    color: #e0806a;
+    padding: 0.3rem 0.4rem;
+    margin-bottom: 0.5rem;
+}
+
+.viz-inspector__group {
+    border-bottom: 1px solid #1e1e24;
+    padding-bottom: 0.4rem;
+    margin-bottom: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.viz-inspector__row { display: flex; align-items: center; gap: 0.3rem; }
+.viz-inspector__stack { display: flex; flex-direction: column; gap: 0.2rem; }
+.viz-inspector__actions { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+
+.viz-inspector__label {
+    color: #9a9aa4;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.viz-inspector__static { color: #b8b8c2; overflow-wrap: anywhere; text-align: right; }
+.viz-inspector__live { color: #7fd6ab; font-variant-numeric: tabular-nums; }
+.viz-inspector__check { color: #9a9aa4; white-space: nowrap; }
+
+.viz-inspector__number {
+    width: 68px;
+    flex: 0 0 auto;
+    background: #0d0d10;
+    border: 1px solid #32323b;
+    border-radius: 0.2rem;
+    color: #e8e8ee;
+    font: inherit;
+    padding: 0.1rem 0.25rem;
+    text-align: right;
+}
+
+.viz-inspector__number:disabled { color: #5a5a63; }
+
+.viz-inspector__binding {
+    border-left: 2px solid #4a4132;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    padding-left: 0.4rem;
+}
+
+.viz-inspector select {
+    background: #0d0d10;
+    border: 1px solid #32323b;
+    border-radius: 0.2rem;
+    color: #e8e8ee;
+    font: inherit;
+    min-width: 0;
+    flex: 1 1 auto;
+    padding: 0.1rem 0.2rem;
+}
+
+.viz-inspector__hint { color: #7a7a84; margin-top: 0.5rem; }
+
+/* Node search ------------------------------------------------------------ */
+
+.viz-search {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(420px, 90%);
+    background: #17171c;
+    border: 1px solid #3a3a45;
+    border-radius: 0.3rem;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.6);
+    z-index: 10;
+    overflow: hidden;
+}
+
+.viz-search__input {
+    width: 100%;
+    background: #0d0d10;
+    border: none;
+    border-bottom: 1px solid #2a2a33;
+    color: #f0f0f4;
+    font: inherit;
+    padding: 0.4rem 0.5rem;
+}
+
+.viz-search__input:focus { outline: 1px solid #4a6a8a; outline-offset: -1px; }
+
+.viz-search__results { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow-y: auto; }
+
+.viz-search__result {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #d8d8de;
+    cursor: pointer;
+    font: inherit;
+    padding: 0.22rem 0.5rem;
+    text-align: left;
+}
+
+.viz-search__result.is-active { background: #24242c; }
+.viz-search__swatch { width: 8px; height: 8px; border-radius: 2px; flex: 0 0 auto; }
+.viz-search__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viz-search__category { color: #8a8a94; margin-left: auto; font-size: 0.65rem; }
+.viz-search__empty { color: #7a7a84; padding: 0.4rem 0.5rem; }
+
 /* Nodes ------------------------------------------------------------------ */
 
 .viz-node {
@@ -239,7 +384,11 @@ const EDITOR_CSS = `
     min-width: 0;
     min-height: 0;
 }
+.viz-editor .react-flow__handle.is-parameter { border-radius: 2px; }
 .viz-editor .react-flow__edge-path { stroke-width: 1.5; }
+/* A link cannot land where it cannot connect, so the sockets that would refuse it recede. */
+.viz-editor .react-flow__handle.connectingfrom,
+.viz-editor .react-flow__handle.valid { box-shadow: 0 0 0 3px rgba(127, 214, 171, 0.35); }
 .viz-editor .react-flow__controls-button {
     background: #1c1c22;
     border-bottom: 1px solid #32323b;

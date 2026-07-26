@@ -2,23 +2,28 @@
  * The node canvas.
  *
  * React Flow supplies the viewport, the selection model and edge routing; everything a node says
- * about the scene comes from `core/editor-view.ts` and is rendered by `GraphNodeBody`. Connection
- * validity, when M4 makes connections drawable, will delegate to `portsCompatible` — the same
- * function the graph compiler validates with, so a link the canvas refuses is a link that would not
- * have compiled. See ADR-0011.
+ * about the scene comes from `core/editor-view.ts`, and every gesture's meaning from
+ * `core/editor-actions.ts`. Connection validity delegates to `portsCompatible` through
+ * `connectionAllowed`, so a link the canvas refuses to draw is a link the compiler would have
+ * rejected. See ADR-0011.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import {
     Background,
     Controls,
     Handle,
     Position,
     ReactFlow,
+    type Connection,
     type Edge,
+    type IsValidConnection,
     type Node,
     type NodeProps,
+    type OnConnectEnd,
+    type OnConnectStart,
 } from '@xyflow/react';
+import { connectionAllowed, type CanvasEndpoint } from '../../core/editor-actions';
 import type { EditorEdge, EditorNode, EditorView } from '../../core/editor-view';
 import GraphNodeBody, { PORT_ROW_HEIGHT, portColour } from './GraphNodeBody';
 
@@ -30,8 +35,8 @@ type FlowNode = Node<{ node: EditorNode }, 'viz'>;
 /**
  * One node type for everything.
  *
- * Plugins, assets and kernel stages differ in what they contain rather than in how they behave on the
- * canvas, and the body already varies its own appearance from `kind`.
+ * Plugins, assets, drivers and kernel stages differ in what they contain rather than in how they
+ * behave on the canvas, and the body already varies its appearance from `kind`.
  */
 function VizNode({ data, selected }: NodeProps<FlowNode>) {
     const { node } = data;
@@ -44,6 +49,7 @@ function VizNode({ data, selected }: NodeProps<FlowNode>) {
                     id={port.name}
                     type="target"
                     position={Position.Left}
+                    className={port.parameter ? 'is-parameter' : undefined}
                     style={{
                         top: PORTS_TOP + index * PORT_ROW_HEIGHT + PORT_ROW_HEIGHT / 2,
                         background: portColour(port.type),
@@ -81,6 +87,8 @@ function edgeStyle(edge: EditorEdge): Edge {
         sourceHandle: edge.from.port,
         target: edge.to.node,
         targetHandle: edge.to.port,
+        // Only the document's own edges may be cut. The derived ones report why when tried.
+        deletable: edge.kind === 'data' || edge.kind === 'feedback' || edge.kind === 'parameter',
     };
 
     switch (edge.kind) {
@@ -98,6 +106,9 @@ function edgeStyle(edge: EditorEdge): Edge {
 
         case 'asset':
             return { ...shared, style: { stroke: '#8a6a3f' } };
+
+        case 'parameter':
+            return { ...shared, style: { stroke: '#c9a35f', strokeWidth: 1 } };
 
         case 'layer':
             // Implicit: in no edge list anywhere. This is the stack that actually reaches the screen.
@@ -117,41 +128,124 @@ function edgeStyle(edge: EditorEdge): Edge {
 export interface GraphCanvasProps {
     view: EditorView;
     selectedId?: string;
+    editable: boolean;
     onSelect: (node: EditorNode | undefined) => void;
+    onMove: (nodeId: string, position: { x: number; y: number }, settled: boolean) => void;
+    onConnect: (from: CanvasEndpoint, to: CanvasEndpoint) => void;
+    onDisconnect: (edgeId: string) => void;
+    /** A link dropped on empty canvas, at the position it was dropped. */
+    onDropOnPane: (from: CanvasEndpoint, at: { x: number; y: number }) => void;
+    onAddAt: (at: { x: number; y: number }) => void;
+    /** Hands back the screen-to-canvas projection, so a drop point becomes a node position. */
+    onReady?: (project: (point: { x: number; y: number }) => { x: number; y: number }) => void;
 }
 
-export default function GraphCanvas({ view, selectedId, onSelect }: GraphCanvasProps) {
+export default function GraphCanvas({
+    view,
+    selectedId,
+    editable,
+    onSelect,
+    onMove,
+    onConnect,
+    onDisconnect,
+    onDropOnPane,
+    onAddAt,
+    onReady,
+}: GraphCanvasProps) {
+    const dragging = useRef<CanvasEndpoint | undefined>(undefined);
+
     const nodes = useMemo<FlowNode[]>(() => view.nodes.map((node) => ({
         id: node.id,
         type: 'viz',
         position: node.position,
         data: { node },
         selected: node.id === selectedId,
-        // Positions are the document's to state. M4 makes them draggable and writes them back.
-        draggable: false,
-    })), [view.nodes, selectedId]);
+        draggable: editable,
+        // A driver is a picture of a binding rather than something stored, so it has no position of
+        // its own to move: it follows the node it drives.
+        ...(node.kind === 'feature' || node.kind === 'constant' ? { draggable: false } : {}),
+    })), [view.nodes, selectedId, editable]);
 
     const edges = useMemo<Edge[]>(() => view.edges.map(edgeStyle), [view.edges]);
 
-    const onNodeClick = useCallback((_: unknown, node: FlowNode) => {
-        onSelect(node.data.node);
-    }, [onSelect]);
+    const isValid = useCallback<IsValidConnection>((connection) => {
+        if (!connection.source || !connection.target
+            || !connection.sourceHandle || !connection.targetHandle) {
+            return false;
+        }
 
-    const onPaneClick = useCallback(() => onSelect(undefined), [onSelect]);
+        return connectionAllowed(
+            view,
+            { node: connection.source, port: connection.sourceHandle },
+            { node: connection.target, port: connection.targetHandle },
+        ).ok;
+    }, [view]);
+
+    const onConnectStart = useCallback<OnConnectStart>((_, params) => {
+        dragging.current = params.nodeId && params.handleId
+            ? { node: params.nodeId, port: params.handleId }
+            : undefined;
+    }, []);
+
+    const onConnectEnd = useCallback<OnConnectEnd>((event) => {
+        const from = dragging.current;
+        dragging.current = undefined;
+
+        if (!from || !editable) {
+            return;
+        }
+
+        const target = event.target as HTMLElement | null;
+        // React Flow reports a drop on the pane by the element under the pointer; anything else was a
+        // drop on a socket and `onConnect` has already dealt with it.
+        if (!target?.classList.contains('react-flow__pane')) {
+            return;
+        }
+
+        const point = 'clientX' in event
+            ? { x: event.clientX, y: event.clientY }
+            : { x: event.changedTouches[0]?.clientX ?? 0, y: event.changedTouches[0]?.clientY ?? 0 };
+
+        onDropOnPane(from, point);
+    }, [editable, onDropOnPane]);
 
     return (
         <ReactFlow
             nodes={nodes}
             edges={edges}
             nodeTypes={NODE_TYPES}
-            onNodeClick={onNodeClick}
-            onPaneClick={onPaneClick}
-            nodesConnectable={false}
+            onInit={(instance) => onReady?.(instance.screenToFlowPosition)}
+            onNodeClick={(_, node) => onSelect(node.data.node)}
+            onPaneClick={() => onSelect(undefined)}
+            onDoubleClick={(event) => {
+                // React Flow has no pane double-click of its own, so this is the container's and the
+                // target check is what keeps a double-click on a node from adding one.
+                if (editable && (event.target as HTMLElement).classList.contains('react-flow__pane')) {
+                    onAddAt({ x: event.clientX, y: event.clientY });
+                }
+            }}
+            onNodeDrag={(_, node) => onMove(node.id, node.position, false)}
+            onNodeDragStop={(_, node) => onMove(node.id, node.position, true)}
+            onConnect={(connection: Connection) => {
+                if (connection.source && connection.target
+                    && connection.sourceHandle && connection.targetHandle) {
+                    onConnect(
+                        { node: connection.source, port: connection.sourceHandle },
+                        { node: connection.target, port: connection.targetHandle },
+                    );
+                }
+            }}
+            onConnectStart={onConnectStart}
+            onConnectEnd={onConnectEnd}
+            onEdgesDelete={(deleted) => deleted.forEach((edge) => onDisconnect(edge.id))}
+            isValidConnection={isValid}
+            nodesConnectable={editable}
+            nodesDraggable={editable}
             elementsSelectable
+            deleteKeyCode={editable ? ['Backspace', 'Delete'] : null}
             fitView
             minZoom={0.1}
             maxZoom={2}
-            proOptions={{ hideAttribution: false }}
         >
             <Background color="#22222a" gap={24} />
             <Controls showInteractive={false} />

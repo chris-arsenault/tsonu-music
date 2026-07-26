@@ -7,13 +7,56 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { buildEditorView, type EditorNode } from '../../core/editor-view';
+import {
+    ACCUMULATE_NODE,
+    buildEditorView,
+    driverTarget,
+    GRADE_NODE,
+    type EditorNode,
+} from '../../core/editor-view';
 import { togglePluginDisabled, type DiagnosticsControls } from '../../core/diagnostics';
 import type { VisualizerFault } from '../../core/fallback';
 import { resolveAuthoredScene, type AuthoredScene } from '../../core/authored-scene';
+import {
+    applyConnect,
+    applyDisconnect,
+    type CanvasEndpoint,
+} from '../../core/editor-actions';
+import {
+    addNode,
+    cloneNode,
+    coalesce,
+    commit,
+    createHistory,
+    freeNodeId,
+    canRedo,
+    canUndo,
+    redo,
+    removeBinding,
+    removeNode,
+    setBinding,
+    setLayerOverride,
+    setMuted,
+    setParameter,
+    setPersistencePin,
+    setPosition,
+    setPromoted,
+    setGradeParameter,
+    setGradeBinding,
+    removeGradeBinding,
+    setSeed,
+    undo,
+    type DocumentHistory,
+    type PluginLookup,
+} from '../../core/authored-scene-edit';
+import type { ParameterBinding } from '../../core/bindings';
+import type { PersistenceOverrides } from '../../core/persistence';
+import type { PortType, VisualPluginDefinition } from '../../core/plugin';
 import { createM1Registry } from '../../plugins/registry';
 import type { KernelControlHandle, KernelReadout } from '../../host/kernel-loop';
 import { useEditorStyles } from './editor-styles';
+import Inspector from './Inspector';
+import NodeSearch from './NodeSearch';
 import { MetersTab, PerformanceTab } from './ReadoutTabs';
 import {
     copyFixture,
@@ -42,6 +85,15 @@ const HEIGHT_KEY = 'viz-editor-height';
 
 type Tab = 'graph' | 'meters' | 'performance';
 
+interface Point { x: number; y: number }
+
+/** An open search box: where it was opened, and the link that opened it, if any. */
+interface SearchRequest {
+    at: Point;
+    from?: CanvasEndpoint;
+    acceptingType?: PortType;
+}
+
 export interface GraphEditorDockProps {
     readout: KernelReadout;
     faults: readonly VisualizerFault[];
@@ -65,10 +117,14 @@ export default function GraphEditorDock({
 
     const [tab, setTab] = useState<Tab>('graph');
     const [height, setHeight] = useState(initialHeight);
-    const [document_, setDocument] = useState<AuthoredScene | undefined>();
+    const [history, setHistory] = useState<DocumentHistory | undefined>();
     const [selected, setSelected] = useState<string | undefined>();
     const [notice, setNotice] = useState<string | undefined>();
+    const [search, setSearch] = useState<SearchRequest | undefined>();
     const fileInput = useRef<HTMLInputElement | null>(null);
+    const project = useRef<((point: Point) => Point) | undefined>(undefined);
+
+    const document_ = history?.present;
 
     // Whatever was open last time. Offered rather than applied: reopening the dock should not silently
     // take the graph away from the scheduler.
@@ -78,10 +134,11 @@ export default function GraphEditorDock({
     // the readout rather than assumed, so what is drawn is what is rendering.
     const live = readout.scene?.authored;
     const problems = readout.scene?.problems ?? [];
+    const editable = Boolean(live);
 
-    /** Hands a document to the kernel and keeps it, or reports why it could not be handed over. */
+    /** Hands a document to the kernel and starts a fresh history at it. */
     const apply = useCallback((next: AuthoredScene, note?: string) => {
-        setDocument(next);
+        setHistory(createHistory(next));
 
         const failures = handle?.setAuthoredScene(next) ?? [];
         if (failures.length > 0) {
@@ -94,6 +151,41 @@ export default function GraphEditorDock({
         return true;
     }, [handle, controls, onControls]);
 
+    /**
+     * Records an edit and hands the result to the kernel.
+     *
+     * `hot` is for a change the kernel can take without recompiling — a parameter or a binding on a
+     * live instance — which is what lets a value be dragged while watching what it does. Everything
+     * else goes through `setAuthoredScene`, which recompiles but preserves the instances the edit did
+     * not touch. `presentation` never reaches the kernel at all: a node's position changes the picture
+     * and nothing else.
+     */
+    const edit = useCallback((
+        next: AuthoredScene | undefined,
+        options: { hot?: () => void; presentation?: boolean; coalesce?: boolean } = {},
+    ) => {
+        if (!next) {
+            return;
+        }
+
+        setHistory((current) => {
+            const base = current ?? createHistory(next);
+            return options.coalesce ? coalesce(base, next) : commit(base, next);
+        });
+
+        if (options.presentation) {
+            return;
+        }
+
+        if (options.hot) {
+            options.hot();
+            return;
+        }
+
+        const failures = handle?.setAuthoredScene(next) ?? [];
+        setNotice(failures.length > 0 ? failures[0].detail : undefined);
+    }, [handle]);
+
     const capture = useCallback(() => {
         const captured = handle?.captureScene();
         if (captured) {
@@ -103,11 +195,47 @@ export default function GraphEditorDock({
 
     const release = useCallback(() => {
         handle?.clearAuthoredScene();
-        setDocument(undefined);
+        setHistory(undefined);
         setSelected(undefined);
         setNotice(undefined);
+        setSearch(undefined);
         onControls({ ...controls, authoring: false, inspectResource: undefined });
     }, [handle, controls, onControls]);
+
+    /**
+     * Steps the history and re-applies whatever it lands on.
+     *
+     * Through `setAuthoredScene` rather than the hot paths, because a step may cross any kind of edit
+     * and the recompile is what makes it safe not to know which.
+     */
+    const step = useCallback((direction: 'undo' | 'redo') => {
+        setHistory((current) => {
+            if (!current) {
+                return current;
+            }
+
+            const next = direction === 'undo' ? undo(current) : redo(current);
+            if (next !== current) {
+                handle?.setAuthoredScene(next.present);
+            }
+
+            return next;
+        });
+    }, [handle]);
+
+    useEffect(() => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (!editable || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'z') {
+                return;
+            }
+
+            event.preventDefault();
+            step(event.shiftKey ? 'redo' : 'undo');
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [editable, step]);
 
     const importFile = useCallback(async (file: File | undefined) => {
         if (!file) {
@@ -164,6 +292,138 @@ export default function GraphEditorDock({
             problems: resolved.ok ? resolved.warnings : resolved.problems,
         })
         : undefined), [document_, registry, resolved, readout.scene?.parameters]);
+
+    /* -- editing --------------------------------------------------------- */
+
+    const lookup = useCallback<PluginLookup>((pluginId) => registry.get(pluginId), [registry]);
+
+    const editParameter = useCallback((nodeId: string, parameter: string, value: number) => {
+        edit(document_ && setParameter(document_, nodeId, parameter, value), {
+            hot: () => handle?.setNodeParameter(nodeId, parameter, value),
+            coalesce: true,
+        });
+    }, [document_, edit, handle]);
+
+    const editBinding = useCallback((
+        nodeId: string,
+        parameter: string,
+        binding: ParameterBinding | undefined,
+    ) => {
+        if (!document_) {
+            return;
+        }
+
+        const next = binding
+            ? setBinding(document_, nodeId, binding, lookup)
+            : removeBinding(document_, nodeId, parameter, lookup);
+        const node = next.nodes.find((candidate) => candidate.id === nodeId);
+
+        edit(next, { hot: () => handle?.setNodeBindings(nodeId, node?.bindings ?? []) });
+    }, [document_, edit, handle, lookup]);
+
+    const editKernel = useCallback((next: AuthoredScene | undefined) => edit(next), [edit]);
+
+    const onMove = useCallback((nodeId: string, position: Point, settled: boolean) => {
+        // A drag emits a position per frame. Coalesced until it stops, so undo takes back the drag
+        // rather than one frame of it, and it never reaches the kernel because it is not the scene.
+        edit(document_ && setPosition(document_, nodeId, position), {
+            presentation: true,
+            coalesce: !settled,
+        });
+    }, [document_, edit]);
+
+    const onCanvasConnect = useCallback((from: CanvasEndpoint, to: CanvasEndpoint) => {
+        if (!document_ || !view) {
+            return;
+        }
+
+        edit(applyConnect(document_, view, from, to, lookup));
+    }, [document_, view, edit, lookup]);
+
+    const onCanvasDisconnect = useCallback((edgeId: string) => {
+        if (!document_ || !view) {
+            return;
+        }
+
+        const result = applyDisconnect(document_, view, edgeId, lookup);
+        if (result.refused) {
+            setNotice(result.refused);
+            return;
+        }
+
+        edit(result.scene);
+    }, [document_, view, edit, lookup]);
+
+    /** Adds a node where the pointer is, wiring it up when a link was dropped to get here. */
+    const addNodeFromSearch = useCallback((
+        definition: VisualPluginDefinition,
+        port: string | undefined,
+    ) => {
+        if (!document_ || !search) {
+            return;
+        }
+
+        const at = project.current?.(search.at) ?? search.at;
+        const id = freeNodeId(document_, definition.id);
+        // Plugin defaults, not the theme's overrides: the theme scales a colour plugin's starting
+        // value *and* its binding range together, and reproducing half of that would put a node on the
+        // canvas that quietly disagrees with the identical one beside it.
+        let next = addNode(document_, definition.id, at, id);
+
+        if (search.from && port) {
+            next = applyConnect(next, view!, search.from, { node: id, port }, lookup);
+        }
+
+        setSearch(undefined);
+        edit(next);
+    }, [document_, search, view, edit, lookup]);
+
+    /**
+     * A parameter edited from the inspector.
+     *
+     * The kernel tail's three surfaces are each their own thing — accumulation values are pinned or
+     * released, the grade's are ordinary parameters, and a driver's row belongs to the node it feeds.
+     */
+    const onInspectorParameter = useCallback((
+        node: EditorNode,
+        parameter: string,
+        value: number,
+    ) => {
+        if (node.id === ACCUMULATE_NODE) {
+            editKernel(document_ && setPersistencePin(
+                document_,
+                parameter as keyof PersistenceOverrides,
+                value,
+            ));
+            return;
+        }
+
+        if (node.id === GRADE_NODE) {
+            editKernel(document_ && setGradeParameter(document_, parameter, value));
+            return;
+        }
+
+        const target = targetOf(node);
+        editParameter(target.node, target.parameter ?? parameter, value);
+    }, [document_, editKernel, editParameter]);
+
+    const onInspectorBinding = useCallback((
+        node: EditorNode,
+        parameter: string,
+        binding: ParameterBinding | undefined,
+    ) => {
+        if (node.id === GRADE_NODE) {
+            editKernel(document_ && (binding
+                ? setGradeBinding(document_, binding)
+                : removeGradeBinding(document_, parameter)));
+            return;
+        }
+
+        const target = targetOf(node);
+        const name = target.parameter ?? parameter;
+
+        editBinding(target.node, name, binding ? { ...binding, parameter: name } : undefined);
+    }, [document_, editKernel, editBinding]);
 
     const grip = useDragHeight(height, setHeight);
 
@@ -266,27 +526,35 @@ export default function GraphEditorDock({
                             </>
                         ) : null}
 
-                        {selectedNode ? (
+                        {editable ? (
                             <>
-                                <span className="viz-editor__note">
-                                    {selectedNode.inspect
-                                        ? `showing ${selectedNode.inspect}`
-                                        : `${selectedNode.title} — nothing to show alone`}
-                                </span>
-                                {selectedNode.kind === 'plugin' ? (
-                                    <button
-                                        type="button"
-                                        className="viz-editor__action"
-                                        onClick={() => onControls(
-                                            togglePluginDisabled(controls, selectedNode.id),
-                                        )}
-                                    >
-                                        {controls.disabledPlugins.includes(selectedNode.id)
-                                            ? 'Unmute'
-                                            : 'Mute'}
-                                    </button>
-                                ) : null}
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    disabled={!history || !canUndo(history)}
+                                    onClick={() => step('undo')}
+                                    title="Undo (Ctrl+Z)"
+                                >
+                                    ↺
+                                </button>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    disabled={!history || !canRedo(history)}
+                                    onClick={() => step('redo')}
+                                    title="Redo (Ctrl+Shift+Z)"
+                                >
+                                    ↻
+                                </button>
                             </>
+                        ) : null}
+
+                        {selectedNode ? (
+                            <span className="viz-editor__note">
+                                {selectedNode.inspect
+                                    ? `showing ${selectedNode.inspect}`
+                                    : `${selectedNode.title} — nothing to show alone`}
+                            </span>
                         ) : null}
 
                         {problems.length > 0 ? (
@@ -332,9 +600,80 @@ export default function GraphEditorDock({
                 {tab === 'performance' ? <PerformanceTab readout={readout} faults={faults} /> : null}
                 {tab === 'graph' ? (
                     view ? (
-                        <Suspense fallback={<div className="viz-editor__empty">loading canvas…</div>}>
-                            <GraphCanvas view={view} selectedId={selected} onSelect={onSelect} />
-                        </Suspense>
+                        <div className="viz-editor__split">
+                            <div className="viz-editor__canvas">
+                                <Suspense
+                                    fallback={<div className="viz-editor__empty">loading canvas…</div>}
+                                >
+                                    <GraphCanvas
+                                        view={view}
+                                        selectedId={selected}
+                                        editable={editable}
+                                        onSelect={onSelect}
+                                        onMove={onMove}
+                                        onConnect={onCanvasConnect}
+                                        onDisconnect={onCanvasDisconnect}
+                                        onDropOnPane={(from, at) => setSearch({
+                                            at,
+                                            from,
+                                            acceptingType: view.nodes
+                                                .find((node) => node.id === from.node)?.outputs
+                                                .find((port) => port.name === from.port)?.type,
+                                        })}
+                                        onAddAt={(at) => setSearch({ at })}
+                                        onReady={(fn) => { project.current = fn; }}
+                                    />
+                                </Suspense>
+
+                                {search ? (
+                                    <NodeSearch
+                                        catalog={registry.all()}
+                                        acceptingType={search.acceptingType}
+                                        onPick={addNodeFromSearch}
+                                        onClose={() => setSearch(undefined)}
+                                    />
+                                ) : null}
+                            </div>
+
+                            {selectedNode ? (
+                                <Inspector
+                                    node={selectedNode}
+                                    editable={editable}
+                                    layerOverrides={document_?.kernel?.layers}
+                                    onParameter={(parameter, value) =>
+                                        onInspectorParameter(selectedNode, parameter, value)}
+                                    onBinding={(parameter, binding) =>
+                                        onInspectorBinding(selectedNode, parameter, binding)}
+                                    onPromote={(parameter, promoted) => edit(
+                                        document_ && setPromoted(
+                                            document_,
+                                            targetOf(selectedNode).node,
+                                            parameter,
+                                            promoted,
+                                        ),
+                                        { presentation: true },
+                                    )}
+                                    onMute={(muted) => {
+                                        edit(document_ && setMuted(document_, selectedNode.id, muted));
+                                        onControls(togglePluginDisabled(controls, selectedNode.id));
+                                    }}
+                                    onSeed={(seed) =>
+                                        edit(document_ && setSeed(document_, selectedNode.id, seed))}
+                                    onClone={() =>
+                                        edit(document_ && cloneNode(document_, selectedNode.id))}
+                                    onRemove={() => {
+                                        edit(document_ && removeNode(document_, selectedNode.id));
+                                        setSelected(undefined);
+                                    }}
+                                    onLayerOverride={(layerId, blendMode, opacity) => editKernel(
+                                        document_ && setLayerOverride(document_, layerId, {
+                                            ...(blendMode ? { blendMode } : {}),
+                                            ...(opacity !== undefined ? { opacity } : {}),
+                                        }),
+                                    )}
+                                />
+                            ) : null}
+                        </div>
                     ) : (
                         <div className="viz-editor__empty">
                             Capture the running scene to see its graph — every plugin, the layer stack
@@ -346,6 +685,18 @@ export default function GraphEditorDock({
             </div>
         </aside>
     );
+}
+
+/**
+ * The node and parameter an inspector row belongs to.
+ *
+ * A driver node is a picture of a binding on the node it feeds, so editing it edits that node — not
+ * the picture.
+ */
+function targetOf(node: EditorNode): { node: string; parameter?: string } {
+    const driven = driverTarget(node.id);
+
+    return driven ? { node: driven.node, parameter: driven.parameter } : { node: node.id };
 }
 
 function initialHeight(): number {

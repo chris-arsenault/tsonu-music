@@ -151,9 +151,11 @@ editable yet.
 - Undo and redo across every operation.
 - Live apply — hot for parameters and bindings, recompile for topology — with problems surfaced on
   the offending node and the last valid graph retained on failure.
-- **[DECISION]** Does a newly added node start at its plugin defaults or at the theme's colour-policy
-  overrides? Defaults are predictable; overrides match what the same plugin would look like had the
-  scheduler placed it.
+- Settled: a newly added node starts at its plugin defaults. The theme's colour policy scales a
+  plugin's starting value *and* its binding output range together, so reproducing half of it would
+  put a node on the canvas that quietly disagrees with the identical one beside it, and reproducing
+  both would make a hand-placed node behave differently from the same plugin added a moment earlier
+  under a different theme. Defaults are the one value that means the same thing everywhere.
 - Exit: `make ci` green; every operation covered as a reducer test; a topology edit demonstrably
   preserves an untouched simulator's state.
 
@@ -177,4 +179,3 @@ Built ahead of M4: export and import operate on a captured document, which does 
 | Where | Decision you own |
 | ----- | ---------------- |
 | M3 | Whether muting a node also stops everything it leaves unreachable downstream |
-| M4 | Whether a newly added node starts at plugin defaults or at the theme's parameter overrides |

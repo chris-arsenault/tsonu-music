@@ -66,6 +66,19 @@ export interface AuthoredNode {
     bindings?: ParameterBinding[];
     /** Excluded from rendering without being removed from the graph. */
     muted?: boolean;
+    /**
+     * Parameters shown as sockets rather than as rows on the node.
+     *
+     * ComfyUI's convert-widget-to-input, and here for the same reason: a scene carries twenty-odd
+     * bindings and drawing every one as its own node makes the graph unreadable, while drawing none
+     * of them hides the thing most worth seeing — which parameters answer to which part of the
+     * music. Promotion is per parameter, so the one under investigation becomes visible wiring and
+     * the rest stay as rows.
+     *
+     * Presentation, like `position`, and in the document for the same reason: reopening a capture
+     * should give back the picture that was being looked at.
+     */
+    promoted?: string[];
 }
 
 export interface AuthoredEdge {
