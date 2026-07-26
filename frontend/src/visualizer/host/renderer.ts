@@ -70,7 +70,6 @@ import { createDevice, MAX_PIXEL_RATIO, type Device } from './device';
 import { createRuntime, type ActiveInstance, type RuntimeStats } from './runtime';
 import type { DistributedBinding } from '../core/audio-mapping';
 import type { ParameterBinding } from '../core/bindings';
-import type { VisualPluginDefinition } from '../core/plugin';
 
 export interface RendererFrame {
     clock: PlaybackClock;
@@ -1130,4 +1129,3 @@ function bindingsFor(
     return distributed.find((entry) => entry.instanceId === instanceId)?.bindings
         ?? definition.defaultBindings;
 }
-
