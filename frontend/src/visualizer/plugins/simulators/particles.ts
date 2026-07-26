@@ -573,7 +573,6 @@ export function createParticleForceField(
             curve: 'smooth',
         }],
         character: character({ visualDensity: 0, motionEnergy: 0.75, brightness: 0, dominance: 'supporting' }),
-        scale: 0.5,
         activationWeight: 4,
         prefersWith: ['ParticleSimulator'],
     });

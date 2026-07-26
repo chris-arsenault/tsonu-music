@@ -48,11 +48,11 @@ interface PassCommon {
     blend?: BlendMode;
     /** Clears the target before drawing. Feedback passes leave this off. */
     clear?: boolean;
-    /**
-     * Scales the target's resolution relative to the render size. The performance controller lowers
-     * this rather than asking plugins to change anything.
-     */
-    scale?: number;
+    // A `scale` field used to live here, forwarded from five plugins and read by nothing: the render
+    // plan sizes every resource from its port type before a pass is ever built, and recomputing the
+    // size at execution disagreed with what was allocated, so every scaled pass deleted and recreated
+    // its texture each frame. Sizing belongs to the plan; the five plugins that set this were already
+    // getting exactly the half resolution they asked for, from RESOURCE_SIZING.
 }
 
 export interface FullscreenPass extends PassCommon {
@@ -115,14 +115,6 @@ export function passOutputs(passes: readonly RenderPass[]): ResourceId[] {
 
 export function isGeometryPass(pass: RenderPass): pass is GeometryPass {
     return pass.kind === 'geometry';
-}
-
-/** Clamped so a plugin cannot ask for more resolution than the render size. */
-export function resolvePassScale(pass: RenderPass, qualityScale: number): number {
-    const requested = pass.scale ?? 1;
-    const scale = requested * qualityScale;
-
-    return scale <= 0 ? 0 : scale > 1 ? 1 : scale;
 }
 
 /**

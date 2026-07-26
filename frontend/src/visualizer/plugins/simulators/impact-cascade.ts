@@ -240,8 +240,10 @@ export function seedCascade(mode: CascadeMode, seed: number, count: number): Pro
 
             case 'boundary-slam':
                 projectiles.push({
+                    // Both axes took the same jitter, which put all forty-eight projectiles exactly
+                    // on the leading diagonal — a line, where the mode is meant to scatter.
                     x: jitter * 0.5,
-                    y: jitter * 0.5,
+                    y: Math.cos(t * Math.PI * 4 + jitter) * 0.5,
                     vx: Math.cos(t * Math.PI * 2) * 0.9,
                     vy: Math.sin(t * Math.PI * 2) * 0.9,
                     energy: 1,

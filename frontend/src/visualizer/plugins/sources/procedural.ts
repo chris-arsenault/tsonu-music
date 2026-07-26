@@ -214,15 +214,15 @@ void main() {
     }
 
     float fill = 1.0 - smoothstep(0.0, 0.012, shape);
-    vec2 gradient = vec2(
-        circle(p + vec2(0.002, 0.0), 0.5) - circle(p - vec2(0.002, 0.0), 0.5),
-        circle(p + vec2(0.0, 0.002), 0.5) - circle(p - vec2(0.0, 0.002), 0.5)
-    );
 
-    // Colour, mask, distance, and gradient in one output, as section 19.2 describes.
+    // Colour and mask. The comment here used to promise "colour, mask, distance, and gradient in one
+    // output", and the line below multiplied the gradient by zero before adding it — four extra
+    // circle evaluations per pixel, discarded. This output port is a colour texture and its consumers
+    // read colour and alpha, so the honest thing is to compute what they read; a plugin that needs
+    // the gradient of this shape is what the vector-field port is for.
     float palettePhase = 0.5 + 0.5 * sin(uPhase + uTime * 0.12 + uEnergy * 2.0);
     vec3 colour = mix(vec3(0.12, 0.22, 0.58), vec3(0.95, 0.56, 0.16), palettePhase);
-    fragColor = vec4(colour * fill, fill) + vec4(0.0, gradient, 0.0) * 0.0 + vec4(0.0);
+    fragColor = vec4(colour * fill, fill);
 }`;
 
 export const PROCEDURAL_TEXTURE_MODES = [

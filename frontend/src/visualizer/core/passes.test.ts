@@ -4,7 +4,6 @@ import {
     isGeometryPass,
     passInputs,
     passOutputs,
-    resolvePassScale,
     unreachableInstances,
     type RenderPass,
 } from './passes';
@@ -68,26 +67,11 @@ describe('pass descriptors', () => {
     });
 });
 
-describe('quality scaling', () => {
-    test('full quality leaves a pass at its requested scale', () => {
-        expect(resolvePassScale(fullscreen, 1)).toBe(1);
-        expect(resolvePassScale({ ...fullscreen, scale: 0.5 }, 1)).toBe(0.5);
-    });
-
-    test('the controller can downscale without the plugin cooperating', () => {
-        expect(resolvePassScale(fullscreen, 0.5)).toBe(0.5);
-        expect(resolvePassScale({ ...fullscreen, scale: 0.5 }, 0.5)).toBe(0.25);
-    });
-
-    test('a plugin cannot exceed the render size by asking for more', () => {
-        expect(resolvePassScale({ ...fullscreen, scale: 4 }, 1)).toBe(1);
-    });
-
-    test('a non-positive scale collapses to zero rather than going negative', () => {
-        expect(resolvePassScale({ ...fullscreen, scale: -1 }, 1)).toBe(0);
-        expect(resolvePassScale(fullscreen, 0)).toBe(0);
-    });
-});
+// The `quality scaling` block that stood here tested `resolvePassScale`, which had no caller outside
+// this file. Target sizes come from the render plan, which assigns them per resource from the port
+// type before any pass is built; recomputing a size at execution disagreed with what was allocated
+// and made every scaled pass delete and recreate its texture each frame. The field and the function
+// are gone rather than left as a knob that reads as live.
 
 describe('suppression strands whatever fed the suppressed plugin', () => {
     const isTerminal = (type: string) => type === 'color-texture' || type === 'vector-field';

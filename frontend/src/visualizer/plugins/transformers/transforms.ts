@@ -28,8 +28,13 @@ void main() {
         p.x = abs(p.x);
     } else if (uMode < 1.5) {                // vertical mirror
         p.y = abs(p.y);
-    } else if (uMode < 2.5) {                // bilateral
-        p.x = abs(p.x);
+    } else if (uMode < 2.5) {                // bilateral: mirrored across the leading diagonal
+        // Was byte-identical to the horizontal mirror above, so two separately registered plugins
+        // were the same transform and a mutation could swap one for the other with no visible
+        // change. Bilateral symmetry folds about an axis the other two modes do not offer.
+        if (p.y > p.x) {
+            p = p.yx;
+        }
     } else if (uMode < 3.5) {                // four-way
         p = abs(p);
     } else if (uMode < 4.5) {                // kaleidoscope

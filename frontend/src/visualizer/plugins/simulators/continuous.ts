@@ -226,8 +226,7 @@ export function createReactionDiffusionSimulator(): VisualPluginDefinition {
         memoryCost: 2,
         feedbackPort: 'history',
         clear: false,
-        // Half resolution: the pattern's scale comes from the reaction, not from pixel count.
-        scale: 0.5,
+        // Half resolution comes from the render plan, which sizes every resource by its port type.
         deactivationPolicy: 'freeze-and-dissolve',
         activationWeight: 1,
         minimumDuration: 20,
@@ -315,7 +314,6 @@ export function createWaveFieldSimulator(): VisualPluginDefinition {
         memoryCost: 2,
         feedbackPort: 'history',
         clear: false,
-        scale: 0.5,
         deactivationPolicy: 'freeze-and-dissolve',
         activationWeight: 1.2,
         minimumDuration: 16,

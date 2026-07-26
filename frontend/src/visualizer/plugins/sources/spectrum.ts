@@ -9,7 +9,17 @@
 import { character } from '../define';
 import type { RenderPass } from '../../core/passes';
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
-import { impactAge } from '../../core/impact';
+import { impactAge, type ImpactEvent } from '../../core/impact';
+
+/**
+ * Identity for an impact, which carries none of its own.
+ *
+ * Time and position together: two impacts in the same frame at the same point are the same visual
+ * event whatever produced them.
+ */
+function impactKey(impact: ImpactEvent): string {
+    return `${impact.playbackTime}:${impact.position[0]}:${impact.position[1]}`;
+}
 
 const SPECTRUM_SHADER = 'spectrum-geometry';
 const GLYPH_SHADER = 'transient-glyph';
@@ -23,6 +33,10 @@ in float aMagnitude;
 out float vMagnitude;
 void main() {
     vMagnitude = aMagnitude;
+    // The cell-matrix mode draws this buffer as points, and GLSL ES 3.00 leaves an unwritten point
+    // size unspecified — the mode rendered at whatever the driver happened to have. Scaled by
+    // magnitude so a loud bin reads as a larger cell, since that mode has no size parameter of its own.
+    gl_PointSize = 2.0 + aMagnitude * 6.0;
     gl_Position = vec4(aPosition, 0.0, 1.0);
 }`;
 
@@ -326,6 +340,8 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         create(context): VisualPluginInstance {
             const vertices = new Float32Array(MAX_GLYPHS * POINTS_PER_GLYPH * 3);
             let glyphs: Glyph[] = [];
+            /** Impacts already given a glyph, so each spawns one rather than one per frame it is new. */
+            const spawnedImpacts = new Set<string>();
             let count = 0;
             let emitting = true;
 
@@ -361,15 +377,33 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                             });
                         }
 
+                        // Each impact spawns one glyph, tracked by id.
+                        //
+                        // The age test alone is a window, not an event: normalised against a lifetime
+                        // of 1.5 seconds, an age under 0.05 is 75 milliseconds, so every impact
+                        // spawned four or five glyphs on consecutive frames. The duplicates then
+                        // evicted still-live glyphs through the ring buffer's tail slice, so an
+                        // impact crowded out the ones before it.
                         for (const impact of frame.impacts.active) {
                             const age = impactAge(impact, frame.clock.playbackTime);
-                            if (age >= 0 && age < 0.05) {
+                            const id = impactKey(impact);
+                            if (age >= 0 && age < 0.05 && !spawnedImpacts.has(id)) {
+                                spawnedImpacts.add(id);
                                 glyphs.push({
                                     x: impact.position[0] * 2 - 1,
                                     y: impact.position[1] * 2 - 1,
                                     age: 0,
                                     strength: Math.min(1, impact.energy),
                                 });
+                            }
+                        }
+
+                        // Forgotten once the impact is no longer live, so the set cannot grow without
+                        // bound over a track.
+                        const live = new Set(frame.impacts.active.map(impactKey));
+                        for (const id of spawnedImpacts) {
+                            if (!live.has(id)) {
+                                spawnedImpacts.delete(id);
                             }
                         }
                     }

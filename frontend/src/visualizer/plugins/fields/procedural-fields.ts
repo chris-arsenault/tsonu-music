@@ -150,8 +150,8 @@ export function createProceduralVectorField(
         ],
         // Produces no visible material of its own.
         character: character({ visualDensity: 0, motionEnergy: 0.6, brightness: 0, dominance: 'supporting' }),
-        // Half resolution: a force field consumed by advection needs no pixel detail.
-        scale: 0.5,
+        // Half resolution comes from the render plan: a force field consumed by advection needs no
+        // pixel detail, and RESOURCE_SIZING already assigns that from the port type.
         activationWeight: 1.5,
     });
 }
@@ -226,7 +226,6 @@ export function createAudioImpulseField(
             },
         ],
         character: character({ visualDensity: 0, motionEnergy: 0.9, brightness: 0, dominance: 'supporting' }),
-        scale: 0.5,
         activationWeight: 1.5,
     });
 }

@@ -46,8 +46,6 @@ export interface SimpleShaderPlugin {
     deactivationPolicy?: DeactivationPolicy;
     blend?: RenderPass['blend'];
     clear?: boolean;
-    /** Renders into the output at reduced resolution, for simulation fields. */
-    scale?: number;
     /** Reads its own previous frame through a declared feedback edge. */
     feedbackPort?: string;
     /**
@@ -192,7 +190,6 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         output: render.outputs[spec.outputs[0]?.name],
                         blend: spec.blend ?? 'none',
                         clear: spec.clear ?? true,
-                        scale: spec.scale,
                         uniforms: {
                             uTime: elapsed,
                             uPhase: phase + spin,
