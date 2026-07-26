@@ -134,6 +134,12 @@ export interface KernelOptions {
     artworkSrc?: string;
     /** Called at a throttled rate for display; never once per frame. */
     onReadout: (readout: KernelReadout) => void;
+    /**
+     * Readout callbacks per second. The player's overlay is text and does not need many; a meter
+     * being watched to judge whether a feature moves does, and at twelve the meter itself looks like
+     * the thing under test is stuttering.
+     */
+    readoutHz?: number;
 }
 
 export interface KernelHandle extends KernelControlHandle {
@@ -141,7 +147,7 @@ export interface KernelHandle extends KernelControlHandle {
     stop(): void;
 }
 
-/** Readout callbacks per second. Display only — the loop itself runs every frame. */
+/** Default readout callbacks per second. Display only — the loop itself runs every frame. */
 const READOUT_HZ = 12;
 
 export function startKernel(options: KernelOptions): KernelHandle {
@@ -361,7 +367,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
             renderStats = { ...stats, problems: renderer.problems() };
         }
 
-        if (now - lastReadoutTime >= 1000 / READOUT_HZ) {
+        if (now - lastReadoutTime >= 1000 / (options.readoutHz ?? READOUT_HZ)) {
             lastReadoutTime = now;
             onReadout({
                 clock,

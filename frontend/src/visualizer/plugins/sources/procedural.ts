@@ -55,8 +55,16 @@ void main() {
         value = fract(atan(p.y, p.x) / 6.2831853 + uTime * 0.05 + uSeed);
     }
 
-    value = clamp((value - 0.5) * uContrast + 0.5, 0.0, 1.0);
-    fragColor = vec4(vec3(value), 1.0);
+    // Shaped so the field reads as structure on black rather than as wallpaper.
+    //
+    // Every mode above returns a value centred near a half, which filled the entire frame with
+    // mid-grey: coverage a hundred percent, mean luminance around half scale, and the accumulation
+    // converging to exactly that. A raised exponent pushes the middle down to near black and leaves
+    // the peaks, which is the difference between a lit field and a lit structure.
+    value = pow(clamp(value, 0.0, 1.0), 1.0 + uContrast * 2.0);
+
+    // Alpha carries the same shape, so this does not opaquely occlude whatever it composites over.
+    fragColor = vec4(vec3(value), value);
 }`;
 
 const PARAMETRIC_CURVE_FRAGMENT = `#version 300 es

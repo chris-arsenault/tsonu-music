@@ -76,7 +76,8 @@ out vec4 fragColor;
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uExposure;
-uniform float uGamma;
+/** Above one, deepens the mid-tones. This is the output transfer; nothing after it lifts. */
+uniform float uContrast;
 /** Above one, pushes colour away from grey before compression. */
 uniform float uSaturation;
 
@@ -99,7 +100,11 @@ void main() {
     // the roll-off instead of being flattened by it.
     colour *= (light / (1.0 + light)) / light;
 
-    colour = pow(clamp(colour, 0.0, 1.0), vec3(1.0 / uGamma));
+    // Deepening rather than lifting. Raising to one over gamma here treats the accumulation as
+    // linear light, which it is not: every plugin writes display-referred values. ToneMapper applied
+    // the same curve inside the graph, so the two compounded to an exponent near a fifth — a
+    // hundredth arrived as four tenths, and the whole frame sat at half scale with nothing black.
+    colour = pow(clamp(colour, 0.0, 1.0), vec3(uContrast));
     colour += (dither(vUv * uResolution) - 0.5) * 0.004;
 
     fragColor = vec4(clamp(colour, 0.0, 1.0), 1.0);

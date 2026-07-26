@@ -60,7 +60,9 @@ export function createToneMapper(): VisualPluginDefinition {
         },
         // Weighted high because a scene without it looks broken rather than merely different.
         activationRules: { activationWeight: 10 },
-        parameters: { exposure: 1.1, gamma: 2.2, blackLevel: 0.002, grain: 0.006 },
+        // Gamma is neutral: the kernel's grade is the final stage and owns the output transfer. Two
+        // transfer curves in series lifted near-black to mid-grey and washed the whole frame out.
+        parameters: { exposure: 1.1, gamma: 1, blackLevel: 0.002, grain: 0.006 },
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
@@ -92,7 +94,7 @@ export function createToneMapper(): VisualPluginDefinition {
                         clear: true,
                         uniforms: {
                             uExposure: 1.1,
-                            uGamma: 2.2,
+                            uGamma: 1,
                             uBlackLevel: 0.002,
                             uGrain: 0.006,
                         },
@@ -163,10 +165,11 @@ void main() {
     );
     vec3 palette = breathingPalette(palettePhase);
     float monochrome = (1.0 - smoothstep(0.035, 0.20, saturation)) * uChromatic;
-    // Brightness rides on a floor rather than scaling the palette by luminance outright. Multiplying
-    // a palette by a luminance near one pushes its leading channel past one, which clips and drags
-    // the colour back toward white — the palette was being erased by the thing meant to apply it.
-    color = mix(color, palette * (0.28 + light * 0.85), monochrome * 0.92);
+    // Scaled by the material's own luminance, so unlit pixels stay unlit. A constant floor here
+    // painted the palette across the whole frame — black is unsaturated, so every empty pixel counted
+    // as monochrome and came back tinted, which is a coloured fog with no structure in it. Overshoot
+    // above one is fine now: the grade compresses on luminance at the end of the frame.
+    color = mix(color, palette * light * 1.25, monochrome * 0.92);
 
     float breath = 0.88
         + 0.10 * sin(uTime * (0.55 + uBass * 0.4) + uLayerPhase * 6.2831853)

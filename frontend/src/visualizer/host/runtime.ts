@@ -685,7 +685,7 @@ function presentTarget(
     device.setUniforms(program, {
         uResolution: [device.canvas.width, device.canvas.height],
         uExposure: 1.15,
-        uGamma: 2.2,
+        uContrast: 1.35,
         // Above one, so material that survived the accumulation reaches the screen with its colour
         // rather than tending toward grey.
         uSaturation: 1.35,
