@@ -19,7 +19,8 @@ const TAU = Math.PI * 2;
  * carrying faster small detail on top of it.
  *
  * Large-scale roles move far and slowly, because that is what large-scale means. Detail moves a
- * little and often. `depth` is a fraction of the binding's own range; `rate` is in hertz.
+ * little and often. `depth` is a fraction of the headroom left between the audio-resolved value and
+ * the limit the drift is travelling toward; `rate` is in hertz.
  */
 const ROLE_DYNAMICS: Record<BindingRole, { depth: [number, number]; rate: [number, number] }> = {
     // Structure: wide, unhurried arcs that reshape the frame over many seconds.
@@ -103,7 +104,28 @@ export function modulateParameters(
         const warp = clamp01(transient) * TAU * lerp(dynamics.depth, identity) * 0.6;
         const motion = Math.sin(phase + warp) * 0.68
             + Math.sin(phase * 1.731 + identity * 11.0) * 0.32;
-        const depth = span * lerp(dynamics.depth, identity);
+
+        // Depth is a share of the room left in the direction of travel, not of the whole range.
+        //
+        // It used to be a share of the span, added to the audio-resolved value and then clamped —
+        // which meant the oscillator alone covered the entire range. Measured with the audio value
+        // held at the middle of a zero-to-one binding, the output swept 0.000 to 1.000 and sat
+        // pinned at a rail eighteen percent of the time, on a cycle of twenty-two to eighty-three
+        // seconds. Moving the audio value by 0.6 shifted the output by 0.464, because the clamp ate
+        // the rest. Audio was contributing a small offset to an oscillator that was already doing
+        // everything, which is precisely the disconnection this drift was added to relieve.
+        //
+        // Taking it from the remaining headroom instead means the resolved value always sets the
+        // centre and the result can never rail on its own.
+        //
+        // Symmetric — the smaller of the two gaps — rather than whichever gap the drift happens to
+        // be heading into. Using the near gap going down and the far gap going up sounds like it
+        // wastes less room, but it biases every parameter toward the middle of its range in
+        // proportion to how far from the middle the music put it, which costs about a fifth of the
+        // audio's authority. A parameter the music has driven near a limit drifts little, which is
+        // the honest reading of a saturated control.
+        const room = Math.min(current - low, high - current);
+        const depth = room * lerp(dynamics.depth, identity);
 
         modulated[binding.parameter] = clamp(current + motion * depth, low, high);
     }

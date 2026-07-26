@@ -74,6 +74,38 @@ describe('modulation depth and exemptions', () => {
         expect(span / (2 - 0.2)).toBeGreaterThan(0.15);
     });
 
+    test('the audio-resolved value keeps its authority over the parameter', () => {
+        // The drift used to take its depth from the whole output range, add that to the resolved
+        // value, and clamp. The oscillator alone therefore covered the range end to end, and audio
+        // was reduced to a small offset on top of it — a parameter that looked alive while being
+        // driven by a clock. Measured then: moving the resolved value by 0.6 of the range moved the
+        // mean output by 0.464, with the rest eaten by the clamp.
+        const sample = (value: number) => {
+            let total = 0;
+            let count = 0;
+
+            for (let time = 0; time < 240; time += 0.1) {
+                total += modulateParameters({ hue: value }, BINDINGS, time, 0.4, 0.371).hue;
+                count += 1;
+            }
+
+            return total / count;
+        };
+
+        expect(sample(0.8) - sample(0.2)).toBeGreaterThan(0.55);
+    });
+
+    test('drift alone never reaches a limit the audio did not', () => {
+        // Sitting on a rail is the parameter's response to the music saturating, and it should mean
+        // that. Previously the drift railed on its own for eighteen percent of every cycle.
+        for (let time = 0; time < 240; time += 0.05) {
+            const { hue } = modulateParameters({ hue: 0.5 }, BINDINGS, time, 0.4, 0.371);
+
+            expect(hue).toBeGreaterThan(0);
+            expect(hue).toBeLessThan(1);
+        }
+    });
+
     test('a rate parameter is left to integrate', () => {
         // Its value is an accumulating angle, not a position inside the output range. Clamping it
         // there would stop the integration dead.
