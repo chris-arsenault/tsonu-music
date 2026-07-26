@@ -13,6 +13,14 @@ import { buildScene } from './core/scene-builder';
 import { profileFor } from './core/performance';
 import { captureScene } from './core/scene-capture';
 import { resolveAuthoredScene } from './core/authored-scene';
+import { removeNode, setParameter } from './core/authored-scene-edit';
+import { mergeUniforms, parameterUniformName, resolveParameters } from './core/parameters';
+import { silentFeatureBus } from './core/features';
+import {
+    applyPersistenceOverrides,
+    frameSurvival,
+    type PersistenceSettings,
+} from './core/persistence';
 import { assetResourceId, type AssetResource } from './core/wiring';
 import type { BuiltScene } from './core/scene-builder';
 
@@ -141,6 +149,110 @@ describe('capturing a generated scene', () => {
     test('capture is deterministic', () => {
         for (const { scene } of SCENES) {
             expect(captureScene(scene)).toEqual(captureScene(scene));
+        }
+    });
+});
+
+/**
+ * Everything between a document and the GPU, which in the Node environment is everything that can be
+ * checked. A binding in a document has to reach a shader uniform by exactly the path a generated
+ * scene's does, or the editor is driving something other than what renders.
+ */
+describe('an authored document drives the frame', () => {
+    const captured = () => {
+        const document = captureScene(SCENES[0].scene);
+        const resolved = resolveAuthoredScene(document, REGISTRY);
+        if (!resolved.ok) {
+            throw new Error(resolved.problems.map((problem) => problem.detail).join('; '));
+        }
+
+        return { document, resolved: resolved.scene };
+    };
+
+    test('a bound parameter moves with the audio and lands on its uniform', () => {
+        const { resolved } = captured();
+        const bound = resolved.bindings.find((entry) => entry.bindings.length > 0);
+        expect(bound, 'no captured node carries a binding').toBeDefined();
+
+        const binding = bound!.bindings[0];
+        const loud = silentFeatureBus({ [binding.feature]: 1 } as never);
+        const quiet = silentFeatureBus();
+
+        const start = resolved.parameters[bound!.instanceId];
+        const driven = resolveParameters(start, [binding], loud, 1);
+        const still = resolveParameters(start, [binding], quiet, 1);
+
+        expect(driven[binding.parameter]).not.toBe(still[binding.parameter]);
+        expect(mergeUniforms(undefined, driven))
+            .toHaveProperty(parameterUniformName(binding.parameter));
+    });
+
+    test('a constant the document states survives to the uniform unchanged', () => {
+        const { document } = captured();
+        const node = document.nodes.find((candidate) => (candidate.bindings ?? []).length === 0
+            && Object.keys(candidate.parameters ?? {}).length > 0);
+        if (!node) return;
+
+        const [parameter] = Object.keys(node.parameters!);
+        const edited = setParameter(document, node.id, parameter, 0.375);
+        const resolved = resolveAuthoredScene(edited, REGISTRY);
+
+        expect(resolved.ok).toBe(true);
+        if (!resolved.ok) return;
+
+        // Nothing is bound to it, so the resolver leaves it exactly where the document put it.
+        const advanced = resolveParameters(
+            resolved.scene.parameters[node.id],
+            resolved.scene.bindings.find((entry) => entry.instanceId === node.id)!.bindings,
+            silentFeatureBus(),
+            1 / 60,
+        );
+
+        expect(advanced[parameter]).toBe(0.375);
+        expect(mergeUniforms(undefined, advanced)[parameterUniformName(parameter)]).toBe(0.375);
+    });
+
+    test('a pinned survival reaches the accumulation instead of the theme value', () => {
+        const { document } = captured();
+        const pinned = resolveAuthoredScene({
+            ...document,
+            kernel: { persistence: { survivalPerSecond: 0.9 } },
+        }, REGISTRY);
+
+        expect(pinned.ok).toBe(true);
+        if (!pinned.ok) return;
+
+        const computed: PersistenceSettings = {
+            survivalPerSecond: 0.05,
+            motionScale: 0.2,
+            transientPunch: 0,
+        };
+        const applied = applyPersistenceOverrides(computed, pinned.scene.kernel.persistence);
+
+        expect(applied.survivalPerSecond).toBe(0.9);
+        expect(frameSurvival(applied.survivalPerSecond, 1)).toBeCloseTo(0.9, 6);
+        // The drag was not pinned, so it still follows what the scene computed.
+        expect(applied.motionScale).toBe(0.2);
+    });
+
+    test('an edit to one node leaves every other node instance-identical', () => {
+        // This is what makes editing usable: the reused instances are exactly those whose id and
+        // definition are unchanged, so a one-node edit does not reset the simulations around it.
+        const { document } = captured();
+        const target = document.nodes[0];
+        const edited = removeNode(document, target.id);
+
+        const before = resolveAuthoredScene(document, REGISTRY);
+        const after = resolveAuthoredScene(edited, REGISTRY);
+        if (!before.ok || !after.ok) return;
+
+        const survivors = after.scene.nodes.map((node) => node.instanceId);
+        const originals = new Map(before.scene.nodes.map((node) => [node.instanceId, node.definition]));
+
+        for (const instanceId of survivors) {
+            expect(originals.get(instanceId)).toBe(
+                after.scene.nodes.find((node) => node.instanceId === instanceId)!.definition,
+            );
         }
     });
 });

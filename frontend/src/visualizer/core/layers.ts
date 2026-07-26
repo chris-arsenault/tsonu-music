@@ -76,6 +76,47 @@ export function blendForCharacter(character: SelectionCharacter): BlendMode {
     return 'screen';
 }
 
+/**
+ * How one layer is presented, against what its plugin's character decided.
+ *
+ * Blend mode and opacity are chosen for a layer rather than by it, and the choice is where a branch
+ * becomes invisible: an `add` layer over a bright base disappears into white, a `normal` one occludes
+ * everything beneath it. Being able to state either directly is how that gets settled.
+ */
+export interface LayerOverride {
+    blendMode?: BlendMode;
+    opacity?: number;
+    feedbackParticipation?: number;
+}
+
+/** Applies per-layer overrides, keyed by the layer id — which is the instance that produced it. */
+export function applyLayerOverrides(
+    layers: readonly VisualLayer[],
+    overrides: Readonly<Record<string, LayerOverride>> | undefined,
+): VisualLayer[] {
+    if (!overrides) {
+        return [...layers];
+    }
+
+    return layers.map((layer) => {
+        const override = overrides[layer.id];
+        if (!override) {
+            return layer;
+        }
+
+        return {
+            ...layer,
+            ...(override.blendMode ? { blendMode: override.blendMode } : {}),
+            ...(typeof override.opacity === 'number'
+                ? { opacity: clamp01(override.opacity) }
+                : {}),
+            ...(typeof override.feedbackParticipation === 'number'
+                ? { feedbackParticipation: clamp01(override.feedbackParticipation) }
+                : {}),
+        };
+    });
+}
+
 export function createLayer(id: string, color: ResourceId, overrides: Partial<VisualLayer> = {}): VisualLayer {
     return {
         id,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import {
     advanceCrossfade,
+    applyLayerOverrides,
     blendFactors,
     blendForCharacter,
     composeLayers,
@@ -327,5 +328,52 @@ describe('pairing branches across a scene change', () => {
         const held = advanceCrossfade(fade, 0);
 
         expect(held.progress).toBe(fade.progress);
+    });
+});
+
+describe('layer overrides', () => {
+    const stack = [
+        createLayer('a#0', 'a.color', { blendMode: 'screen', opacity: 1, feedbackParticipation: 0.2 }),
+        createLayer('b#0', 'b.color', { blendMode: 'add', opacity: 0.5 }),
+    ];
+
+    test('no overrides changes nothing', () => {
+        expect(applyLayerOverrides(stack, undefined)).toEqual(stack);
+        expect(applyLayerOverrides(stack, {})).toEqual(stack);
+    });
+
+    test('an override reaches only the layer it names', () => {
+        const [first, second] = applyLayerOverrides(stack, { 'a#0': { blendMode: 'normal' } });
+
+        expect(first.blendMode).toBe('normal');
+        expect(second).toBe(stack[1]);
+    });
+
+    test('members left out keep what the character decided', () => {
+        const [first] = applyLayerOverrides(stack, { 'a#0': { opacity: 0.25 } });
+
+        expect(first.opacity).toBe(0.25);
+        expect(first.blendMode).toBe('screen');
+        expect(first.feedbackParticipation).toBe(0.2);
+    });
+
+    test('opacity and feedback participation are clamped', () => {
+        const [first] = applyLayerOverrides(stack, {
+            'a#0': { opacity: 4, feedbackParticipation: -1 },
+        });
+
+        expect(first.opacity).toBe(1);
+        expect(first.feedbackParticipation).toBe(0);
+    });
+
+    test('an override naming a layer that is not in the stack is ignored', () => {
+        expect(applyLayerOverrides(stack, { ghost: { opacity: 0 } })).toEqual(stack);
+    });
+
+    test('an override of zero opacity is applied rather than read as absent', () => {
+        // The case the whole channel exists for: taking one branch out to see what it was hiding.
+        const [first] = applyLayerOverrides(stack, { 'a#0': { opacity: 0 } });
+
+        expect(first.opacity).toBe(0);
     });
 });

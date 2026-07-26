@@ -45,6 +45,8 @@ import {
     type PerformanceState,
     type QualityProfile,
 } from '../core/performance';
+import type { AuthoredProblem, AuthoredScene } from '../core/authored-scene';
+import type { ParameterBinding } from '../core/bindings';
 import { acquireTap, type AudioTap } from './audio-tap';
 import { initialMediaEvents, subscribeMediaEvents } from './media-events';
 import { createRenderer, type Renderer, type RendererFailure } from './renderer';
@@ -119,6 +121,19 @@ export interface KernelControlHandle {
     setControls(controls: DiagnosticsControls): void;
     /** Discards the current composition and selects a fresh random scene. */
     newScene(): boolean;
+
+    /** Freezes whatever is rendering into an editable document. */
+    captureScene(): AuthoredScene | undefined;
+    /** Puts a document in control. Returns why it could not be, or an empty list. */
+    setAuthoredScene(document: AuthoredScene): AuthoredProblem[];
+    /** Hands the scene back to the scheduler. */
+    clearAuthoredScene(): boolean;
+    /** The document in control, if any. */
+    authoredScene(): AuthoredScene | undefined;
+    /** Writes one parameter on one live node, taking effect next frame with no teardown. */
+    setNodeParameter(nodeId: string, parameter: string, value: number): boolean;
+    /** Replaces what drives one live node's parameters. */
+    setNodeBindings(nodeId: string, bindings: readonly ParameterBinding[]): boolean;
 }
 
 export interface KernelOptions {
@@ -212,7 +227,13 @@ export function startKernel(options: KernelOptions): KernelHandle {
             return suspendedProfile();
         }
 
-        const profile = profileFor(performance.level);
+        // A scene under study is rendered at full quality whatever the ladder thinks.
+        //
+        // From level five the ladder stops reducing resolution and starts dropping whole plugins, so
+        // a graph being examined would lose the node in question the moment frame time slipped, and
+        // the picture would change for a reason nothing on screen accounts for. The ladder's own
+        // reading still advances and is still reported; it simply does not reach the graph.
+        const profile = profileFor(controls.authoring ? 0 : performance.level);
         return options.prefersReducedMotion ? applyReducedMotion(profile) : profile;
     };
 
@@ -372,7 +393,9 @@ export function startKernel(options: KernelOptions): KernelHandle {
             const trackChanged = clock.generation !== lastRebuiltGeneration;
             const shouldRebuild = trackChanged || grammarChanged;
 
-            if (shouldRebuild && !controls.freezeMutations) {
+            // A document owns the graph while it is in control, so a track change reseeds the clock
+            // and the audio and leaves the scene exactly where it is.
+            if (shouldRebuild && !controls.freezeMutations && !controls.authoring) {
                 lastRebuiltGeneration = clock.generation;
                 const rebuilt = trackChanged
                     ? renderer.newScene(profile)
@@ -389,7 +412,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
             // delta, so a paused track does not bank mutations that all fire at once on resume.
             const step = advanceMutation(mutation, deltaSeconds, renderer.mutationPolicy());
             mutation = step.state;
-            if (step.due && !controls.freezeMutations) {
+            if (step.due && !controls.freezeMutations && !controls.authoring) {
                 lastMutation = renderer.mutate(profile, clock.playbackTime);
                 if (lastMutation !== 'none') {
                     activationHistory = recordActivation(activationHistory, `mutate:${lastMutation}`);
@@ -478,6 +501,50 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 mutation = createMutationState();
             }
             return rebuilt;
+        },
+
+        captureScene() {
+            return renderer?.captureCurrentScene();
+        },
+
+        setAuthoredScene(document) {
+            if (!renderer) {
+                return [{ kind: 'compile', detail: 'the renderer is not running' }];
+            }
+
+            const problems = renderer.setAuthoredScene(document);
+            if (problems.length === 0) {
+                // The scheduler's timers are meaningless while a document is in control, and leaving
+                // them running would bank a mutation that fires the moment it is handed back.
+                mutation = createMutationState();
+                lastMutation = 'none';
+                lastRebuiltGeneration = clock.generation;
+            }
+
+            return problems;
+        },
+
+        clearAuthoredScene() {
+            const cleared = renderer?.clearAuthoredScene(currentProfile()) ?? false;
+            if (cleared) {
+                mutation = createMutationState();
+                lastMutation = 'scene';
+                lastRebuiltGeneration = clock.generation;
+            }
+
+            return cleared;
+        },
+
+        authoredScene() {
+            return renderer?.authoredScene();
+        },
+
+        setNodeParameter(nodeId, parameter, value) {
+            return renderer?.setNodeParameter(nodeId, parameter, value) ?? false;
+        },
+
+        setNodeBindings(nodeId, bindings) {
+            return renderer?.setNodeBindings(nodeId, bindings) ?? false;
         },
 
         setTrack(nextTrackId, durationSeconds) {

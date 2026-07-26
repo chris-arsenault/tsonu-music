@@ -6,6 +6,7 @@ import {
     resolveAuthoredScene,
     type AuthoredScene,
 } from './authored-scene';
+import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from './composite-grade';
 import { createPluginRegistry } from './plugin';
 import type { PluginCategory, PluginPort, VisualPluginDefinition } from './plugin';
 import { instanceSeed } from './random';
@@ -332,5 +333,82 @@ describe('authored scene resolution', () => {
 
     test('the version constant is what an empty document carries', () => {
         expect(emptyAuthoredScene('x').version).toBe(AUTHORED_SCENE_VERSION);
+    });
+
+    test('the wired structure comes back in the shape the host already reads', () => {
+        const result = resolveAuthoredScene(document({
+            assetBindings: [{ node: 'src#0', port: 'mask', resource: 'asset:ring' }],
+            present: { node: 'trn#0', port: 'color' },
+        }), REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.scene.wired.edges).toEqual([{
+            from: { instanceId: 'src#0', port: 'color' },
+            to: { instanceId: 'trn#0', port: 'source' },
+        }]);
+        expect(result.scene.wired.present).toEqual({ instanceId: 'trn#0', port: 'color' });
+        expect(result.scene.wired.unsatisfied).toEqual([]);
+    });
+});
+
+describe('the kernel tail', () => {
+    test('an absent section resolves to what the kernel does with no document at all', () => {
+        const result = resolveAuthoredScene(document(), REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.scene.kernel.gradeParameters).toEqual(COMPOSITE_PARAMETERS);
+        expect(result.scene.kernel.gradeBindings).toBe(COMPOSITE_BINDINGS);
+        expect(result.scene.kernel.persistence).toBeUndefined();
+        expect(result.scene.kernel.layers).toBeUndefined();
+    });
+
+    test('grade parameters resolve over the kernel defaults rather than replacing them', () => {
+        const result = resolveAuthoredScene(document({
+            kernel: { grade: { parameters: { exposure: 2 } } },
+        }), REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.scene.kernel.gradeParameters.exposure).toBe(2);
+        expect(result.scene.kernel.gradeParameters.contrast).toBe(COMPOSITE_PARAMETERS.contrast);
+    });
+
+    test('a document may replace what drives the grade', () => {
+        const bindings = [{
+            feature: 'bass',
+            parameter: 'exposure',
+            outputRange: [1, 2] as [number, number],
+            attack: 0.1,
+            release: 0.2,
+            curve: 'linear' as const,
+        }];
+        const result = resolveAuthoredScene(document({ kernel: { grade: { bindings } } }), REGISTRY);
+
+        expect(result.ok && result.scene.kernel.gradeBindings).toEqual(bindings);
+    });
+
+    test('persistence pins and layer overrides come through', () => {
+        const result = resolveAuthoredScene(document({
+            kernel: {
+                persistence: { survivalPerSecond: 0.9 },
+                layers: { 'src#0': { opacity: 0 } },
+            },
+        }), REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.scene.kernel.persistence).toEqual({ survivalPerSecond: 0.9 });
+        expect(result.scene.kernel.layers).toEqual({ 'src#0': { opacity: 0 } });
+    });
+
+    test('resolving twice does not share the mutable sections between the results', () => {
+        const kernel = { persistence: { survivalPerSecond: 0.5 } };
+        const first = resolveAuthoredScene(document({ kernel }), REGISTRY);
+
+        kernel.persistence.survivalPerSecond = 0.1;
+
+        expect(first.ok && first.scene.kernel.persistence?.survivalPerSecond).toBe(0.5);
     });
 });

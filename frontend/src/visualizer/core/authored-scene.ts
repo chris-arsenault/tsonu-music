@@ -17,6 +17,7 @@
  */
 
 import type { ParameterBinding } from './bindings';
+import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from './composite-grade';
 import {
     compileGraph,
     type CompileProblem,
@@ -25,8 +26,11 @@ import {
     type RenderGraphEdge,
 } from './graph';
 import type { DistributedBinding } from './audio-mapping';
+import type { LayerOverride } from './layers';
+import type { PersistenceOverrides } from './persistence';
 import type { PluginRegistry, VisualPluginDefinition } from './plugin';
 import { instanceSeed } from './random';
+import type { WiredScene } from './wiring';
 
 /**
  * The document format's version.
@@ -79,6 +83,29 @@ export interface AuthoredAssetBinding {
     resource: string;
 }
 
+/**
+ * The stages between the graph and the canvas, which belong to no plugin.
+ *
+ * Composite, motion sum, accumulation, meter and grade run outside the render graph entirely, and
+ * they decide as much about the finished frame as anything in it — the accumulation alone is where
+ * most of what reads as motion happens. A document that could address the graph and not the tail
+ * could not be used to answer the commonest question there is, which is why the frame looks the way
+ * it does rather than why one node does.
+ *
+ * Every member is optional. Absent means the kernel decides, as it does with no document at all.
+ */
+export interface AuthoredKernel {
+    /** The grade's own parameters and what drives them, resolved exactly as a plugin's are. */
+    grade?: {
+        parameters?: Record<string, number>;
+        bindings?: ParameterBinding[];
+    };
+    /** Pinned accumulation values. Absent members keep following the theme and the audio. */
+    persistence?: PersistenceOverrides;
+    /** Presentation overrides per layer, keyed by the instance that produced it. */
+    layers?: Record<string, LayerOverride>;
+}
+
 export interface AuthoredScene {
     version: number;
     /**
@@ -94,6 +121,8 @@ export interface AuthoredScene {
     assetBindings: AuthoredAssetBinding[];
     /** The resource presented to the canvas. Absent leaves the compiler's default in place. */
     present?: { node: string; port: string };
+    /** The stages after the graph. Absent leaves every one of them to the kernel. */
+    kernel?: AuthoredKernel;
 }
 
 /**
@@ -114,6 +143,11 @@ export interface ResolvedAuthoredScene {
     entropy: string;
     themeId?: string;
     nodes: GraphNode[];
+    /**
+     * The document's structure in the shape the host already reads for a generated scene, so the two
+     * paths converge before the host has to tell them apart.
+     */
+    wired: WiredScene;
     graph: CompiledGraph;
     /** Per-instance, as `distributeReactivity` produces for a generated scene. */
     bindings: DistributedBinding[];
@@ -123,6 +157,15 @@ export interface ResolvedAuthoredScene {
     seeds: Record<string, number>;
     /** Nodes the document has muted. A runtime exclusion, not a change to the graph. */
     muted: string[];
+    /** The tail's settings, already resolved over the kernel's own defaults. */
+    kernel: ResolvedKernel;
+}
+
+export interface ResolvedKernel {
+    gradeParameters: Record<string, number>;
+    gradeBindings: readonly ParameterBinding[];
+    persistence?: PersistenceOverrides;
+    layers?: Record<string, LayerOverride>;
 }
 
 export type AuthoredResolution =
@@ -237,16 +280,23 @@ export function resolveAuthoredScene(
         ...(edge.feedback ? { feedback: true } : {}),
     }));
 
-    const compiled = compileGraph(
+    const wired: WiredScene = {
         nodes,
         edges,
-        document.present && { instanceId: document.present.node, port: document.present.port },
-        document.assetBindings.map((binding) => ({
+        assetBindings: document.assetBindings.map((binding) => ({
             instanceId: binding.node,
             port: binding.port,
             resource: binding.resource,
         })),
-    );
+        ...(document.present
+            ? { present: { instanceId: document.present.node, port: document.present.port } }
+            : {}),
+        // A document that leaves a required input open does not resolve at all, so by the time
+        // anything reads this there is nothing unsatisfied left to report.
+        unsatisfied: [],
+    };
+
+    const compiled = compileGraph(nodes, edges, wired.present, wired.assetBindings);
 
     if (!compiled.ok) {
         return {
@@ -298,12 +348,24 @@ export function resolveAuthoredScene(
             entropy: document.entropy,
             themeId: document.themeId,
             nodes,
+            wired,
             graph: compiled.graph,
             bindings,
             parameters,
             seeds,
             muted,
+            kernel: resolveKernel(document.kernel),
         },
+    };
+}
+
+/** The tail's settings over the kernel's own, so an absent section behaves as no document at all. */
+export function resolveKernel(kernel: AuthoredKernel | undefined): ResolvedKernel {
+    return {
+        gradeParameters: { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) },
+        gradeBindings: kernel?.grade?.bindings ?? COMPOSITE_BINDINGS,
+        ...(kernel?.persistence ? { persistence: { ...kernel.persistence } } : {}),
+        ...(kernel?.layers ? { layers: { ...kernel.layers } } : {}),
     };
 }
 
