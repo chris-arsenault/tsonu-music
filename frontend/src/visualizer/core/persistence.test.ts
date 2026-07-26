@@ -6,6 +6,7 @@ import {
     DEFAULT_THEME_PERSISTENCE,
     frameSurvival,
     gatherOffset,
+    injectionFor,
     isMotionSource,
     persistenceSettings,
     type PersistenceSettings,
@@ -34,6 +35,7 @@ describe('persistence settings', () => {
             layerWeights: [],
             bass: 0.5,
             rms: 0.5,
+            transient: 0,
             ...overrides,
         });
 
@@ -84,6 +86,56 @@ describe('persistence settings', () => {
                 expect(result.motionScale).toBeLessThan(1);
             }
         }
+    });
+});
+
+/**
+ * At rest the accumulation admits only the complement of survival — a couple of percent per frame.
+ * That is what makes long trails possible, and it is also why sparse fast material was swallowed:
+ * a particle contributed a fiftieth of its brightness and was then dragged away. Worse, no musical
+ * event could move more than that fraction of the screen, whatever the features were doing.
+ */
+describe('transients punch through the accumulation', () => {
+    const settings = (transient: number) => persistenceSettings({
+        themePersistence: 0.7,
+        layerWeights: [],
+        bass: 0.5,
+        rms: 0.5,
+        transient,
+    });
+
+    test('at rest the injection is the complement of survival, so trails survive', () => {
+        const resting = settings(0);
+        const survival = frameSurvival(resting.survivalPerSecond, 1 / 60);
+
+        expect(resting.transientPunch).toBe(0);
+        expect(injectionFor(survival, resting.transientPunch)).toBeCloseTo(1 - survival, 6);
+    });
+
+    test('a strike lets far more of the new frame through', () => {
+        const survival = frameSurvival(settings(0).survivalPerSecond, 1 / 60);
+        const resting = injectionFor(survival, settings(0).transientPunch);
+        const struck = injectionFor(survival, settings(1).transientPunch);
+
+        expect(struck).toBeGreaterThan(resting * 10);
+    });
+
+    test('ordinary playing barely lifts it, so the response is a pulse and not a floor', () => {
+        // Squared, so a half-strength transient is a quarter of the punch rather than half of it.
+        expect(settings(0.5).transientPunch).toBeLessThan(settings(1).transientPunch * 0.3);
+    });
+
+    test('a strike shoves the image as well as brightening it', () => {
+        expect(settings(1).motionScale).toBeGreaterThan(settings(0).motionScale * 1.5);
+    });
+
+    test('reduced motion does not punch', () => {
+        const reduced = persistenceSettings({
+            themePersistence: 0.7, layerWeights: [], bass: 0.5, rms: 0.5,
+            transient: 1, reducedMotion: true,
+        });
+
+        expect(reduced.transientPunch).toBe(0);
     });
 });
 
@@ -302,7 +354,11 @@ function run(
 describe('the composite recurrence produces motion', () => {
     // A larger UV rate than a real scene uses, because this grid is twenty-four texels across: the
     // recurrence is what is under test, and it needs the drag to cover comparable ground per frame.
-    const moving: PersistenceSettings = { survivalPerSecond: 0.4, motionScale: 1.6 };
+    const moving: PersistenceSettings = {
+        survivalPerSecond: 0.4,
+        motionScale: 1.6,
+        transientPunch: 0,
+    };
 
     test('a moving source leaves a trail lagging behind it', () => {
         // The property that matters, and the one the leaky integrator actually provides. A screen
@@ -407,7 +463,11 @@ describe('the composite recurrence produces motion', () => {
     });
 
     test('with no accumulation the frame is exactly what was drawn', () => {
-        const still: PersistenceSettings = { survivalPerSecond: 0, motionScale: 0 };
+        const still: PersistenceSettings = {
+            survivalPerSecond: 0,
+            motionScale: 0,
+            transientPunch: 0,
+        };
         const { final, deltas } = run(still, 1 / 60, 30);
         const composite = staticComposite();
 

@@ -42,6 +42,19 @@ export interface PersistenceSettings {
     survivalPerSecond: number;
     /** UV displacement per second applied to the accumulation, per unit of field magnitude. */
     motionScale: number;
+    /**
+     * How hard the newest frame punches through the accumulation, 0 to 1, from the transient
+     * envelope.
+     *
+     * At rest the accumulation admits only its complement of survival — a couple of percent per
+     * frame — which is what makes long trails possible and is also why sparse, fast material was
+     * being swallowed whole: particles, glyphs and bursts each contributed a fiftieth of their
+     * brightness and were then dragged away. Worse, no musical event could move more than that
+     * fraction of the screen, which is what "movement disconnected from the music" is.
+     *
+     * On a hit the new frame is let through. Between hits it smears. That contrast is the pulse.
+     */
+    transientPunch: number;
 }
 
 export interface PersistenceInput {
@@ -56,6 +69,8 @@ export interface PersistenceInput {
     bass: number;
     /** Overall intensity, which lengthens trails as a track opens up. */
     rms: number;
+    /** The transient envelope: how recently something struck. Drives the pulse. */
+    transient: number;
     /** Selects a low-energy profile rather than uniformly slower animation. */
     reducedMotion?: boolean;
 }
@@ -85,6 +100,14 @@ const SURVIVAL_CEILING = 0.25;
 const MOTION_FLOOR = 0.05;
 const MOTION_CEILING = 0.85;
 
+/**
+ * How much of the new frame a full-strength transient lets through.
+ *
+ * High enough that a hit visibly arrives; short of one so a strike still leaves the previous image
+ * partly standing rather than cutting to a new one.
+ */
+const TRANSIENT_PUNCH = 0.72;
+
 /** What a theme leaves unstated. Matches the neutral value in `character`. */
 export const DEFAULT_THEME_PERSISTENCE = 0.4;
 
@@ -111,12 +134,28 @@ export function persistenceSettings(input: PersistenceInput): PersistenceSetting
     const motion = MOTION_FLOOR
         + (MOTION_CEILING - MOTION_FLOOR) * curve(clamp01(input.bass) * 0.75 + persistence * 0.25);
 
+    // Squared, so ordinary playing barely lifts the injection and a real hit lifts it a lot. A linear
+    // response here just raises the floor and takes the trails away.
+    const strike = clamp01(input.transient);
+    const punch = strike * strike * TRANSIENT_PUNCH;
+
     if (input.reducedMotion) {
-        // Low energy rather than slow: the image still accumulates, but it is not dragged far.
-        return { survivalPerSecond: Math.min(survival, 0.35), motionScale: MOTION_FLOOR * 0.5 };
+        // Low energy rather than slow: the image still accumulates, but it is not dragged far and it
+        // does not punch.
+        return {
+            survivalPerSecond: Math.min(survival, 0.35),
+            motionScale: MOTION_FLOOR * 0.5,
+            transientPunch: 0,
+        };
     }
 
-    return { survivalPerSecond: survival, motionScale: motion };
+    return {
+        survivalPerSecond: survival,
+        // A hit shoves the image as well as brightening it, so the flow lurches with the music
+        // rather than drifting past it.
+        motionScale: motion * (1 + strike * 0.8),
+        transientPunch: punch,
+    };
 }
 
 /** Smoothstep, so neither end of the persistence range is reached by a small change near the middle. */
@@ -162,8 +201,12 @@ const MINIMUM_INJECTION = 0.01;
  * The complement of survival, so the two sum to one and a static image converges to exactly itself.
  * This is what stops the accumulation from being a brightness ramp.
  */
-export function injectionFor(survivalPerFrame: number): number {
-    return Math.max(1 - clamp01(survivalPerFrame), MINIMUM_INJECTION);
+export function injectionFor(survivalPerFrame: number, transientPunch = 0): number {
+    const resting = Math.max(1 - clamp01(survivalPerFrame), MINIMUM_INJECTION);
+
+    // A hit overrides the resting complement outright rather than adding to it, so the fixed point is
+    // untouched between hits and the trails survive.
+    return Math.max(resting, clamp01(transientPunch));
 }
 
 /**

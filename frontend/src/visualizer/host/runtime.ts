@@ -648,8 +648,9 @@ function advanceAccumulation(
     device.setUniforms(program, {
         uResolution: [plan.width, plan.height],
         uSurvival: survival,
-        // Complement of survival, so a static image converges to exactly itself rather than ramping.
-        uInjection: injectionFor(survival),
+        // Complement of survival at rest, overridden by a transient so a hit arrives on screen
+        // instead of seeping in at a fiftieth of its brightness.
+        uInjection: injectionFor(survival, frame.persistence.transientPunch),
         uBlackFloor: blackFloorFor(deltaSeconds),
         uMotionScale: frame.persistence.motionScale,
         uDelta: Math.max(0, deltaSeconds),

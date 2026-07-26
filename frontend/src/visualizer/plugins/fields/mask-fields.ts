@@ -174,15 +174,16 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
         parameters: { threshold: 0.5, invert: 0, searchRadius: 0.12 },
         defaultBindings: [{
             // The threshold is where the mask's boundary sits, so moving it makes the silhouette
-            // itself breathe. Every field here declared no bindings at all, which left the whole mask
-            // pipeline frozen: section 12.2 asks masks to control distortion regions and feedback
-            // visibility, and neither can happen while the routing parameters are constants.
-            feature: 'trebleExcite',
-            role: 'detail',
+            // breathe — but a silhouette is structure, not detail. Driven from a transient channel
+            // across a wide range it swung far enough to take the whole shape past the mask's own
+            // tonal range, so the mask flashed into view and vanished again instead of persisting
+            // as a scene modifier. Slow role, narrow range: it breathes, it does not blink.
+            feature: 'lowMid',
+            role: 'deformation',
             parameter: 'threshold',
-            outputRange: [0.6, 0.38],
-            attack: 0.06,
-            release: 0.45,
+            outputRange: [0.54, 0.44],
+            attack: 0.8,
+            release: 2,
             curve: 'smooth',
         }],
         deactivationPolicy: 'immediate',

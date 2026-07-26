@@ -64,6 +64,16 @@ export interface ContinuousFeatures {
     spectralCentroid: number;
     spectralFlux: number;
 
+    /**
+     * How recently something struck: one envelope over detected onsets, fast to rise and quick to
+     * fall.
+     *
+     * Beat phase is a position between beats, not an event — it runs whether or not anything is
+     * happening, so driving motion from it gives a metronome rather than a response. This is the
+     * signal for "something just happened", and it is what the composite breathes on.
+     */
+    transient: number;
+
     beatConfidence: number;
     beatPhase: number;
 
@@ -178,6 +188,14 @@ export const TRANSIENT_GATE_SECONDS = 0.12;
 
 /** Highest centroid used for normalization. Above this, brightness is already saturated. */
 const CENTROID_CEILING_HZ = 8000;
+
+/**
+ * How long a transient takes to fall away.
+ *
+ * Short enough that consecutive hits read as separate, long enough that one hit is visible for more
+ * than a frame at any plausible frame rate.
+ */
+const TRANSIENT_RELEASE_SECONDS = 0.22;
 
 const EMPTY_SPECTRUM = new Float32Array(0);
 
@@ -383,13 +401,21 @@ function presentEvents(state: FeatureBusState, input: FeatureBusInput): FeatureB
 
     const { beatEvents, lastEmittedBeatIndex, beatPhase } = advanceBeat(state, input, audible);
 
+    // One envelope over everything that just struck. Rises to the strongest onset released this
+    // frame and falls over a fixed time, so it reads as a hit rather than as a level.
+    const strongest = onsetEvents.reduce((highest, event) => Math.max(highest, event.strength), 0);
+    const decayed = input.deltaSeconds > 0
+        ? state.bus.continuous.transient * Math.exp(-input.deltaSeconds / TRANSIENT_RELEASE_SECONDS)
+        : state.bus.continuous.transient;
+    const transient = clamp01(Math.max(strongest, decayed));
+
     return {
         ...state,
         pendingOnsets: held,
         lastEmittedBeatIndex,
         bus: {
             ...state.bus,
-            continuous: { ...state.bus.continuous, beatPhase },
+            continuous: { ...state.bus.continuous, beatPhase, transient },
             events: {
                 onset: onsetEvents,
                 beat: beatEvents,
@@ -485,6 +511,7 @@ function zeroContinuous(): ContinuousFeatures {
         trebleExcite: 0,
         spectralCentroid: 0,
         spectralFlux: 0,
+        transient: 0,
         beatConfidence: 0,
         beatPhase: 0,
         leftLevel: 0,

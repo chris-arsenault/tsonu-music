@@ -199,7 +199,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
     let lostHandled = false;
     /** Last frame's composite settings, for the diagnostics overlay. */
-    let lastPersistence: PersistenceSettings = { survivalPerSecond: 0, motionScale: 0 };
+    let lastPersistence: PersistenceSettings = {
+        survivalPerSecond: 0,
+        motionScale: 0,
+        transientPunch: 0,
+    };
     // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
     let lastClock: PlaybackClock = {
         trackId: null,
@@ -419,6 +423,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         .map((contributor) => contributor.weight),
                     bass: frame.features.continuous.bass,
                     rms: frame.features.continuous.rms,
+                    transient: frame.features.continuous.transient,
                     reducedMotion: frame.profile.reducedMotion,
                 });
 

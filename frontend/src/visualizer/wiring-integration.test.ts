@@ -443,16 +443,16 @@ describe('mask dimensions', () => {
                 {},
                 resolveParameters(definition.parameters ?? {}, bindings, features(), 1 / 60),
             );
+            // Every continuous channel at full scale, derived rather than listed: naming them meant
+            // the test silently stopped covering a field whenever one was rebound to a channel the
+            // list happened not to include.
+            const everything = Object.fromEntries(
+                Object.keys(features().continuous).map((name) => [name, 1]),
+            ) as Partial<AudioFeatureBus['continuous']>;
+
             const loud = mergeUniforms(
                 {},
-                resolveParameters(
-                    definition.parameters ?? {},
-                    bindings,
-                    features({
-                        rms: 1, bass: 1, mid: 1, trebleExcite: 1, highMidExcite: 1,
-                    }),
-                    1 / 60,
-                ),
+                resolveParameters(definition.parameters ?? {}, bindings, features(everything), 1 / 60),
             );
 
             expect(quiet, `${id} reacts`).not.toEqual(loud);
