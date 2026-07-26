@@ -50,6 +50,16 @@ export interface SceneGrammar {
      * compositor reading one branch twice is not composing anything.
      */
     minimumMaterialBranches: number;
+    /**
+     * Plugins the scene must contain in total.
+     *
+     * The category ranges each have a floor, but they are satisfiable independently and their floors
+     * summed to a scene far thinner than any of them implies — two generators, one transform and one
+     * post stage is a legal scene under every family here, and it looks like four things. A visualizer
+     * wants several elements running at once so that no single one has to carry the frame: a couple of
+     * generators, something warping them, something feeding back, and an effect on top.
+     */
+    minimumSceneSize: number;
 }
 
 /** GPU cost at or above which a plugin counts against the high-cost limit. */
@@ -75,7 +85,8 @@ export interface GrammarViolation {
         | 'too-many-symmetry'
         | 'no-visible-source'
         | 'no-motion-source'
-        | 'too-few-branches';
+        | 'too-few-branches'
+        | 'too-few-plugins';
     detail: string;
 }
 
@@ -118,6 +129,13 @@ export function grammarViolations(
 ): GrammarViolation[] {
     const violations: GrammarViolation[] = [];
     const counts = countByCategory(definitions);
+
+    if (definitions.length < grammar.minimumSceneSize) {
+        violations.push({
+            kind: 'too-few-plugins',
+            detail: `${definitions.length} plugins below ${grammar.minimumSceneSize}`,
+        });
+    }
 
     for (const [category, key] of Object.entries(CATEGORY_RANGE_KEYS) as [PluginCategory, keyof SceneGrammar | undefined][]) {
         if (!key) {
@@ -224,6 +242,7 @@ export function wouldViolate(
         'no-visible-source',
         'no-motion-source',
         'too-few-branches',
+        'too-few-plugins',
     ];
 
     return violations.some((violation) => !shortfalls.includes(violation.kind));
@@ -234,12 +253,12 @@ export function wouldViolate(
 /* -------------------------------------------------------------------------- */
 
 export const ORGANIC_FLOW: SceneGrammar = {
-    sourceCount: [2, 3],
+    sourceCount: [2, 4],
     fieldCount: [1, 2],
     simulatorCount: [0, 1],
-    transformerCount: [1, 3],
+    transformerCount: [2, 4],
     compositorCount: [1, 2],
-    postprocessCount: [1, 2],
+    postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
@@ -247,32 +266,36 @@ export const ORGANIC_FLOW: SceneGrammar = {
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: true,
-    minimumMaterialBranches: 2,
+    minimumMaterialBranches: 3,
+    minimumSceneSize: 8,
 };
 
 export const GEOMETRIC_SIGNAL: SceneGrammar = {
-    sourceCount: [2, 3],
-    fieldCount: [0, 1],
+    sourceCount: [2, 4],
+    fieldCount: [0, 2],
     // No dense simulator: the family is about clean geometry.
     simulatorCount: [0, 0],
-    transformerCount: [2, 3],
+    transformerCount: [2, 4],
     compositorCount: [1, 2],
-    postprocessCount: [1, 2],
+    postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
-    minimumFeedbackLoops: 0,
+    // Clean geometry still wants a trail behind it; without one this family had the least motion of
+    // the four while being the one whose shapes move most legibly.
+    minimumFeedbackLoops: 1,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: false,
-    minimumMaterialBranches: 2,
+    minimumMaterialBranches: 3,
+    minimumSceneSize: 8,
 };
 
 export const COLLISION_ENERGY: SceneGrammar = {
-    sourceCount: [1, 2],
+    sourceCount: [2, 3],
     fieldCount: [1, 3],
-    simulatorCount: [1, 1],
-    transformerCount: [1, 2],
+    simulatorCount: [1, 2],
+    transformerCount: [1, 3],
     compositorCount: [1, 2],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
@@ -282,14 +305,15 @@ export const COLLISION_ENERGY: SceneGrammar = {
     maximumSymmetryTransforms: 0,
     requireVisibleSource: false,
     requireMotionSource: true,
-    minimumMaterialBranches: 2,
+    minimumMaterialBranches: 3,
+    minimumSceneSize: 8,
 };
 
 export const IMAGE_DREAM: SceneGrammar = {
-    sourceCount: [2, 3],
+    sourceCount: [2, 4],
     fieldCount: [1, 3],
     simulatorCount: [0, 1],
-    transformerCount: [2, 3],
+    transformerCount: [2, 4],
     compositorCount: [1, 2],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
@@ -299,7 +323,8 @@ export const IMAGE_DREAM: SceneGrammar = {
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: true,
-    minimumMaterialBranches: 2,
+    minimumMaterialBranches: 3,
+    minimumSceneSize: 8,
 };
 
 export const VISUAL_FAMILIES: Readonly<Record<string, SceneGrammar>> = {
@@ -325,4 +350,6 @@ export const REDUCED_GRAMMAR: SceneGrammar = {
     requireVisibleSource: true,
     requireMotionSource: false,
     minimumMaterialBranches: 1,
+    // The point of this rung is that the machine cannot afford a scene. Whatever composes is enough.
+    minimumSceneSize: 1,
 };

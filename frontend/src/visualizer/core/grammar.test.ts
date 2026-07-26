@@ -50,8 +50,10 @@ function plugin(
 const WELL_FORMED: VisualPluginDefinition[] = [
     plugin('src-a', 'source'),
     plugin('src-b', 'source'),
+    plugin('src-c', 'source'),
     plugin('fld', 'field', { outputs: [{ name: 'flow', type: 'vector-field', required: false }] }),
     plugin('trn', 'transformer', { capabilities: ['feedback'] }),
+    plugin('trn-b', 'transformer'),
     plugin('mix', 'compositor'),
     plugin('post', 'postprocess'),
 ];
@@ -61,7 +63,7 @@ describe('category counting', () => {
         const counts = countByCategory(WELL_FORMED);
 
         expect(counts).toEqual({
-            source: 2, field: 1, simulator: 0, transformer: 1, compositor: 1, postprocess: 1,
+            source: 3, field: 1, simulator: 0, transformer: 2, compositor: 1, postprocess: 1,
         });
     });
 
@@ -186,13 +188,14 @@ describe('candidate filtering', () => {
     });
 
     test('a candidate exceeding a category maximum is rejected', () => {
-        // Organic flow allows up to three transformers, so the fourth is the one that exceeds it.
-        // Adding the third used to be rejected too, but for an unrelated shortfall — the partial set
-        // had no visible source yet — which is not the candidate's fault and no longer counts.
+        // Organic flow allows up to four transformers, so the fifth is the one that exceeds it.
+        // Adding an earlier one used to be rejected too, but for an unrelated shortfall — the partial
+        // set had no visible source yet — which is not the candidate's fault and no longer counts.
         const current = [
             plugin('t1', 'transformer'),
             plugin('t2', 'transformer'),
             plugin('t3', 'transformer'),
+            plugin('t4', 'transformer'),
         ];
 
         expect(wouldViolate(current.slice(0, 2), plugin('t3', 'transformer'), ORGANIC_FLOW)).toBe(false);
@@ -242,9 +245,25 @@ describe('visual families', () => {
         expect(VISUAL_FAMILIES['geometric-signal'].simulatorCount).toEqual([0, 0]);
     });
 
-    test('collision energy requires exactly one simulator and forbids symmetry', () => {
-        expect(VISUAL_FAMILIES['collision-energy'].simulatorCount).toEqual([1, 1]);
+    test('collision energy always has a simulator and forbids symmetry', () => {
+        // A second simulator is allowed now: the family is about things striking each other, and one
+        // simulator with nothing to strike is a demonstration rather than a collision.
+        expect(VISUAL_FAMILIES['collision-energy'].simulatorCount[0]).toBe(1);
         expect(VISUAL_FAMILIES['collision-energy'].maximumSymmetryTransforms).toBe(0);
+    });
+
+    test('every family asks for a scene with several things happening in it', () => {
+        // The category floors are satisfiable independently, and summed to a scene far thinner than
+        // any family implies: two generators, one transform and one post stage was legal everywhere
+        // and looks like four things. A frame carried by one element is the failure this prevents.
+        for (const [name, grammar] of Object.entries(VISUAL_FAMILIES)) {
+            expect(grammar.minimumSceneSize, name).toBeGreaterThanOrEqual(8);
+            expect(grammar.sourceCount[0], name).toBeGreaterThanOrEqual(2);
+            expect(grammar.transformerCount[0], name).toBeGreaterThanOrEqual(1);
+            expect(grammar.minimumFeedbackLoops, name).toBeGreaterThanOrEqual(1);
+            expect(grammar.postprocessCount[0], name).toBeGreaterThanOrEqual(1);
+            expect(grammar.minimumMaterialBranches, name).toBeGreaterThanOrEqual(3);
+        }
     });
 
     test('the reduced grammar is cheaper than every family', () => {
