@@ -161,6 +161,45 @@ export function isCrossfadeComplete(crossfade: Crossfade): boolean {
     return clamp01(crossfade.progress) >= 1;
 }
 
+/** How long a branch takes to hand over. Long enough to read as a dissolve, short enough not to muddy. */
+export const CROSSFADE_SECONDS = 1.1;
+
+/**
+ * Pairs the branches leaving a scene with the ones arriving, so each arrival fades up as a departure
+ * fades down.
+ *
+ * Paired by position rather than by identity, because a rebuild reassigns layer ids wholesale and
+ * there is no correspondence to recover — the point is that the frame does not change all at once,
+ * not that any particular branch became any particular other one. A layer with no counterpart still
+ * gets a crossfade against nothing, so a scene gaining or losing branches fades those in or out
+ * rather than popping.
+ */
+export function crossfadesBetween(
+    departing: readonly VisualLayer[],
+    arriving: readonly VisualLayer[],
+): Crossfade[] {
+    const crossfades: Crossfade[] = [];
+    const count = Math.max(departing.length, arriving.length);
+
+    for (let index = 0; index < count; index += 1) {
+        const from = departing[index];
+        const to = arriving[index];
+
+        if (!from && !to) {
+            continue;
+        }
+
+        crossfades.push({
+            fromLayerId: from?.id ?? '',
+            toLayerId: to?.id ?? '',
+            progress: 0,
+            durationSeconds: CROSSFADE_SECONDS,
+        });
+    }
+
+    return crossfades;
+}
+
 /**
  * GL blend factors for a mode. `none` replaces the target; `normal` is source-over.
  * Returned as plain data so the mapping is testable without a context.

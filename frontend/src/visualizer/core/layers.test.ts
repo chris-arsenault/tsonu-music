@@ -5,7 +5,9 @@ import {
     blendForCharacter,
     composeLayers,
     createLayer,
+    crossfadesBetween,
     crossfadeWeight,
+    CROSSFADE_SECONDS,
     isCrossfadeComplete,
     type Crossfade,
 } from './layers';
@@ -275,5 +277,55 @@ describe('blend selection', () => {
                 expect(blendForCharacter(character({ brightness, visualDensity }))).not.toBe('multiply');
             }
         }
+    });
+});
+
+/**
+ * Section 10 crossfades. Every piece of this existed and nothing ever built one, so scene
+ * transitions swapped the frame's contents between two consecutive frames.
+ */
+describe('pairing branches across a scene change', () => {
+    const outgoing = [createLayer('old-a', 'a.color'), createLayer('old-b', 'b.color')];
+    const incoming = [createLayer('new-a', 'c.color'), createLayer('new-b', 'd.color')];
+
+    test('every departing and arriving layer is accounted for', () => {
+        const fades = crossfadesBetween(outgoing, incoming);
+
+        expect(fades).toHaveLength(2);
+        expect(fades.map((fade) => fade.fromLayerId)).toEqual(['old-a', 'old-b']);
+        expect(fades.map((fade) => fade.toLayerId)).toEqual(['new-a', 'new-b']);
+    });
+
+    test('a fade starts fully on the outgoing branch', () => {
+        const [fade] = crossfadesBetween(outgoing, incoming);
+
+        expect(crossfadeWeight('old-a', [fade])).toBe(1);
+        expect(crossfadeWeight('new-a', [fade])).toBe(0);
+    });
+
+    test('a fade completes in its declared duration and not before', () => {
+        let [fade] = crossfadesBetween(outgoing, incoming);
+
+        fade = advanceCrossfade(fade, CROSSFADE_SECONDS * 0.5);
+        expect(isCrossfadeComplete(fade)).toBe(false);
+        expect(crossfadeWeight('new-a', [fade])).toBeCloseTo(0.5, 6);
+
+        fade = advanceCrossfade(fade, CROSSFADE_SECONDS * 0.5);
+        expect(isCrossfadeComplete(fade)).toBe(true);
+    });
+
+    test('a scene that gains a branch fades it in rather than popping it', () => {
+        const fades = crossfadesBetween(outgoing, [...incoming, createLayer('extra', 'e.color')]);
+
+        expect(fades).toHaveLength(3);
+        expect(crossfadeWeight('extra', fades)).toBe(0);
+    });
+
+    test('a frozen clock holds a transition mid-fade', () => {
+        let [fade] = crossfadesBetween(outgoing, incoming);
+        fade = advanceCrossfade(fade, CROSSFADE_SECONDS * 0.4);
+        const held = advanceCrossfade(fade, 0);
+
+        expect(held.progress).toBe(fade.progress);
     });
 });

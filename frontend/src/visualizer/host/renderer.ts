@@ -7,7 +7,16 @@
  */
 
 import type { CompiledGraph } from '../core/graph';
-import { blendForCharacter, composeLayers, createLayer, type VisualLayer } from '../core/layers';
+import {
+    advanceCrossfade,
+    blendForCharacter,
+    composeLayers,
+    createLayer,
+    crossfadesBetween,
+    isCrossfadeComplete,
+    type Crossfade,
+    type VisualLayer,
+} from '../core/layers';
 import {
     persistenceSettings,
     DEFAULT_THEME_PERSISTENCE,
@@ -205,6 +214,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         scene.entropy,
     ).instances;
     let layers = buildLayers(scene.graph);
+    let crossfades: readonly Crossfade[] = [];
     runtime.setGraph(scene.graph, instances);
 
     let lostHandled = false;
@@ -455,7 +465,16 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             mutationCount = 0;
         }
 
+        // Section 10: incoming branches fade up as the outgoing ones fade down.
+        //
+        // The whole subsystem existed — the type, the weighting, the advance, the completion test,
+        // and the runtime's read of the field — and the only caller of `renderFrame` never set it, so
+        // no crossfade had ever run. Transitions were handled entirely by the retirement path, which
+        // drains a plugin's own simulation but does nothing about a new branch appearing at full
+        // opacity in a single frame.
+        const departingLayers = layers;
         layers = buildLayers(scene.graph);
+        crossfades = crossfadesBetween(departingLayers, layers);
         runtime.setGraph(scene.graph, instances);
 
         if (!preserveInstances) {
@@ -505,6 +524,12 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
                 const composedLayers = [...layers, ...retiringLayers()];
 
+                // A frozen clock passes zero delta, so a transition holds mid-fade rather than
+                // completing while paused.
+                crossfades = crossfades
+                    .map((crossfade) => advanceCrossfade(crossfade, frame.deltaSeconds))
+                    .filter((crossfade) => !isCrossfadeComplete(crossfade));
+
                 // The compositor's parameters advance exactly as a plugin instance's do: bindings
                 // resolved against the live bus, then the same role-aware slow modulation.
                 gradeParameters = resolveParameters(
@@ -540,6 +565,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
                     layers: composedLayers,
+                    crossfades,
                     // Section 11 gives every layer a feedback participation weight and makes injection
                     // the compositor's duty. The weights were computed and consumed by nothing; this is
                     // where they finally decide how strongly the scene accumulates.
