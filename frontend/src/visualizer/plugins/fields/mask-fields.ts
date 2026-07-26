@@ -166,7 +166,11 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
             visualDensity: 0, motionEnergy: 0, geometricOrder: 0.8,
             recognizability: 0.4, persistence: 1, brightness: 0, dominance: 'supporting',
         },
-        activationRules: { activationWeight: 2, requiredAssets: ['mask'] },
+        activationRules: {
+            activationWeight: 8,
+            requiredAssets: ['mask'],
+            prefersWith: ['MaskBoundaryField', 'MaskContainmentField', 'MaskEffectStencil', 'MaskRouter'],
+        },
         parameters: { threshold: 0.5, invert: 0, searchRadius: 0.12 },
         defaultBindings: [{
             // The threshold is where the mask's boundary sits, so moving it makes the silhouette
@@ -217,7 +221,11 @@ export function createMaskContainmentField(): VisualPluginDefinition {
             visualDensity: 0, motionEnergy: 0, geometricOrder: 0.7,
             recognizability: 0.3, persistence: 1, brightness: 0, dominance: 'supporting',
         },
-        activationRules: { activationWeight: 1.5, requiredAssets: ['mask'] },
+        activationRules: {
+            activationWeight: 5,
+            requiredAssets: ['mask'],
+            prefersWith: ['MaskSignedDistanceField'],
+        },
         parameters: { softness: 0.02, outside: 0 },
         defaultBindings: [{
             // How hard the containment edge is. A loud passage lets what is contained press further
@@ -266,7 +274,11 @@ export function createMaskEffectStencil(): VisualPluginDefinition {
             visualDensity: 0.3, motionEnergy: 0.1, geometricOrder: 0.7,
             recognizability: 0.6, persistence: 0.4, brightness: 0.4, dominance: 'supporting',
         },
-        activationRules: { activationWeight: 1.5, requiredAssets: ['mask'] },
+        activationRules: {
+            activationWeight: 5,
+            requiredAssets: ['mask'],
+            prefersWith: ['MaskSignedDistanceField'],
+        },
         parameters: { feather: 0.03, edgeOnly: 0 },
         defaultBindings: [{
             // Widens the band the effect is routed through, so the stencil's edge shimmers on detail
@@ -313,7 +325,12 @@ export function createMaskBoundaryField(): VisualPluginDefinition {
             visualDensity: 0, motionEnergy: 0.2, geometricOrder: 0.7,
             recognizability: 0.2, persistence: 1, brightness: 0, dominance: 'supporting',
         },
-        activationRules: { activationWeight: 1, requiredAssets: ['mask'] },
+        activationRules: {
+            activationWeight: 7,
+            requiredAssets: ['mask'],
+            // The mask as a physics surface: this is what particles reflect from.
+            prefersWith: ['MaskSignedDistanceField', 'ParticleSimulator'],
+        },
         parameters: { strength: 1 },
         defaultBindings: [{
             // This field is both a collision surface for a simulator and, since it is a motion source,

@@ -6,20 +6,45 @@
  * transients. Playback time is the only clock, therefore pause and seek semantics remain intact.
  */
 
-import { bindingMode, type ParameterBinding } from './bindings';
+import { bindingMode, type BindingRole, type ParameterBinding } from './bindings';
 
 const TAU = Math.PI * 2;
 
 /**
- * Fraction of a binding's range the slow motion sweeps.
+ * How far and how fast each role's slow motion travels.
  *
- * This was 4.5% to 10%, which on a typical range is below the threshold of visibility — the scene
- * was described as breathing while measurably holding still. Motion is still clamped to the
- * binding's authored range, so widening it cannot push a parameter anywhere its author did not
- * already permit.
+ * Every parameter drifted by the same fraction of its range at the same rate, whatever it did. A
+ * scene therefore had one tempo and one amplitude of change everywhere, which reads as uniformly
+ * small no matter how the individual ranges are tuned — there was no sense of a large slow shift
+ * carrying faster small detail on top of it.
+ *
+ * Large-scale roles move far and slowly, because that is what large-scale means. Detail moves a
+ * little and often. `depth` is a fraction of the binding's own range; `rate` is in hertz.
  */
-const DEPTH_FLOOR = 0.2;
-const DEPTH_SPAN = 0.25;
+const ROLE_DYNAMICS: Record<BindingRole, { depth: [number, number]; rate: [number, number] }> = {
+    // Structure: wide, unhurried arcs that reshape the frame over many seconds.
+    'large-scale-force': { depth: [0.45, 0.8], rate: [0.012, 0.045] },
+    deformation: { depth: [0.4, 0.7], rate: [0.018, 0.06] },
+    // Presence: the middle ground, and the closest to the old uniform behaviour.
+    intensity: { depth: [0.25, 0.45], rate: [0.05, 0.12] },
+    complexity: { depth: [0.3, 0.55], rate: [0.03, 0.09] },
+    'lateral-force': { depth: [0.3, 0.6], rate: [0.04, 0.1] },
+    // Detail: small and quick, riding on top of whatever the structure is doing.
+    detail: { depth: [0.08, 0.2], rate: [0.18, 0.5] },
+    burst: { depth: [0.06, 0.16], rate: [0.25, 0.7] },
+    'repeating-motion': { depth: [0.15, 0.35], rate: [0.1, 0.3] },
+};
+
+/** What an unroled binding gets: the middle of the range, as before. */
+const DEFAULT_DYNAMICS = { depth: [0.2, 0.45] as [number, number], rate: [0.035, 0.14] as [number, number] };
+
+function dynamicsFor(role: BindingRole | undefined) {
+    return role ? ROLE_DYNAMICS[role] : DEFAULT_DYNAMICS;
+}
+
+function lerp(range: readonly [number, number], t: number): number {
+    return range[0] + (range[1] - range[0]) * t;
+}
 
 /**
  * Adds bounded, per-parameter motion around the values resolved from live audio.
@@ -67,12 +92,13 @@ export function modulateParameters(
         const identity = fractional(
             instanceEntropy * 997.3 + stringPhase(binding.parameter) * 431.9,
         );
-        const rate = 0.035 + identity * 0.105;
+        const dynamics = dynamicsFor(binding.role);
+        const rate = lerp(dynamics.rate, identity);
         const phase = playbackTime * rate * TAU + identity * TAU;
         const beatWarp = beatPhase * TAU * (0.18 + identity * 0.34) * beatConfidence;
         const motion = Math.sin(phase + beatWarp) * 0.68
             + Math.sin(phase * 1.731 + identity * 11.0) * 0.32;
-        const depth = span * (DEPTH_FLOOR + identity * DEPTH_SPAN);
+        const depth = span * lerp(dynamics.depth, identity);
 
         modulated[binding.parameter] = clamp(current + motion * depth, low, high);
     }

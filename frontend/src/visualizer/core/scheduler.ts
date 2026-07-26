@@ -205,6 +205,41 @@ export function characterFit(
 }
 
 /** Selection weight: activation weight, theme preference, and character fit combined. */
+/** The part of an id before the mode: `TilingTransform:hex` and `TilingTransform:brick` are one family. */
+export function pluginFamily(id: string): string {
+    return id.split(':')[0];
+}
+
+/**
+ * How many registered variants share a plugin's family.
+ *
+ * Weight is declared once per definition, and a family that happens to enumerate nine modes
+ * registers nine definitions. Its influence over selection was therefore its declared weight times
+ * however many modes its author wrote — `TilingTransform` at nine outweighing `ParticleSimulator` at
+ * one by nine to one, for no reason anybody chose. Scenes came out tiled and without particles.
+ */
+const familyCounts = new WeakMap<object, Map<string, number>>();
+
+export function familySize(
+    definition: VisualPluginDefinition,
+    available: readonly VisualPluginDefinition[],
+): number {
+    // Memoised against the candidate list. Selection weight is evaluated for every candidate at every
+    // slot of every build attempt, so counting the catalog inside it made assembly quadratic — scene
+    // building went from milliseconds to seconds.
+    let counts = familyCounts.get(available);
+    if (!counts) {
+        counts = new Map<string, number>();
+        for (const candidate of available) {
+            const key = pluginFamily(candidate.id);
+            counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+        familyCounts.set(available, counts);
+    }
+
+    return Math.max(1, counts.get(pluginFamily(definition.id)) ?? 1);
+}
+
 export function selectionWeight(
     definition: VisualPluginDefinition,
     context: SchedulerContext,
@@ -213,8 +248,13 @@ export function selectionWeight(
         ?.find((entry) => entry.pluginId === definition.id)?.weight ?? 1;
     const fit = characterFit(definition.character, context.theme.targetCharacter);
 
+    // Divided across the family, so activation weight means what the family is worth rather than
+    // what each of its modes is worth. A long mode list now buys variety, not influence.
+    const share = 1 / familySize(definition, context.available);
+
     // Fit is squared so a poor match is strongly penalised rather than merely ranked lower.
-    return Math.max(0, definition.activationRules.activationWeight) * Math.max(0, preference) * fit * fit;
+    return Math.max(0, definition.activationRules.activationWeight)
+        * Math.max(0, preference) * fit * fit * share;
 }
 
 /**
@@ -229,13 +269,18 @@ export function interactionWeight(
     chosen: readonly VisualPluginDefinition[],
     context: SchedulerContext,
 ): number {
-    const chosenIds = new Set(chosen.map((entry) => entry.id));
-    const forwardPreference = definition.activationRules.prefersWith
-        ?.some((id) => chosenIds.has(id)) ?? false;
-    const reversePreference = chosen.some((entry) =>
-        entry.activationRules.prefersWith?.includes(definition.id));
+    // Matched by family rather than by exact id. Naming one mode of a nine-mode family meant the
+    // preference fired only when that exact mode had been chosen, so chains that were supposed to
+    // pull each other in — a field, then a simulator, then a renderer — almost never linked up.
+    const chosenFamilies = new Set(chosen.map((entry) => pluginFamily(entry.id)));
+    const family = pluginFamily(definition.id);
 
-    return selectionWeight(definition, context) * (forwardPreference || reversePreference ? 4 : 1);
+    const forwardPreference = definition.activationRules.prefersWith
+        ?.some((id) => chosenFamilies.has(pluginFamily(id))) ?? false;
+    const reversePreference = chosen.some((entry) =>
+        entry.activationRules.prefersWith?.some((id) => pluginFamily(id) === family));
+
+    return selectionWeight(definition, context) * (forwardPreference || reversePreference ? 6 : 1);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -511,9 +556,10 @@ export function pickReplacement(
 /* -------------------------------------------------------------------------- */
 
 export const DEFAULT_MUTATION_POLICY: MutationPolicy = {
-    intervalSeconds: 14,
-    // Continuous modulation supplies the constant motion; these slower structural changes reshape the
-    // relationships without repeatedly discarding the whole composition.
-    weights: { parameter: 8, plugin: 3, branch: 2, scene: 0.5 },
-    minimumPluginAgeSeconds: 10,
+    intervalSeconds: 8,
+    // Weighted toward changes that are visible. At eight to three to two, three mutations in five
+    // only redistributed which feature drove which parameter — nothing a viewer would read as the
+    // scene shifting — so a structural change arrived about every thirty-four seconds.
+    weights: { parameter: 3, plugin: 4, branch: 3, scene: 0.6 },
+    minimumPluginAgeSeconds: 7,
 };

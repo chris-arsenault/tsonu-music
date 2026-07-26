@@ -170,7 +170,12 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             brightness: 0.6,
             dominance: 'either',
         },
-        activationRules: { activationWeight: 1, minimumDuration: 8 },
+        activationRules: {
+            // High: an audio-derived trace is the material a music visualizer is about, and the
+            // whole family now competes as one rather than as eight.
+            activationWeight: 7,
+            minimumDuration: 8,
+        },
         parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4 },
         defaultBindings: [
             {

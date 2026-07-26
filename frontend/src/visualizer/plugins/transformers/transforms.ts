@@ -434,7 +434,9 @@ export function createTilingTransform(
             curve: 'smooth',
         }],
         character: character({ geometricOrder: 0.85, visualDensity: 0.75, motionEnergy: 0.25 }),
-        activationWeight: 0.9,
+        // Low: a lattice applies one decision everywhere, and the frame stops reading as a scene
+        // rather than as wallpaper. It should be an occasional device, not a default.
+        activationWeight: 0.3,
         minimumDuration: 12,
     });
 }

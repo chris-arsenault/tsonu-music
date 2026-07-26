@@ -254,7 +254,13 @@ export function createParticleSimulator(): VisualPluginDefinition {
             persistence: 0.7,
             dominance: 'either',
         }),
-        activationRules: { activationWeight: 1.5, minimumDuration: 16 },
+        activationRules: {
+            activationWeight: 6,
+            minimumDuration: 16,
+            // The chain has to assemble as a chain: a simulator with no renderer shows nothing,
+            // and a mask boundary is what gives it a surface to collide with.
+            prefersWith: ['ParticleRenderer', 'ParticleEmitter', 'ProceduralVectorField', 'MaskBoundaryField'],
+        },
         parameters: { drag: 0.4, lifetime: 4 },
         defaultBindings: [{
             feature: 'bass',
@@ -345,7 +351,10 @@ export function createParticleRenderer(
         capabilities: ['particle-rendering'],
         cost: { gpu: 2, cpu: 0, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
         character: character({ visualDensity: 0.7, motionEnergy: 0.8, brightness: 0.7, dominance: 'supporting' }),
-        activationRules: { activationWeight: 2, prefersWith: ['ParticleSimulator'] },
+        activationRules: {
+            activationWeight: 5,
+            prefersWith: ['ParticleSimulator', 'MaskSignedDistanceField'],
+        },
         parameters: { pointSize: 2.5, brightness: 1.2 },
         defaultBindings: [{
             feature: 'treble',
@@ -466,8 +475,8 @@ export function createParticleEmitter(
             curve: 'sqrt',
         }],
         character: character({ visualDensity: 0, motionEnergy: 0.6, brightness: 0, dominance: 'supporting' }),
-        activationWeight: 1.5,
-        prefersWith: ['ParticleSimulator'],
+        activationWeight: 5,
+        prefersWith: ['ParticleSimulator', 'ParticleTrailInjector'],
     });
 }
 
@@ -493,7 +502,8 @@ export function createParticleForceField(
         }],
         character: character({ visualDensity: 0, motionEnergy: 0.75, brightness: 0, dominance: 'supporting' }),
         scale: 0.5,
-        activationWeight: 1.5,
+        activationWeight: 4,
+        prefersWith: ['ParticleSimulator'],
     });
 }
 
@@ -532,7 +542,7 @@ export function createParticleTrailInjector(): VisualPluginDefinition {
         clear: false,
         memoryCost: 2,
         deactivationPolicy: 'handoff-feedback',
-        activationWeight: 1.2,
-        prefersWith: ['ParticleSimulator'],
+        activationWeight: 4,
+        prefersWith: ['ParticleRenderer', 'ParticleSimulator'],
     });
 }

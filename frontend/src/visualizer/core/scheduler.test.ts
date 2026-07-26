@@ -424,12 +424,24 @@ describe('mutation', () => {
         expect(state.secondsSinceMutation).toBe(0);
     });
 
-    test('scene mutation is the rarest kind', () => {
+    test('scene mutation stays the rarest kind', () => {
+        // Scene mutation discards every accumulated buffer, so it should be uncommon whatever else
+        // changes.
         const weights = DEFAULT_MUTATION_POLICY.weights;
 
         expect(weights.scene).toBeLessThan(weights.branch);
-        expect(weights.branch).toBeLessThan(weights.plugin);
-        expect(weights.plugin).toBeLessThan(weights.parameter);
+        expect(weights.scene).toBeLessThan(weights.plugin);
+        expect(weights.scene).toBeLessThan(weights.parameter);
+    });
+
+    test('most mutations change something a viewer can see', () => {
+        // Parameter mutation only redistributes which feature drives which parameter. Weighted at
+        // eight against three and two, three mutations in five changed nothing legible and a
+        // structural shift arrived about every thirty-four seconds.
+        const weights = DEFAULT_MUTATION_POLICY.weights;
+        const structural = weights.plugin + weights.branch + weights.scene;
+
+        expect(structural).toBeGreaterThan(weights.parameter);
     });
 
     test('plugin mutation targets a mature instance and offers a same-category replacement', () => {
