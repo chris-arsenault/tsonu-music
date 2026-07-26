@@ -18,7 +18,7 @@ judged once their inputs have a usable range.
 | 7 | Particle lifetime, respawn, and emitters | 1.4 | done |
 | 8 | Particle legibility: seeding, size, trails, seam | 1.5, 1.12 | done |
 | 9 | Simulator/renderer wiring requirements | 2.6 | done |
-| 10 | Composition reach: branch count, spectrum gain, injection | 1.8, 1.3, 1.11 | pending |
+| 10 | Composition reach: branch count, spectrum gain, injection | 1.8, 1.3, 1.11 | done |
 | 11 | Sampler binding correctness | 1.9, 2.5, 2.13, 2.14 | pending |
 | 12 | Lifecycle: accumulation clear, context loss, activation, retirement | 2.3, 2.4, 2.7, 2.8 | pending |
 | 13 | Colour: accent assignment and policy strength | 2.10, 2.9 | pending |
@@ -74,6 +74,13 @@ mean is exceeded by any percussive hit. That is what an excitation channel is
 for, and step 2 makes it safe by ensuring only bindings authored against one ever
 receive one. Softening it would blur the event detection that `detail` and
 `burst` depend on.
+
+**Audit item 1.11, the two to four percent injection rate, was left alone.** The
+particle layer inspected on its own has a mean luminance of 174 of 255 and
+ninety percent coverage, and reaches the accumulation attenuated thirty to forty
+times between transients. That is a persistence setting, and persistence
+settings are explicitly out of scope for this pass at the user's direction. The
+figure is recorded here so it is not mistaken for something nobody noticed.
 
 **`CENTROID_CEILING_HZ` at 8000 saturates on bright material** — measured median
 0.999 on the hat-heavy surrogate above. The surrogate is brighter than real

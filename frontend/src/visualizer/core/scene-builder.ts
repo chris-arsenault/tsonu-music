@@ -237,8 +237,16 @@ export function materialBranchCount(scene: WiredScene): number {
 
     for (const node of scene.nodes) {
         const producesColour = node.definition.outputs.some((port) => port.type === 'color-texture');
-        // A post-processing stage transforms one branch rather than being one.
-        if (producesColour && node.definition.category !== 'postprocess') {
+        // A post-processing stage transforms one branch rather than being one, and a compositor joins
+        // branches rather than being one. Every compositor outputs a colour texture and none is
+        // categorised as postprocess, so each was counting itself: a scene of one source and one
+        // compositor reported two material branches and satisfied a minimum of two while composing a
+        // single branch. That is one of the two things behind a frame that is almost entirely black
+        // with a thin line in it.
+        const joinsBranches = node.definition.category === 'compositor'
+            || node.definition.category === 'postprocess';
+
+        if (producesColour && !joinsBranches) {
             producers.add(node.instanceId);
         }
     }

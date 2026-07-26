@@ -173,13 +173,16 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
-        parameters: { gain: 6, brightness: 1.3 },
+        parameters: { gain: 1.15, brightness: 1.3 },
         defaultBindings: [
             {
                 feature: 'rms',
                 role: 'intensity',
                 parameter: 'gain',
-                outputRange: [3.5, 9.5],
+                // Against a spectrum normalized on the bus rather than raw FFT magnitude. The old
+                // range of 3.5 to 9.5 was written for values whose median was 7.7e-5, so it needed to
+                // be in the hundreds to reach the top of the frame and instead drew a flat line.
+                outputRange: [0.75, 2.1],
                 attack: 0.12,
                 release: 0.5,
                 curve: 'smooth',

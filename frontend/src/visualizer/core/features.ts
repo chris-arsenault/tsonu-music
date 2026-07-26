@@ -148,7 +148,7 @@ export interface FeatureBusInput {
  * ceiling was always set by the low bands and the high ones sat in the bottom one percent of their
  * range for the length of a track.
  */
-export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands';
+export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands' | 'spectrum';
 
 /** Measures carrying an excitation channel beside their level: every band, plus overall level. */
 export type ExcitationName = BandName | 'rms';
@@ -215,6 +215,7 @@ export function createFeatureBusState(): FeatureBusState {
         peak: createPeakFollower(),
         flux: createPeakFollower(),
         bands: createPeakFollower(),
+        spectrum: createPeakFollower(),
     };
 
     return {
@@ -292,6 +293,52 @@ function applyEffects(state: FeatureBusState, input: FeatureBusInput): FeatureBu
     }
 
     return next;
+}
+
+/**
+ * Puts the posted spectrum on the same nought-to-one footing as every other channel on the bus.
+ *
+ * What arrives is raw FFT magnitude at a scale of two over the transform size, averaged a further
+ * eight to one by the worklet. Measured over real material the posted bins have a median of 7.7e-5
+ * and a ninety-fifth percentile of 5.4e-3, so a consumer treating them as normalized reads a flat
+ * line: `SpectrumGeometrySource` produced contour vertices whose median height was 0.4 percent above
+ * the bottom of the frame, and a radial mode whose median radius was 0.3024 against a nominal range
+ * of 0.30 to 0.95 — a near-perfect circle, which is the thin line on black that gets reported.
+ *
+ * Its gain parameter could have been raised into the hundreds to compensate, but that constant would
+ * be wrong again the next time the transform size or the worklet's averaging changed. The peak
+ * follower is the same one the level channels use, so the spectrum breathes with the music rather
+ * than being pinned by a fixed ceiling.
+ */
+function normalizeSpectrum(
+    spectrum: Float32Array,
+    normalizeWith: (key: FollowerName, value: number) => number,
+): Float32Array {
+    if (spectrum.length === 0) {
+        return spectrum;
+    }
+
+    let loudest = 0;
+    for (let bin = 0; bin < spectrum.length; bin += 1) {
+        if (spectrum[bin] > loudest) {
+            loudest = spectrum[bin];
+        }
+    }
+
+    // Advances the follower, and returns where this frame's loudest bin sits under the resulting
+    // ceiling. The ceiling itself is what the whole array is divided by.
+    const scaled = normalizeWith('spectrum', loudest);
+    const ceiling = loudest > 0 ? loudest / Math.max(scaled, 1e-6) : 0;
+    if (ceiling <= 0) {
+        return new Float32Array(spectrum.length);
+    }
+
+    const normalized = new Float32Array(spectrum.length);
+    for (let bin = 0; bin < spectrum.length; bin += 1) {
+        normalized[bin] = clamp01(spectrum[bin] / ceiling);
+    }
+
+    return normalized;
 }
 
 function absorbSnapshot(
@@ -385,7 +432,7 @@ function absorbSnapshot(
             ...state.bus,
             continuous,
             waveform: snapshot.waveform,
-            spectrum: snapshot.spectrum,
+            spectrum: normalizeSpectrum(snapshot.spectrum, normalizeWith),
         },
     };
 }
