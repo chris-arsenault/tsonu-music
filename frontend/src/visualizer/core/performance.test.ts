@@ -235,4 +235,31 @@ describe('preference and visibility profiles', () => {
     test('a hidden page renders nothing', () => {
         expect(suspendedProfile().suspended).toBe(true);
     });
+
+    test('the recovery budget is reachable on a sixty hertz display', () => {
+        // The controller is fed the cost of rendering a frame, not the interval between frames. When
+        // it was fed the interval, this budget sat below the 16.7 ms vsync floor and no amount of
+        // spare capacity could satisfy it: the ladder only ever descended, and since level six drops
+        // the particle renderer outright, one transient hiccup deleted particles for the session.
+        expect(DEFAULT_THRESHOLDS.recoveryBudgetMs).toBeLessThan(DEFAULT_THRESHOLDS.frameBudgetMs);
+        expect(DEFAULT_THRESHOLDS.recoveryBudgetMs).toBeGreaterThan(0);
+    });
+
+    test('a degraded level climbs back once frames are cheap again', () => {
+        let state = createPerformanceState();
+
+        for (let frame = 0; frame < DEFAULT_THRESHOLDS.downgradeAfterFrames + 1; frame += 1) {
+            state = advancePerformance(state, { frameTimeMs: DEFAULT_THRESHOLDS.frameBudgetMs + 5 });
+        }
+        const degraded = state.level;
+        expect(degraded).toBeGreaterThan(0);
+
+        // Comfortable frames at a cost a real machine reaches: well inside the budget, and below the
+        // vsync interval that used to be reported in its place.
+        for (let frame = 0; frame < DEFAULT_THRESHOLDS.upgradeAfterFrames + 1; frame += 1) {
+            state = advancePerformance(state, { frameTimeMs: 4 });
+        }
+
+        expect(state.level).toBeLessThan(degraded);
+    });
 });

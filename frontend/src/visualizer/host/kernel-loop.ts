@@ -195,6 +195,8 @@ export function startKernel(options: KernelOptions): KernelHandle {
     let renderer: Renderer | undefined;
     let renderFailure: RendererFailure | undefined;
     let renderStats: KernelReadout['render'];
+    /** Milliseconds the last frame spent inside `renderFrame`. Drives the quality ladder. */
+    let renderCostMs = 0;
 
     let performance: PerformanceState = createPerformanceState();
     let lastRebuiltGeneration = clock.generation;
@@ -333,7 +335,19 @@ export function startKernel(options: KernelOptions): KernelHandle {
         const buffer = options.bufferHealth?.();
         const previousLevel = performance.level;
         performance = advancePerformance(performance, {
-            frameTimeMs: wallDelta * 1000,
+            // The cost of the previous frame's render, not the interval between frames.
+            //
+            // The interval is floored by the display's refresh rate, so on a 60 Hz panel it cannot go
+            // below 16.7 ms however little work the frame did — and the recovery budget is 12 ms.
+            // Recovery was therefore unreachable by construction: the ladder only ever descended, and
+            // one hiccup was permanent. Observed dropping 0 to 1 to 3 to 6 to 9 with no return, which
+            // matters because level 6 suppresses the particle renderer outright, so particles vanish
+            // from a scene that still lists them.
+            //
+            // Measuring the work makes both budgets mean what they are named. It lags by a frame,
+            // since the sample is taken before this frame renders; against counters of thirty and a
+            // hundred and eighty frames that is immaterial.
+            frameTimeMs: renderCostMs,
             forwardBufferSeconds: buffer?.forwardBufferSeconds,
             bufferStalled: buffer?.stalled,
         });
@@ -372,6 +386,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 }
             }
 
+            const renderStart = globalThis.performance.now();
             const stats = renderer.renderFrame({
                 clock,
                 features: features.bus,
@@ -381,6 +396,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
                 clearTransients: effects.includes('clear-analysis-history'),
                 controls,
             });
+            renderCostMs = globalThis.performance.now() - renderStart;
             renderStats = { ...stats, problems: renderer.problems() };
         }
 
