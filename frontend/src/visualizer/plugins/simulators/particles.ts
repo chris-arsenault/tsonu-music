@@ -66,6 +66,9 @@ ${GLSL_COMMON}
 /** Distinct groups a particle can be born into when no emitter is supplying positions. */
 const float SEED_CLUSTERS = 7.0;
 
+/** Cells searched either side for a contact. Must match CONTACT_SEARCH below the shader. */
+const int CONTACT_SEARCH = 1;
+
 /**
  * Where a particle is born when nothing else says.
  *
@@ -76,21 +79,45 @@ const float SEED_CLUSTERS = 7.0;
  * legible against structure, so particles are born in groups that a force field then carries, folds,
  * and pulls apart as recognisable bodies.
  */
+/**
+ * A generation number folded into the unit interval.
+ *
+ * The raw count climbs with playback time, and it was being added straight into hash arguments. The
+ * hash is a sine of a dot product, so once the constant term reaches the tens the variation between
+ * neighbouring texels — a sixty-fourth — is far below the resolution left in the argument, and whole
+ * runs of texels return the same value. Particles were then born at byte-identical positions:
+ * seventy-six exact coincidences measured in one frame. Two bodies at the same point have a
+ * separation of zero, which contact resolution reads as a particle finding itself and skips, so they
+ * stayed welded together for the rest of their lives.
+ *
+ * Multiplying by the golden ratio and taking the fraction keeps successive generations well spread
+ * while the argument stays bounded.
+ */
+float generationSeed(float generation) {
+    return fract(generation * 0.6180339887);
+}
+
 vec2 seedPosition(vec2 uv, float generation) {
+    float gen = generationSeed(generation);
     float group = floor(hash(uv + uSeed + 5.3) * SEED_CLUSTERS);
 
     // Keyed to the generation, not to continuous time: a cluster has to hold still long enough for
     // the particles in it to read as belonging together. Each turnover moves the clusters somewhere
     // new, so the composition keeps changing without the field ever becoming uniform.
     vec2 centre = vec2(
-        hash(vec2(group, uSeed + generation)),
-        hash(vec2(group + 41.0, uSeed + generation))
+        hash(vec2(group, uSeed + gen)),
+        hash(vec2(group + 41.0, uSeed + gen))
     ) * 1.6 - 0.8;
 
-    float angle = hash(uv + uSeed + 8.1 + generation) * 6.2831853;
-    float radius = hash(uv + uSeed + 2.9 + generation) * 0.26;
+    float angle = hash(uv + uSeed + 8.1 + gen) * 6.2831853;
+    float radius = hash(uv + uSeed + 2.9 + gen) * 0.26;
 
-    return centre + vec2(cos(angle), sin(angle)) * radius;
+    // A displacement unique to this texel, so two particles can never be born at exactly the same
+    // point however the hashes fall. Far below the contact diameter, so it does not disturb the
+    // pattern — it only guarantees that bodies which should push each other apart are able to.
+    vec2 unique = (uv - 0.5) * 0.006;
+
+    return centre + vec2(cos(angle), sin(angle)) * radius + unique;
 }
 
 void main() {
@@ -122,8 +149,13 @@ void main() {
     // does not show every particle stacked in one place.
     if (aged || escaped || (position == vec2(0.0) && velocity == vec2(0.0))) {
         float generation = floor(cycles);
+        float gen = generationSeed(generation);
         vec4 spawn = uHasSpawn ? texture(uSpawn, vUv) : vec4(0.0);
-        position = uHasSpawn && spawn.a > 0.0 ? spawn.xy : seedPosition(vUv, generation);
+        // The per-texel displacement applies to emitter positions too: a point emitter hands every
+        // particle the identical position, which is the worst case for coincidence.
+        position = uHasSpawn && spawn.a > 0.0
+            ? spawn.xy + (vUv - 0.5) * 0.006
+            : seedPosition(vUv, generation);
 
         // Born moving, in a random direction. A birth speed of a twentieth of a clip unit per second
         // is nothing against field forces an order of magnitude larger, which is survivable when
@@ -131,8 +163,8 @@ void main() {
         // hands every one of them the same position. Without a real initial velocity that emitter
         // renders as a single dot: measured at one tenth of one percent of the frame lit, unchanging.
         // With one it is a fountain, which is what a point emitter is for.
-        float launch = hash(vUv + 3.3 + generation) * 6.2831853;
-        float speed = 0.22 + hash(vUv + 17.9 + generation) * 0.45;
+        float launch = hash(vUv + 3.3 + gen) * 6.2831853;
+        float speed = 0.22 + hash(vUv + 17.9 + gen) * 0.45;
         velocity = vec2(cos(launch), sin(launch)) * speed;
     }
 
@@ -172,6 +204,8 @@ void main() {
     // allowed to persist, which is a statement about position, not about force.
     if (uContact > 0.0) {
         vec2 bounce = vec2(0.0);
+        /** Total positional correction across every pass, read back as velocity below. */
+        vec2 resolved = vec2(0.0);
         float diameter = uRadius * 2.0;
         vec2 step_uv = vec2(1.0) / uBinResolution;
 
@@ -184,6 +218,9 @@ void main() {
         // distance stayed at the value a random field of this density gives — another way of saying
         // the contacts were holding nothing apart. Each further pass removes half of what is left.
         for (int iteration = 0; iteration < 4; iteration += 1) {
+            // Summed over the neighbourhood. Resolving only the deepest overlap per pass was tried,
+            // on the reasoning that opposing corrections cancel in a dense clump; measured over two
+            // scenes it was slightly worse than summing, so the simpler form stands.
             vec2 correction = vec2(0.0);
 
             // Snapped to the centre of the cell this particle is in, then stepped a whole cell at a
@@ -192,8 +229,8 @@ void main() {
             // where nothing is, which is never in contact with anything.
             vec2 cell = (floor((position * 0.5 + 0.5) * uBinResolution) + 0.5) * step_uv;
 
-            for (int dy = -1; dy <= 1; dy += 1) {
-                for (int dx = -1; dx <= 1; dx += 1) {
+            for (int dy = -CONTACT_SEARCH; dy <= CONTACT_SEARCH; dy += 1) {
+                for (int dx = -CONTACT_SEARCH; dx <= CONTACT_SEARCH; dx += 1) {
                     vec4 other = texture(uBins, cell + vec2(float(dx), float(dy)) * step_uv);
 
                     vec2 apart = position - other.xy;
@@ -219,8 +256,23 @@ void main() {
             }
 
             position += correction;
+            resolved += correction;
         }
 
+        // The separation becomes motion.
+        //
+        // Moving a body out of an overlap and leaving its velocity alone makes the correction
+        // transient: the force field that pushed the pair together is unchanged, so next frame it
+        // pushes them back, the correction is applied again, and the system settles at a steady state
+        // that still contains the overlap. Measured that way the contact solver was invisible — a
+        // tenfold correction produced no change in the distribution at all, while an instrumented
+        // build proved the neighbours were being found. Position-based dynamics closes this by
+        // reading the correction back as the velocity it implies.
+        //
+        // Damped, because the correction is resolved against a snapshot and several bodies may be
+        // answering the same overlap; taking the whole implied velocity lets a dense pack pump itself
+        // apart.
+        velocity += resolved / max(uDelta, 1.0 / 240.0) * 0.4;
         velocity += bounce;
     }
 
@@ -462,8 +514,25 @@ export const PARTICLE_TEXTURE_SIDE = 64;
  */
 export const BIN_SIDE = 128;
 
-/** Contact radius in clip units — half a cell, so two touching particles span exactly one. */
+/**
+ * Contact radius in clip units — half a cell, so two touching bodies span exactly one.
+ *
+ * A cell equal to one diameter is what makes a three-by-three neighbourhood provably sufficient: a
+ * body anywhere in its cell can only reach into the cells adjacent to it. Halving the cell was tried,
+ * on the reasoning that one particle per cell cannot represent a pile — but a body then spans two
+ * cells and a two-cell search covers only three quarters of a diameter, so mid-range contacts go
+ * missing. Measured, that took overlaps from forty-seven percent to seventy-four.
+ */
 export const CONTACT_RADIUS = 1 / BIN_SIDE;
+
+/**
+ * Cells searched either side of a body's own.
+ *
+ * Mirrored by `CONTACT_SEARCH` in the simulation shader, which cannot read this because the shader
+ * source is declared above it. The static shader test catches interpolation failing; it cannot catch
+ * the two disagreeing, so any change here has to be made in both.
+ */
+export const CONTACT_SEARCH = 1;
 
 /**
  * Holds particle state across frames in a ping-ponged float texture.

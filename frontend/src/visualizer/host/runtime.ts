@@ -207,6 +207,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         stats: RuntimeStats,
         parameters: Readonly<Record<string, number>>,
         deltaSeconds: number,
+        writtenThisFrame: Set<ResourceId>,
     ): void {
         const program = device.useProgram(pass.shader);
         if (!program) {
@@ -232,7 +233,18 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         const bound = new Set<string>();
         for (const [sampler, resource] of Object.entries(pass.inputs ?? {})) {
             // A resource read through a feedback edge resolves to the previous frame's slot.
-            const isPrevious = Object.values(node.previous).includes(resource);
+            // A resource already produced this frame is read as it stands now, even when this node
+            // also declares a feedback edge onto it.
+            //
+            // The test was purely "does this node read this resource through a feedback edge", which
+            // is ambiguous the moment a plugin has more than one pass: the particle simulator writes
+            // its state and then bins that state in a second pass, and because `state` is also its
+            // feedback port the binning pass was handed the previous frame's slot. Contact then
+            // resolved against positions two frames old — further out of date, at these speeds, than
+            // one whole contact diameter — so bodies were being pushed apart from where their
+            // neighbours used to be.
+            const isPrevious = !writtenThisFrame.has(resource)
+                && Object.values(node.previous).includes(resource);
             const texture = resolveTexture(plan, resource, isPrevious);
             if (texture) {
                 device.bindTexture(program, sampler, texture, unit);
@@ -268,6 +280,10 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             device.drawGeometry(program, pass.geometry, pass.primitive, pass.vertexCount);
         } else {
             device.drawFullscreen();
+        }
+
+        if (outputResource) {
+            writtenThisFrame.add(outputResource);
         }
 
         stats.passesExecuted += 1;
@@ -356,6 +372,9 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Then whatever those leave stranded. Suppressing a particle renderer used to leave its
             // simulator running into a buffer nobody reads: a full simulation pass every frame
             // producing no pixels, since a particle buffer is never a colour texture.
+            /** Resources produced so far this frame, so a later pass reads them as they now stand. */
+            const writtenThisFrame = new Set<ResourceId>();
+
             const dead = unreachableInstances(
                 graph.order,
                 skipped,
@@ -411,7 +430,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 });
 
                 for (const pass of passes) {
-                    executePass(pass, node, plan, stats, renderedParameters, deltaSeconds);
+                    executePass(pass, node, plan, stats, renderedParameters, deltaSeconds, writtenThisFrame);
                 }
             }
 
@@ -449,7 +468,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderWidth: plan.width,
                     renderHeight: plan.height,
                 })) {
-                    executePass(pass, active.node, plan, stats, renderedParameters, deltaSeconds);
+                    executePass(pass, active.node, plan, stats, renderedParameters, deltaSeconds, writtenThisFrame);
                 }
             }
 
