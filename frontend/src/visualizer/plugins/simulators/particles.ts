@@ -171,38 +171,56 @@ void main() {
     // enough, and would make every particle a soft haze at rest. Solid means the overlap is not
     // allowed to persist, which is a statement about position, not about force.
     if (uContact > 0.0) {
-        vec2 correction = vec2(0.0);
         vec2 bounce = vec2(0.0);
         float diameter = uRadius * 2.0;
-        // Snapped to the centre of the cell this particle is in, then stepped a whole cell at a time.
-        // Sampling at a continuous coordinate reads between texels, and under linear filtering that
-        // returns the average of four neighbouring particles' positions — a point where nothing is,
-        // which is never in contact with anything. The neighbourhood has to be addressed as cells.
         vec2 step_uv = vec2(1.0) / uBinResolution;
-        vec2 cell = (floor((position * 0.5 + 0.5) * uBinResolution) + 0.5) * step_uv;
 
-        for (int dy = -1; dy <= 1; dy += 1) {
-            for (int dx = -1; dx <= 1; dx += 1) {
-                vec4 other = texture(uBins, cell + vec2(float(dx), float(dy)) * step_uv);
+        // Relaxed repeatedly against the same neighbours, Jacobi style.
+        //
+        // A single pass moves this body half of one overlap and stops, which is right only if nothing
+        // is pushing back. Something always is: the force field that drew the pile together is still
+        // pulling while the contact is being resolved, so one pass per frame settles at an
+        // equilibrium with the overlap still in it. Measured that way, median nearest-neighbour
+        // distance stayed at the value a random field of this density gives — another way of saying
+        // the contacts were holding nothing apart. Each further pass removes half of what is left.
+        for (int iteration = 0; iteration < 4; iteration += 1) {
+            vec2 correction = vec2(0.0);
 
-                vec2 apart = position - other.xy;
-                float gap = length(apart);
+            // Snapped to the centre of the cell this particle is in, then stepped a whole cell at a
+            // time. Sampling at a continuous coordinate reads between texels, and under linear
+            // filtering that returns the average of four neighbouring particles' positions — a point
+            // where nothing is, which is never in contact with anything.
+            vec2 cell = (floor((position * 0.5 + 0.5) * uBinResolution) + 0.5) * step_uv;
 
-                // A gap of zero is this particle finding itself; an empty cell reads as the origin,
-                // which the outer radius test rejects unless something is genuinely there.
-                if (gap > 1e-5 && gap < diameter) {
-                    vec2 normal = apart / gap;
-                    correction += normal * (diameter - gap) * 0.5;
+            for (int dy = -1; dy <= 1; dy += 1) {
+                for (int dx = -1; dx <= 1; dx += 1) {
+                    vec4 other = texture(uBins, cell + vec2(float(dx), float(dy)) * step_uv);
 
-                    float closing = dot(velocity - other.zw, normal);
-                    if (closing < 0.0) {
-                        bounce += normal * (-closing) * uRestitution;
+                    vec2 apart = position - other.xy;
+                    float gap = length(apart);
+
+                    // A gap of zero is this particle finding itself; an empty cell reads as the
+                    // origin, which the radius test rejects unless something is genuinely there.
+                    if (gap > 1e-5 && gap < diameter) {
+                        vec2 normal = apart / gap;
+                        correction += normal * (diameter - gap) * 0.5;
+
+                        // Restitution is collected on the first pass only. The later passes resolve
+                        // position against a snapshot; counting the same impact again each time
+                        // would multiply one collision into four.
+                        if (iteration == 0) {
+                            float closing = dot(velocity - other.zw, normal);
+                            if (closing < 0.0) {
+                                bounce += normal * (-closing) * uRestitution;
+                            }
+                        }
                     }
                 }
             }
+
+            position += correction;
         }
 
-        position += correction;
         velocity += bounce;
     }
 

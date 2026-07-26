@@ -175,6 +175,13 @@ void main() {
 
     colour = mix(colour, ramp, clamp(pull, 0.0, 1.0) * uChromatic);
 
-    fragColor = vec4(colour, source.a) * uOpacity;
+    // Alpha is only meaningful for colour material. A field or buffer inspected on its own carries
+    // data in every channel — a particle buffer's alpha is a velocity component, frequently zero or
+    // negative — so taking alpha from the source made the diagnostics view of every non-colour
+    // resource fully transparent, which reads as an empty stage. Inspecting a buffer showed nothing
+    // whether or not it held anything, which is the opposite of what an inspector is for.
+    float alpha = uChromatic > 0.0 ? source.a : 1.0;
+
+    fragColor = vec4(colour, alpha) * uOpacity;
 }`,
 };
