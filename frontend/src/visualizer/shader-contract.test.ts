@@ -205,6 +205,62 @@ describe('impact-driven shaders declare the impact uniforms they are given', () 
  * over it. The driver rejects one of the two on every frame of every scene containing that plugin,
  * silently, which is exactly the class of fault that only ever shows up in a browser console.
  */
+/**
+ * Uniforms the kernel states for every pass, which a plugin must not also declare.
+ *
+ * The runtime writes these after a plugin's own uniforms so the kernel always wins, but a plugin that
+ * declares one is still stating something it does not control, and was relying on the opposite order
+ * when it was written. Two simulators declared `uDelta: 1 / 60` and neither declared a matching
+ * parameter to displace it, so both integrated a fixed sixtieth of a second per *frame* — fast on a
+ * high-refresh display, and still evolving while playback was paused.
+ */
+describe('the kernel owns the frame timebase and geometry', () => {
+    const KERNEL_UNIFORMS = ['uDelta', 'uResolution'];
+
+    test('no plugin declares a kernel-owned uniform as a pass default', () => {
+        const declared: string[] = [];
+
+        for (const definition of CATALOG) {
+            const instance = definition.create({
+                instanceId: 'kernel-uniform-check',
+                seed: 0.5,
+                registerShader: () => undefined,
+            });
+            instance.initialize();
+            instance.activate?.({ playbackTime: 0 } as never);
+
+            const inputs: Record<string, string> = {};
+            for (const port of definition.inputs) {
+                inputs[port.name] = `resource:${port.name}`;
+            }
+            const outputs: Record<string, string> = {};
+            for (const port of definition.outputs) {
+                outputs[port.name] = `resource:${port.name}`;
+            }
+
+            let passes;
+            try {
+                passes = instance.render({
+                    inputs, outputs, previous: {}, renderWidth: 256, renderHeight: 256,
+                } as never);
+            } catch {
+                // A plugin needing live state to render is checked by the runtime instead.
+                continue;
+            }
+
+            for (const pass of passes) {
+                for (const name of KERNEL_UNIFORMS) {
+                    if (pass.uniforms && name in pass.uniforms) {
+                        declared.push(`${definition.id} -> ${name}`);
+                    }
+                }
+            }
+        }
+
+        expect(declared, 'plugin overriding a kernel-owned uniform').toEqual([]);
+    });
+});
+
 describe('uniform names do not collide', () => {
     /** Names `defineShaderPlugin` sends as scalars to every plugin it builds. */
     const BOILERPLATE = ['uTime', 'uPhase', 'uSeed'];

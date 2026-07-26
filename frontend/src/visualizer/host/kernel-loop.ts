@@ -150,6 +150,23 @@ export interface KernelHandle extends KernelControlHandle {
 /** Default readout callbacks per second. Display only — the loop itself runs every frame. */
 const READOUT_HZ = 12;
 
+/**
+ * Longest step any simulator, integrator, or decay is asked to take in one frame.
+ *
+ * The wall delta was passed through unbounded, and audio in a hidden tab keeps the clock playing, so
+ * returning to the tab after two minutes delivered a delta of roughly a hundred and twenty seconds to
+ * every `update()` in the graph. That wipes the accumulation buffer outright, and any explicit Euler
+ * step launches its state to infinity in a single frame — particle drag is bound as high as 0.9, and
+ * `1 - drag * delta` turns negative past about 1.1 seconds, so velocity inverts and the whole
+ * ensemble collapses. One garbage collection or shader compile was enough to trigger it; deltas of
+ * 1.4 seconds were observed in normal use.
+ *
+ * A quarter second is well beyond any frame that will actually be presented, so this changes nothing
+ * during smooth playback. Time skipped past the cap is dropped rather than accumulated: a simulator
+ * catching up on two minutes of physics in one frame is not a state anybody wants to arrive at.
+ */
+const MAXIMUM_FRAME_SECONDS = 0.25;
+
 export function startKernel(options: KernelOptions): KernelHandle {
     const { element, onReadout } = options;
 
@@ -286,7 +303,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
         // Section 6.2 and 6.3: a frozen clock advances nothing. Passing zero here is what freezes
         // smoothing, beat phase, and every simulator that will later read this delta.
         const frozen = isFrozen(clock);
-        const deltaSeconds = frozen ? 0 : wallDelta;
+        const deltaSeconds = frozen ? 0 : Math.min(wallDelta, MAXIMUM_FRAME_SECONDS);
 
         if (tap) {
             contextState = tap.context.state;

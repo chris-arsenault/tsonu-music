@@ -218,13 +218,20 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
         // Live bound parameters override the pass's static defaults. Applied here so every plugin gets
         // its bindings for free and none can silently render at fixed values.
+        //
+        // The frame's geometry and its timebase are the kernel's to state, so they are written after
+        // the plugin's own uniforms rather than before. Written first, a plugin's static value won:
+        // two simulators declared `uDelta: 1 / 60` as a pass uniform and neither declared a matching
+        // parameter to displace it, so both integrated a fixed sixtieth of a second per *frame* —
+        // running fast on a high-refresh display, and continuing to evolve while the track was
+        // paused, because the kernel's frozen zero never reached the shader.
         device.setUniforms(program, {
+            ...mergeUniforms(pass.uniforms, parameters),
             uResolution: [target?.width ?? plan.width, target?.height ?? plan.height],
             // Supplied centrally so any shader integrating across frames — feedback decay, warp
             // strength — can correct for the frame it actually got instead of assuming sixty a
             // second. A frozen clock passes zero and those shaders hold.
             uDelta: Math.max(0, deltaSeconds),
-            ...mergeUniforms(pass.uniforms, parameters),
         });
 
         if (pass.kind === 'geometry') {

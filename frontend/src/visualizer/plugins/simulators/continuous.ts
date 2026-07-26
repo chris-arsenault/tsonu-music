@@ -181,7 +181,10 @@ export function createReactionDiffusionSimulator(): VisualPluginDefinition {
         outputs: [{ name: 'field', type: 'reaction-diffusion-state' }],
         capabilities: ['reaction-diffusion', 'feedback'],
         fragment: REACTION_DIFFUSION_FRAGMENT,
-        uniforms: { uFeed: 0.037, uKill: 0.06, uImpulse: 0.6, uDelta: 1 / 60 },
+        // No `uDelta` here: the kernel supplies the frame's real delta to every pass. Declaring it
+        // statically pinned the integration to a sixtieth of a second per frame, which ran fast on a
+        // high-refresh display and kept the reaction evolving while playback was paused.
+        uniforms: { uFeed: 0.037, uKill: 0.06, uImpulse: 0.6 },
         parameters: { feed: 0.037, kill: 0.06, impulse: 0.6 },
         bindings: [
             {
@@ -271,7 +274,8 @@ export function createWaveFieldSimulator(): VisualPluginDefinition {
         outputs: [{ name: 'field', type: 'wave-field-state' }],
         capabilities: ['wave-field', 'feedback', 'impact-consumer'],
         fragment: WAVE_FIELD_FRAGMENT,
-        uniforms: { uDamping: 0.015, uSpeed: 0.4, uOnset: 0.5, uDelta: 1 / 60 },
+        // See the note on the reaction-diffusion pass above: `uDelta` is the kernel's to supply.
+        uniforms: { uDamping: 0.015, uSpeed: 0.4, uOnset: 0.5 },
         parameters: { damping: 0.015, speed: 0.4, onset: 0.5 },
         bindings: [
             {

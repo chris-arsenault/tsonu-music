@@ -13,7 +13,7 @@ judged once their inputs have a usable range.
 | 2 | Binding input ranges and level/excitation compatibility | 1.2, 1.10 | done |
 | 3 | Beat events, beat phase, and transient reachability | 1.1, S3 channels | done |
 | 4 | Modulation depth as a fraction of headroom | 1.7 | done |
-| 5 | Frame delta: kernel authority and clamping | 2.1, 2.2 | pending |
+| 5 | Frame delta: kernel authority and clamping | 2.1, 2.2 | done |
 | 6 | Quality ladder recovery | 1.6 | pending |
 | 7 | Particle lifetime, respawn, and emitters | 1.4 | pending |
 | 8 | Particle legibility: seeding, size, trails, seam | 1.5, 1.12 | pending |

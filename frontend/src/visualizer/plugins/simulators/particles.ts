@@ -273,8 +273,6 @@ export function createParticleSimulator(): VisualPluginDefinition {
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
-            let delta = 0;
-
             return {
                 initialize() {
                     context.registerShader({
@@ -285,12 +283,12 @@ export function createParticleSimulator(): VisualPluginDefinition {
                 },
 
                 activate() {
-                    delta = 0;
+                    // The simulation state lives in the ping-ponged target, not here.
                 },
 
-                update(frame) {
-                    // Frozen clock passes zero, so the simulation holds rather than drifting while paused.
-                    delta = frame.deltaSeconds;
+                update() {
+                    // Stateless: the frame's delta reaches the shader from the kernel, which passes
+                    // zero on a frozen clock so the simulation holds rather than drifting while paused.
                 },
 
                 render(render): RenderPass[] {
@@ -314,7 +312,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
                         blend: 'none',
                         clear: false,
                         uniforms: {
-                            uDelta: delta,
+                            // No `uDelta`: the kernel supplies the frame's delta, already clamped
+                            // against the long steps a hidden tab or a stall produces.
                             uDrag: 0.4,
                             uLifetime: 4,
                             uSeed: context.seed,
@@ -329,7 +328,7 @@ export function createParticleSimulator(): VisualPluginDefinition {
                 },
 
                 destroy() {
-                    delta = 0;
+                    // Nothing retained.
                 },
             };
         },
