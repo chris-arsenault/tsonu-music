@@ -19,7 +19,7 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uHistory;
-uniform sampler2D uSeed;
+uniform sampler2D uSeedTexture;
 uniform vec2 uResolution;
 uniform float uDelta;
 uniform float uFeed;
@@ -51,7 +51,7 @@ void main() {
     }
 
     // Seeded from a mask or album luminance where one is supplied.
-    float seed = texture(uSeed, vUv).r;
+    float seed = texture(uSeedTexture, vUv).r;
     chemicals.g = max(chemicals.g, seed > 0.7 ? uImpulse : 0.0);
 
     vec2 diffused = laplacian(vUv, texel);
@@ -173,7 +173,10 @@ export function createReactionDiffusionSimulator(): VisualPluginDefinition {
         inputs: [
             { name: 'history', type: 'reaction-diffusion-state', required: false },
             // Optional: mask or album luminance seeds the pattern, but it self-seeds without one.
-            { name: 'seed', type: 'mask-texture', required: false },
+            // Sampler named explicitly: the default would be `uSeed`, which collides with the
+            // per-instance random scalar every shader plugin already receives under that name. The
+            // driver rejected one of the two every frame.
+            { name: 'seed', type: 'mask-texture', required: false, sampler: 'uSeedTexture' },
         ],
         outputs: [{ name: 'field', type: 'reaction-diffusion-state' }],
         capabilities: ['reaction-diffusion', 'feedback'],

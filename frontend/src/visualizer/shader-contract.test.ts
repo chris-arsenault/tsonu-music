@@ -195,3 +195,48 @@ describe('impact-driven shaders declare the impact uniforms they are given', () 
         }
     });
 });
+
+/**
+ * A sampler and a scalar cannot share a uniform name.
+ *
+ * `defineShaderPlugin` gives every plugin `uTime`, `uPhase`, and `uSeed`, and each declared parameter
+ * becomes `u<Name>`. An input port's sampler defaults to the same scheme, so a port named `seed`
+ * produces `uSeed` too — and then the runtime binds a texture to it and immediately writes a float
+ * over it. The driver rejects one of the two on every frame of every scene containing that plugin,
+ * silently, which is exactly the class of fault that only ever shows up in a browser console.
+ */
+describe('uniform names do not collide', () => {
+    /** Names `defineShaderPlugin` sends as scalars to every plugin it builds. */
+    const BOILERPLATE = ['uTime', 'uPhase', 'uSeed'];
+
+    function samplerName(definition: VisualPluginDefinition, port: string): string {
+        // Mirrors `defaultSampler`: `source` becomes `uSource`.
+        return `u${port.charAt(0).toUpperCase()}${port.slice(1)}`;
+    }
+
+    test('no plugin binds a texture to a name it also writes a scalar to', () => {
+        const collisions: string[] = [];
+
+        for (const definition of CATALOG) {
+            const sources = shaderSources(definition);
+            const combined = sources.map((entry) => `${entry.vertex}\n${entry.fragment}`).join('\n');
+
+            const scalars = new Set([
+                ...BOILERPLATE,
+                ...Object.keys(definition.parameters ?? {}).map(parameterUniformName),
+            ]);
+
+            for (const port of definition.inputs) {
+                const declared = new RegExp(`uniform\\s+sampler2D\\s+(u\\w+)`, 'g');
+                const samplers = [...combined.matchAll(declared)].map((match) => match[1]);
+                const guess = samplerName(definition, port.name);
+
+                if (samplers.includes(guess) && scalars.has(guess)) {
+                    collisions.push(`${definition.id}.${port.name} -> ${guess}`);
+                }
+            }
+        }
+
+        expect(collisions, 'sampler and scalar sharing a uniform name').toEqual([]);
+    });
+});

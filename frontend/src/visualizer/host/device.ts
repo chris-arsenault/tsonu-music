@@ -40,6 +40,7 @@ export interface UniformSlot {
     location: WebGLUniformLocation;
     /** The GLSL type enum from `getActiveUniform`. */
     type: number;
+    size: number;
 }
 
 export interface Program {
@@ -191,7 +192,7 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             const info = gl!.getActiveUniform(program, index);
             const location = info && gl!.getUniformLocation(program, info.name);
             if (info && location) {
-                uniforms.set(info.name, { location, type: info.type });
+                uniforms.set(info.name, { location, type: info.type, size: info.size });
             }
         }
 
@@ -445,9 +446,11 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
 
                     if (slot.type === gl.BOOL || slot.type === gl.INT) {
                         gl.uniform1i(location, Math.round(scalar));
-                    } else {
+                    } else if (slot.type === gl.FLOAT) {
                         gl.uniform1f(location, scalar);
                     }
+                    // Anything else — a sampler or a vector — means the caller and the shader disagree
+                    // about what this name is. `shader-contract.test.ts` rejects that statically.
 
                     continue;
                 }
