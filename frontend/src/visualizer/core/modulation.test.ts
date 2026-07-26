@@ -24,8 +24,8 @@ const BINDINGS: ParameterBinding[] = [
 describe('concurrent modulation', () => {
     test('several bound parameters move concurrently', () => {
         const resolved = { amount: 1, hue: 0.5 };
-        const first = modulateParameters(resolved, BINDINGS, 10, 0.2, 0.8, 0.314);
-        const later = modulateParameters(resolved, BINDINGS, 12.5, 0.7, 0.8, 0.314);
+        const first = modulateParameters(resolved, BINDINGS, 10, 0.2, 0.314);
+        const later = modulateParameters(resolved, BINDINGS, 12.5, 0.7, 0.314);
 
         expect(later.amount).not.toBeCloseTo(first.amount, 6);
         expect(later.hue).not.toBeCloseTo(first.hue, 6);
@@ -33,8 +33,8 @@ describe('concurrent modulation', () => {
 
     test('the same playback instant holds every modulation during pause', () => {
         const resolved = { amount: 1, hue: 0.5 };
-        const first = modulateParameters(resolved, BINDINGS, 42, 0.3, 0.9, 0.712);
-        const frozen = modulateParameters(resolved, BINDINGS, 42, 0.3, 0.9, 0.712);
+        const first = modulateParameters(resolved, BINDINGS, 42, 0.3, 0.712);
+        const frozen = modulateParameters(resolved, BINDINGS, 42, 0.3, 0.712);
 
         expect(frozen).toEqual(first);
     });
@@ -43,7 +43,7 @@ describe('concurrent modulation', () => {
         const resolved = { amount: 0.2, hue: 1 };
 
         for (let time = 0; time < 60; time += 0.25) {
-            const values = modulateParameters(resolved, BINDINGS, time, 0.8, 1, 0.913);
+            const values = modulateParameters(resolved, BINDINGS, time, 0.8, 0.913);
             expect(values.amount).toBeGreaterThanOrEqual(0.2);
             expect(values.amount).toBeLessThanOrEqual(2);
             expect(values.hue).toBeGreaterThanOrEqual(0);
@@ -58,7 +58,7 @@ describe('modulation depth and exemptions', () => {
         let high = Number.NEGATIVE_INFINITY;
 
         for (let time = 0; time < 120; time += 0.1) {
-            const modulated = modulateParameters({ [parameter]: value }, bindings, time, 0.4, 0.9, 0.371);
+            const modulated = modulateParameters({ [parameter]: value }, bindings, time, 0.4, 0.371);
             low = Math.min(low, modulated[parameter]);
             high = Math.max(high, modulated[parameter]);
         }
@@ -88,7 +88,7 @@ describe('modulation depth and exemptions', () => {
         }];
 
         expect(swept('spin', rate, 400)).toBe(0);
-        expect(modulateParameters({ spin: 400 }, rate, 12, 0.4, 0.9, 0.371).spin).toBe(400);
+        expect(modulateParameters({ spin: 400 }, rate, 12, 0.4, 0.371).spin).toBe(400);
     });
 
     test('an impulse envelope is left unsmeared', () => {
@@ -126,7 +126,7 @@ describe('role shapes how far and how fast a parameter drifts', () => {
         let previous = 0.5;
 
         for (let time = 0; time < 120; time += 0.05) {
-            const value = modulateParameters({ value: 0.5 }, bindings, time, 0, 0, 0.42).value;
+            const value = modulateParameters({ value: 0.5 }, bindings, time, 0, 0.42).value;
             low = Math.min(low, value);
             high = Math.max(high, value);
             if ((value - 0.5) * (previous - 0.5) < 0) {

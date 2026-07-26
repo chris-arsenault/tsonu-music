@@ -35,6 +35,7 @@ import {
     isMotionSource,
     type PersistenceSettings,
 } from '../core/persistence';
+import type { ScenePalette } from '../core/palette';
 import { liveKeys, planTargets, withRetiringNodes, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
@@ -89,6 +90,13 @@ export interface RuntimeFrame {
      * `core/persistence.ts` from the theme, the layer stack, and the audio.
      */
     persistence: PersistenceSettings;
+    /** The scene's colour scheme, one entry per material branch. */
+    palette: ScenePalette;
+    /**
+     * The compositor's resolved parameters. Declared and bound in `core/composite-grade.ts` and
+     * resolved through the same path as a plugin's, so grading is not a hard-coded feature mapping.
+     */
+    grade: Readonly<Record<string, number>>;
     /** Discards the accumulation, for a seek or track change landing on unrelated material. */
     clearAccumulation?: boolean;
     /**
@@ -318,8 +326,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     active.parameters,
                     bindings,
                     frame.clock.playbackTime,
-                    frame.features.continuous.beatPhase,
-                    frame.features.continuous.beatConfidence,
+                    frame.features.continuous.transient,
                     active.seed,
                 );
 
@@ -361,8 +368,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     active.parameters,
                     bindings,
                     frame.clock.playbackTime,
-                    frame.features.continuous.beatPhase,
-                    frame.features.continuous.beatConfidence,
+                    frame.features.continuous.transient,
                     active.seed,
                 );
                 active.instance.update({
@@ -428,7 +434,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     accumulationPrimed = true;
                 }
 
-                presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, stats);
+                presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, frame.grade, stats);
             }
 
             stats.pendingShaders = device.pendingShaderCount();
@@ -534,17 +540,19 @@ function composite(
         const size = plan.sizes[resource] ?? { width: plan.width, height: plan.height };
         const source = device.acquireTarget(key, size.width, size.height);
 
+        // One entry of the scene's scheme per branch, so simultaneously presented branches are
+        // chromatically distinct by construction rather than by spacing a hue offset and hoping.
+        const entry = frame.palette.entries[index % frame.palette.entries.length];
+
         device.beginPass(target, index === 0 ? 'none' : step.blendMode, index === 0);
         device.bindTexture(program, 'uSource', source.texture, 0);
         device.setUniforms(program, {
             uOpacity: step.opacity,
             uResolution: [plan.width, plan.height],
-            uTime: frame.clock.playbackTime,
-            uEnergy: frame.features.continuous.rms,
-            uBass: frame.features.continuous.bass,
-            uCentroid: frame.features.continuous.spectralCentroid,
-            // Golden-ratio spacing keeps simultaneously presented branches chromatically distinct.
-            uLayerPhase: (index * 0.61803398875) % 1,
+            uShadow: entry.shadow,
+            uMid: entry.mid,
+            uHighlight: entry.highlight,
+            uTint: frame.grade.tint,
             uChromatic: 1,
         });
         device.drawFullscreen();
@@ -671,6 +679,7 @@ function presentTarget(
     device: Device,
     key: string,
     plan: RenderPlan,
+    grade: Readonly<Record<string, number>>,
     stats: RuntimeStats,
 ): void {
     const program = device.useProgram(GRADE_SHADER_ID);
@@ -683,13 +692,13 @@ function presentTarget(
 
     device.beginPass(null, 'none', true);
     device.bindTexture(program, 'uSource', target.texture, 0);
+    // Bound and modulated like a plugin's parameters, so exposure lifts on a hit and saturation
+    // follows intensity rather than sitting at whatever constant was typed here.
     device.setUniforms(program, {
         uResolution: [device.canvas.width, device.canvas.height],
-        uExposure: 1.15,
-        uContrast: 1.35,
-        // Above one, so material that survived the accumulation reaches the screen with its colour
-        // rather than tending toward grey.
-        uSaturation: 1.35,
+        uExposure: grade.exposure,
+        uContrast: grade.contrast,
+        uSaturation: grade.saturation,
     });
     device.drawFullscreen();
     stats.passesExecuted += 1;

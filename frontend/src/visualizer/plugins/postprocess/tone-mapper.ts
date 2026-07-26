@@ -113,7 +113,17 @@ export function createToneMapper(): VisualPluginDefinition {
     };
 }
 
-/** Presentation shader: draws a resource to the canvas at a given opacity. */
+/**
+ * Presentation shader: draws one layer into the composite through its branch colour.
+ *
+ * Each material branch is handed one entry of the scene's colour scheme as three stops, and the
+ * layer's own luminance runs along them. That is the whole colour model.
+ *
+ * What it replaces: hue indexed by luminance, so every lit pixel in the scene was the same colour as
+ * every other lit pixel of the same brightness; a per-pixel test for "is this monochrome" that split
+ * the frame into two colour regimes disagreeing about where the boundary was; and a cosine ramp over
+ * the entire hue circle, which contains every hue and therefore cannot give a scene one.
+ */
 export const PRESENT_SHADER_ID = 'present';
 
 export const PRESENT_SHADER = {
@@ -126,56 +136,44 @@ out vec4 fragColor;
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uOpacity;
-uniform float uTime;
-uniform float uEnergy;
-uniform float uBass;
-uniform float uCentroid;
-uniform float uLayerPhase;
+/** This branch's three stops, from the scene's colour scheme. */
+uniform vec3 uShadow;
+uniform vec3 uMid;
+uniform vec3 uHighlight;
+/** How far material is pulled toward its branch colour, against keeping its own. */
+uniform float uTint;
+/** Zero when the layer is presented raw, as when a single resource is being inspected. */
 uniform float uChromatic;
 
 float luminance(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
-vec3 breathingPalette(float phase) {
-    vec3 base = 0.5 + 0.5 * cos(6.2831853 * (phase + vec3(0.00, 0.34, 0.68)));
-    // Squared, which widens the gap between the leading channel and the other two. A raw cosine
-    // palette sits around half scale in every channel at once, which is the definition of pastel.
-    return base * base;
-}
-
 void main() {
     vec4 source = texture(uSource, vUv);
-    vec3 color = source.rgb;
-    float high = max(color.r, max(color.g, color.b));
-    float low = min(color.r, min(color.g, color.b));
-    float saturation = high - low;
-    float light = luminance(color);
+    vec3 colour = source.rgb;
+    float light = clamp(luminance(colour), 0.0, 1.0);
 
-    // Geometry and simulation views often carry useful structure as monochrome intensity. Give that
-    // material a living palette at the composition boundary, while preserving already-coloured album
-    // art and source shaders. Each layer receives a different phase so parallel branches do not pulse
-    // as one flat sheet.
-    float palettePhase = fract(
-        light * 0.42
-        + uCentroid * 0.24
-        + uBass * 0.08
-        + uTime * (0.012 + uEnergy * 0.01)
-        + uLayerPhase
-    );
-    vec3 palette = breathingPalette(palettePhase);
-    float monochrome = (1.0 - smoothstep(0.035, 0.20, saturation)) * uChromatic;
-    // Scaled by the material's own luminance, so unlit pixels stay unlit. A constant floor here
-    // painted the palette across the whole frame — black is unsaturated, so every empty pixel counted
-    // as monochrome and came back tinted, which is a coloured fog with no structure in it. Overshoot
-    // above one is fine now: the grade compresses on luminance at the end of the frame.
-    color = mix(color, palette * light * 1.25, monochrome * 0.92);
+    // rampAt(): shadow through the branch hue to a warm highlight. Neither end is neutral, so the
+    // hue survives into the darks and the lights instead of washing out at both.
+    vec3 ramp = light < 0.5
+        ? mix(uShadow, uMid, light * 2.0)
+        : mix(uMid, uHighlight, (light - 0.5) * 2.0);
 
-    float breath = 0.88
-        + 0.10 * sin(uTime * (0.55 + uBass * 0.4) + uLayerPhase * 6.2831853)
-        + uEnergy * 0.18;
-    color *= mix(1.0, breath, uChromatic);
+    // Scaled by the material's own luminance, so unlit pixels stay unlit rather than being painted
+    // with the scheme — an empty pixel tinted is a coloured fog with no structure in it.
+    ramp *= light;
 
-    fragColor = vec4(color, source.a) * uOpacity;
+    // Already-coloured material keeps its identity by being pulled toward the branch hue rather than
+    // excluded from grading. Its own chroma decides how far it travels, which is a continuous
+    // relationship instead of a threshold the material can cross mid-gradient.
+    float high = max(colour.r, max(colour.g, colour.b));
+    float low = min(colour.r, min(colour.g, colour.b));
+    float chroma = high - low;
+    float pull = uTint * (1.0 - smoothstep(0.05, 0.45, chroma) * 0.75);
+
+    colour = mix(colour, ramp, clamp(pull, 0.0, 1.0) * uChromatic);
+
+    fragColor = vec4(colour, source.a) * uOpacity;
 }`,
 };

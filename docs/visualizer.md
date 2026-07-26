@@ -166,9 +166,24 @@ compatible feedback and simulator state; scene mutation is rare. Stateful plugin
 deactivation policy so they leave gracefully rather than vanishing.
 
 Each new scene varies visual-family priority before fallback, so the first viable family cannot
-monopolize every track. At presentation, monochrome geometry and simulation textures receive a
-time-varying audio-sensitive palette; already-saturated source material such as album art keeps its
-own colour.
+monopolize every track.
+
+## Colour
+
+A scene draws a small set of harmonically related colours — analogous, complementary,
+split-complementary, triadic, or monochromatic — from its own entropy and its theme's colour policy.
+Each material branch takes one entry, so branches are chromatically distinct by construction.
+
+Within a branch, luminance runs along a three-stop ramp: a deep cool shadow, the branch's hue at full
+chroma, and a warm highlight. Neither end is neutral, because a ramp that ends at black loses its hue
+in the darks and one that ends at white loses it in the lights. Material that already carries colour
+is pulled toward its branch hue in proportion to how much chroma it has, rather than being excluded
+from grading — a continuous relationship instead of a threshold the material can cross mid-gradient.
+
+The scheme rotates as a scheme, at a rate the midrange sets, so its entries keep their relationships
+while the whole thing turns. Grading itself is not a hard-coded feature mapping: the compositor
+declares parameters in `core/composite-grade.ts` and binds them through the same roles, modes, and
+role dynamics as any plugin, so exposure lifts on a transient and saturation follows intensity.
 
 Every modal opening, track change, explicit **New scene**, and full scene mutation selects from fresh
 entropy. Tracks do not map to repeatable scenes, and diagnostics do not expose a reproduction control.

@@ -6,7 +6,7 @@
  * transients. Playback time is the only clock, therefore pause and seek semantics remain intact.
  */
 
-import { bindingMode, type BindingRole, type ParameterBinding } from './bindings';
+import { bindingMode, clamp01, type BindingRole, type ParameterBinding } from './bindings';
 
 const TAU = Math.PI * 2;
 
@@ -56,8 +56,8 @@ export function modulateParameters(
     resolved: Readonly<Record<string, number>>,
     bindings: readonly ParameterBinding[],
     playbackTime: number,
-    beatPhase: number,
-    beatConfidence: number,
+    /** The transient envelope: an event, so the warp lands on hits instead of running as a clock. */
+    transient: number,
     instanceEntropy: number,
 ): Record<string, number> {
     const modulated: Record<string, number> = { ...resolved };
@@ -95,8 +95,13 @@ export function modulateParameters(
         const dynamics = dynamicsFor(binding.role);
         const rate = lerp(dynamics.rate, identity);
         const phase = playbackTime * rate * TAU + identity * TAU;
-        const beatWarp = beatPhase * TAU * (0.18 + identity * 0.34) * beatConfidence;
-        const motion = Math.sin(phase + beatWarp) * 0.68
+
+        // Nudged by transients rather than by beat phase. Beat phase is a position between beats —
+        // it advances whether or not anything is playing, so warping on it produced a metronome
+        // riding under every parameter regardless of what the music did. The warp is scaled by the
+        // role's own depth so a detail parameter twitches on a hit and a structural one leans.
+        const warp = clamp01(transient) * TAU * lerp(dynamics.depth, identity) * 0.6;
+        const motion = Math.sin(phase + warp) * 0.68
             + Math.sin(phase * 1.731 + identity * 11.0) * 0.32;
         const depth = span * lerp(dynamics.depth, identity);
 

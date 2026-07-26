@@ -13,6 +13,10 @@ import {
     DEFAULT_THEME_PERSISTENCE,
     type PersistenceSettings,
 } from '../core/persistence';
+import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from '../core/composite-grade';
+import { buildScenePalette, rotatePalette, type ScenePalette } from '../core/palette';
+import { resolveParameters } from '../core/parameters';
+import { modulateParameters } from '../core/modulation';
 import {
     advanceRetirement,
     beginRetirement,
@@ -204,6 +208,25 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         motionScale: 0,
         transientPunch: 0,
     };
+
+    /**
+     * The compositor's own parameter state, advanced each frame exactly as a plugin instance's is.
+     *
+     * Held here rather than inside the runtime because it belongs to the scene: a new scene draws a
+     * new colour scheme, and these are the values grading it.
+     */
+    let gradeParameters: Record<string, number> = { ...COMPOSITE_PARAMETERS };
+    let basePalette: ScenePalette = buildScenePalette(scene.entropy, colourStrength(scene.theme));
+
+    function colourStrength(theme: typeof scene.theme): number {
+        return theme.colorPolicy?.strength ?? 0.75;
+    }
+
+    /** Rebuilds the scheme when the scene changes, so a new composition arrives in new colours. */
+    function refreshPalette(): void {
+        basePalette = buildScenePalette(scene.entropy, colourStrength(scene.theme));
+        gradeParameters = { ...COMPOSITE_PARAMETERS };
+    }
     // Last clock seen, so a retirement triggered by a rebuild can be given real playback context.
     let lastClock: PlaybackClock = {
         trackId: null,
@@ -376,6 +399,12 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         layers = buildLayers(scene.graph);
         runtime.setGraph(scene.graph, instances);
 
+        if (!preserveInstances) {
+            // A genuinely new scene, so a new colour scheme. An incremental rebuild keeps the current
+            // one, or swapping one plugin would recolour everything around it.
+            refreshPalette();
+        }
+
         return true;
     };
 
@@ -416,6 +445,23 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 }
 
                 const composedLayers = [...layers, ...retiringLayers()];
+
+                // The compositor's parameters advance exactly as a plugin instance's do: bindings
+                // resolved against the live bus, then the same role-aware slow modulation.
+                gradeParameters = resolveParameters(
+                    gradeParameters,
+                    COMPOSITE_BINDINGS,
+                    frame.features,
+                    frame.deltaSeconds,
+                );
+                const grade = modulateParameters(
+                    gradeParameters,
+                    COMPOSITE_BINDINGS,
+                    frame.clock.playbackTime,
+                    frame.features.continuous.transient,
+                    0,
+                );
+
                 lastPersistence = persistenceSettings({
                     themePersistence:
                         scene.theme.targetCharacter?.persistence ?? DEFAULT_THEME_PERSISTENCE,
@@ -439,6 +485,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     // the compositor's duty. The weights were computed and consumed by nothing; this is
                     // where they finally decide how strongly the scene accumulates.
                     persistence: lastPersistence,
+                    // Rotated by the integrated hue drift, so the scheme turns as a scheme and its
+                    // entries keep their relationships to one another.
+                    palette: rotatePalette(
+                        basePalette,
+                        grade.hueDrift ?? 0,
+                        colourStrength(scene.theme),
+                    ),
+                    grade,
                     // A seek or a new track lands on unrelated material; keeping the old image in the
                     // accumulation would drag the previous passage across the new one.
                     clearAccumulation: frame.clearTransients,
