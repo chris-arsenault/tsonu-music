@@ -5,27 +5,35 @@ Open work, most likely to matter first. Findings and evidence live in
 completed repairs in `VISUALIZER-REPAIR-PLAN.md` and
 `VISUALIZER-REACTIVITY-PLAN.md`.
 
-## Held for design
+## Open
 
-Three items from the August audit are repairs only in the sense that something is
-wrong. Each has a decision inside it that should be made deliberately rather than
-inside a fix, and each is written up in `VISUALIZER-REACTIVITY-PLAN.md`.
-
-**The accumulation admits one transform.** The previous frame is translated along
-a motion field and nothing else — no audio-driven zoom, rotation, centre, or
-anisotropic scale. Everything the audio touches is regenerated from nothing each
-frame and then attenuated thirty-six fold on the way into a buffer with a
-0.6-second time constant. This is the largest open item and the one that decides
-whether the output reads as a Milkdrop-class visualizer: there, the per-frame
-audio variables set the coordinate transform applied to the previous frame, so a
-two percent change compounds across hundreds of frames into a tunnel.
+**Nothing here has been rendered.** Every figure below and in the ADR-0013 commits
+comes from Node execution over the scene graph. The rebuilt loop arithmetic is
+measured; what it looks like is not.
 
 **Selection checks legality and never asks whether a scene is good.**
 `buildFirstViableScene` returns the first candidate satisfying the grammar and
-discards up to thirty-one others unexamined. Scoring them needs a fitness
-function; bound-parameter count and role diversity are measurable, but branch
-contrast and focal structure are what decide whether a scene is worth looking at,
-and neither has a measure yet.
+discards up to thirty-one others unexamined. More is measurable than the previous
+revision of this file claimed: bound-parameter count, role diversity,
+`peakConcentration`, `materialBranchCount`, chain depth, and — through
+`SelectionCharacter`, which is already declared — branch contrast as the distance
+between branch producers' characters, and focal structure as whether exactly one
+plugin is `dominance: 'primary'`. Only legibility needs a renderer. Held until the
+rebuilt loops have been looked at, because a fitness function tuned against
+unrendered output is guesswork.
+
+**The layer stack dilutes whatever accumulates.** Median five material branches
+against `maximumFeedbackLoops: 1`, and a measured median of 40 percent of branches
+routing through the loop sink. The other 60 percent are regenerated at fixed screen
+positions each frame and summed in at full weight, so even a deep loop arrives
+diluted about 2.5 to 1. Untouched by ADR-0013, which changed what a loop does and
+not how many branches pass through one.
+
+**A quarter of scenes are exempt from motion by grammar.** `GEOMETRIC_SIGNAL` sets
+`requireSpatialLoop: false` and `requireMotionSource: false`, citing spec §15's
+"restrained feedback". Measured: 97 of its 101 scenes in a 400-scene sample read no
+field, and 64 have a loop that only mixes colour. That is a decision to revisit
+rather than a defect, and it is a quarter of the rotation.
 
 ## Not built
 
@@ -45,9 +53,10 @@ the role goes quiet with it.
 
 ## Deliberate, recorded here so they are not mistaken for oversights
 
-- **Persistence injection is 2–4% per frame**, attenuating a layer 30–40× between
-  transients. Measured; left alone, and now part of the accumulation-transform
-  item above rather than a tuning question on its own.
+- **No stage promises non-expansion any more** (ADR-0013). One stage compresses —
+  the grade — and one structural check keeps every image cycle's gain below one. A
+  wiring bug now shows as a bright frame rather than a wrong one, which is a worse
+  failure than ADR-0007's and the price of accumulation being expressible at all.
 - **Excitation channels read as gates** (median 0.000, 95th percentile 1.000). That
   is what an excitation channel is for; binding kind-preservation makes it safe,
   and they are deliberately excluded from the occupancy normalisation for the same
@@ -68,6 +77,14 @@ the role goes quiet with it.
 
 ## Resolved since the last revision
 
+- The accumulation admitting one transform, and then admitting none: both
+  accumulators combined history and source as a convex pair, whose weights sum to
+  one however long the loop runs, so the steady state was the source
+  motion-blurred at unchanged brightness. See ADR-0013. Measured after: every scene
+  closes an image loop (was 336 of 400), 39 distinct plugins sit at a loop's
+  closing end (was 10), and the median cycle memory is a 1.09-second time constant,
+  65 frames at sixty a second, against a kernel that held 0.26 to 0.72 seconds and
+  accumulated nothing at any depth.
 - Saturation falling with the particle count: the count was never the limit. The
   emission rate was, and the whole subsystem was unbound. See step 4.
 - `spectralCentroid` pinned at its ceiling: the linear 8 kHz cut is gone. See step 2.
@@ -80,13 +97,20 @@ the role goes quiet with it.
 ## Working notes
 
 `frontend/devlab/` is the harness: gitignored, port 26010, five audio beds. The
-inspect dropdown covers the kernel's own stages (`kernel:composite`,
-`kernel:motion`, `kernel:accumulate`) as well as plugin resources — the composition
-was a black box between layers and canvas, and that is why the grade went
-undiagnosed through sixteen commits of fixing things upstream of it.
+inspect dropdown covers `kernel:composite` and every plugin resource — the
+composition was a black box between layers and canvas, and that is why the grade
+went undiagnosed through sixteen commits of fixing things upstream of it.
+`kernel:motion` and `kernel:accumulate` were also on it; both stages are gone, so
+their entries are too. The readout row that showed persistence per second now shows
+each cycle's gain.
 
 Measure the middle of a chain, not its ends. Every wrong conclusion in this work came
 from inferring a middle stage from its two ends.
+
+Check the arithmetic of a fix, not only its shape. The convex accumulator was the
+right idea about washout, applied where it forbade the thing the subsystem exists
+to do, and it survived two ADRs because every reading of it was about what it
+prevented rather than about what its steady state actually was.
 
 Measure the consumer as well as the producer. The July pass fixed a producer
 emitting four channels in the bottom one percent of their range and stopped there;

@@ -51,6 +51,9 @@ global one that already exists and is not counted on: `METER_SHADER` measures av
 and `GRADE_SHADER` applies metered exposure with a knee roll-off and a final clamp. Compression is
 already the last operation, after everything that can add light.
 
+Two of the four are convex rules and are the actual defect. The other two are a saturation guard and a
+floor, which bound a failure rather than forbidding accumulation, and the distinction matters below.
+
 ### And there are three state mechanisms with no model between them
 
 `edge.feedback` plus `feedbackPort` makes one input historical. `clear: false` makes a pass
@@ -117,9 +120,16 @@ plugin carries the `feedback` capability and starts asking whether the cycle's g
 This is a precondition on wiring, checkable and checked — the shape ADR-0007 asked for, now applied to
 the quantity that actually governs divergence.
 
-Decay moves out of the historical read with the same reasoning. `GLSL_HISTORY`'s per-second decay and
-clamp are deleted; reading a back edge is a plain `texture()`, and the loss that makes a loop stable
-is the blend's history weight, in one place, visible to the check.
+What is removed is the *convex* rule specifically, not every constant. `GLSL_HISTORY` keeps its
+per-second decay, because that decay is not a stage refusing to amplify — it is the loss that makes a
+cycle converge, the number `gainParameter` names, and having it in one place is what keeps it
+comparable between plugins. It keeps its ceiling too, raised from 8 to 256: the ceiling's job is to
+stop a runaway short of `NaN`, and at 8 it had become an active constraint on the accumulation this
+decision exists to allow.
+
+Gains are per second throughout, raised to the frame's own delta. A survival of 0.4 per frame and 0.4
+per second differ by a factor of forty in how long a loop remembers, and a check comparing both
+against one would be right about stability and useless about anything else.
 
 ### The kernel accumulator is deleted
 

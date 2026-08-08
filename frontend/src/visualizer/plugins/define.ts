@@ -306,21 +306,25 @@ export function character(overrides: Partial<SelectionCharacter> = {}): Selectio
 }
 
 /**
- * The one way to read a historical edge, mirroring `core/persistence.ts` (ADR-0012).
+ * The one way to read a historical edge.
  *
- * Any input may be satisfied by another node's previous frame, so a loop can be closed anywhere the
- * wiring allows. The kernel owns the combine for its own accumulation and can promise that a static
- * image converges to itself; it does not own this one and cannot. What it can require is that every
- * loop is lossy, and that a loop which runs hot saturates rather than reaching infinity and then
- * `NaN` — which would blank the frame, the worst failure available and the hardest to read
- * backwards.
+ * The decay stays, and stays here. ADR-0013 removes the *convex* bounds — the rules making each stage
+ * individually non-expansive — and this is not one: it is the loss that makes a cycle converge at all,
+ * it is the number `gainParameter` names and `core/loop-gain.ts` multiplies around the loop, and
+ * having it in one place is what keeps it comparable across plugins. Each of the three that closed
+ * loops before this existed wrote `pow(uDecay, delta * 60.0)`, burying a per-frame-at-sixty
+ * assumption in a constant.
  *
- * Both bounds live here rather than at each call site. The three plugins that closed loops before
- * this existed each wrote `pow(uDecay, delta * 60.0)`, which buries a per-frame-at-sixty assumption
- * in a constant, and none of them clamped.
+ * The ceiling stays too, and is raised by a factor of thirty-two. Its job is to keep a runaway from
+ * reaching infinity and then `NaN`, which blanks the frame — the worst failure available and the
+ * hardest to read backwards. At eight it had stopped doing only that: a converging loop is *meant* to
+ * hold many copies of its source now, and at an injection of 0.3 against a 168-frame memory the
+ * steady state runs to roughly twenty times the incoming value, so the guard would have been clipping
+ * the accumulation it exists to survive. Two hundred and fifty-six is far above anything the gains
+ * can produce and far below where half-float precision goes.
  */
 export const GLSL_HISTORY = `
-const float HISTORY_CEILING = 8.0;
+const float HISTORY_CEILING = 256.0;
 
 /** Attenuated and bounded previous frame. The decay is the fraction surviving one second. */
 vec4 history(sampler2D previous, vec2 uv, float decay, float delta) {
