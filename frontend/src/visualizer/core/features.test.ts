@@ -515,3 +515,101 @@ describe('band excitation', () => {
         expect(seeked.excitation.treble.deviation).toBe(0);
     });
 });
+
+describe('level channels occupy the range their consumers assume', () => {
+    /** Each band on its own slow cycle, so the balance between them genuinely moves. */
+    function shiftingBalance(frame: number): FeatureSnapshot {
+        const cycle = (periodSeconds: number, phase: number) =>
+            0.55 + 0.45 * Math.sin((frame / 60) * (Math.PI * 2 / periodSeconds) + phase);
+
+        return snapshot({
+            rms: 0.3 * cycle(25, 0.5),
+            peak: 0.5 * cycle(25, 0.5),
+            bands: rawBands({
+                subBass: 0.6 * cycle(19, 0),
+                bass: 0.9 * cycle(23, 1.1),
+                lowMid: 0.4 * cycle(17, 2.2),
+                mid: 0.3 * cycle(21, 3.3),
+                highMid: 0.15 * cycle(29, 4.4),
+                treble: 0.1 * cycle(13, 5.5),
+            }),
+        });
+    }
+
+    /** One fixed balance, moved up and down together — a fade, not a change in the music. */
+    function uniformGain(frame: number): FeatureSnapshot {
+        const level = 0.55 + 0.45 * Math.sin((frame / 60) * (Math.PI * 2 / 24));
+
+        return snapshot({
+            rms: 0.3 * level,
+            peak: 0.5 * level,
+            bands: rawBands({
+                subBass: 0.5 * level,
+                bass: 0.9 * level,
+                lowMid: 0.3 * level,
+                mid: 0.2 * level,
+                highMid: 0.06 * level,
+                treble: 0.04 * level,
+            }),
+        });
+    }
+
+    /** Runs ninety seconds and reports what `channel` took after the distribution warmed up. */
+    function run(
+        material: (frame: number) => FeatureSnapshot,
+        channel: keyof typeof bus,
+    ): number[] {
+        let state = createFeatureBusState();
+        let audioTime = 100;
+        const values: number[] = [];
+
+        for (let frame = 0; frame < 90 * 60; frame += 1) {
+            audioTime += 1 / 60;
+            state = advanceFeatureBus(state, input({
+                snapshot: material(frame),
+                currentAudioTime: audioTime,
+            }));
+
+            // Past the warm-up, which blends back toward the raw value before then.
+            if (frame > 30 * 60) {
+                values.push(state.bus.continuous[channel]);
+            }
+        }
+
+        return values;
+    }
+
+    const bus = createFeatureBusState().bus.continuous;
+    const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+
+    test('a mid-range band spreads across the range rather than sitting in a tenth of it', () => {
+        // Measured over real material `mid` lived between 0.150 and 0.254, so every parameter mapped
+        // across [0, 1] moved a tenth of its span for the length of a track. What a consumer's
+        // [0, 1] is asking about is the band's position within its own distribution.
+        expect(spread(run(shiftingBalance, 'mid'))).toBeGreaterThan(0.75);
+    });
+
+    test('a quiet band spreads as far as a loud one', () => {
+        expect(spread(run(shiftingBalance, 'treble'))).toBeGreaterThan(0.75);
+        expect(spread(run(shiftingBalance, 'bass'))).toBeGreaterThan(0.75);
+    });
+
+    test('a fade produces no band movement, and none is manufactured', () => {
+        // The shared ceiling divides out a gain applied to every band at once, so a fade changes no
+        // band's level — correctly, since the balance did not change. The distribution stage sees a
+        // channel that does not vary and must leave it alone rather than spreading its own noise
+        // across the whole range, which would turn a fade into six full-scale control signals.
+        expect(spread(run(uniformGain, 'mid'))).toBeLessThan(0.05);
+        expect(spread(run(uniformGain, 'treble'))).toBeLessThan(0.05);
+    });
+
+    test('excitation channels are left as gates', () => {
+        // Their median of zero is the signal. Spreading them uniformly would turn every event
+        // detector into a level, and `distributeReactivity` refuses to move a binding between the
+        // two kinds for exactly that reason.
+        const values = run(shiftingBalance, 'bassExcite');
+        const median = [...values].sort((left, right) => left - right)[Math.floor(values.length / 2)];
+
+        expect(median).toBeLessThan(0.1);
+    });
+});

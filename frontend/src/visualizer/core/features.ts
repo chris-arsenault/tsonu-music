@@ -22,6 +22,7 @@ import {
 } from './analysis';
 import { clamp01 } from './bindings';
 import { type ClockEffect, type PlaybackClock } from './clock';
+import { createDistributionFollower, followDistribution, type DistributionFollower } from './distribution';
 
 export interface TimedFeatureEvent {
     feature: string;
@@ -139,16 +140,59 @@ export interface FeatureBusInput {
 /**
  * Followers for the measures that self-normalize.
  *
- * `bands` is deliberately one shared ceiling for all six bands rather than one each. Per-band
- * ceilings would make every band read full scale on sustained content, erasing the relative balance
- * that section 20 depends on to give bass, midrange, and treble different jobs.
+ * `bands` is deliberately one shared ceiling for all six bands rather than one each, and what that
+ * buys is a gain applied to the whole mix at once dividing out: a fade changes no band's level,
+ * because the balance did not change. Per-band ceilings would report a fade as six independent
+ * events.
  *
  * A shared ceiling only works over quantities that are comparable to begin with, which raw band means
  * are not — see PINK_BAND_WEIGHTS, which is applied before the ceiling is taken. Without it the
  * ceiling was always set by the low bands and the high ones sat in the bottom one percent of their
  * range for the length of a track.
+ *
+ * This stage no longer decides what a consumer sees. The relative balance it produces — a quiet band
+ * sitting low in its range for the length of a track — is exactly the compression `OCCUPANCY_CHANNELS`
+ * below removes, and that is a deliberate reversal: a treble-bound parameter should be expressive on a
+ * bass-heavy mix rather than proportionally inert. Balance survives here, in the raw material every
+ * later stage is derived from, and in excitation, which is measured from raw energy and never from
+ * the scaled level.
  */
 export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands' | 'spectrum';
+
+/**
+ * Channels whose occupancy of `[0, 1]` is normalized against their own recent distribution.
+ *
+ * The stage above answers "how loud is this against the loudest thing lately", which is what carries
+ * the balance between bands. It is not what a consumer's `[0, 1]` asks, and the gap between the two
+ * is why the median binding in the catalog traversed nineteen percent of the range its author wrote:
+ * measured over real material `mid` lives between 0.150 and 0.254, so a parameter mapped across
+ * `[0, 1]` moved a tenth of its span for the length of a track.
+ *
+ * Only levels are listed. An excitation channel is a gate, an envelope is a shape, and both carry
+ * their meaning in a distribution that is deliberately not uniform:
+ *
+ * - `*Excite` — two deviations above a running mean, so a median of zero and a ninety-fifth
+ *   percentile of one is the signal, not a defect. `distributeReactivity` already refuses to move a
+ *   binding between the two kinds for the same reason.
+ * - `transient` — an onset envelope. Its low resting value is what makes the accumulation's
+ *   `transientPunch` a pulse rather than a level; spreading it uniformly would leave the frame
+ *   punching half the time.
+ * - `spectralFlux` — event-shaped, and the first feature in the `burst` role pool.
+ * - `beatPhase` — uniform over `[0, 1]` by construction already.
+ * - `beatConfidence` — a confidence in a measurement, not a measurement.
+ */
+export type OccupancyName = BandName | 'rms' | 'peak';
+
+export const OCCUPANCY_CHANNELS: readonly OccupancyName[] = [
+    'rms',
+    'peak',
+    'subBass',
+    'bass',
+    'lowMid',
+    'mid',
+    'highMid',
+    'treble',
+];
 
 /** Measures carrying an excitation channel beside their level: every band, plus overall level. */
 export type ExcitationName = BandName | 'rms';
@@ -176,6 +220,12 @@ export interface FeatureBusState {
      * different question and must not share a ceiling — coupling them is what flattened the bands.
      */
     excitation: Record<ExcitationName, ExcitationFollower>;
+    /**
+     * Per-channel distribution of the normalized level, so each one occupies the range its consumers
+     * assume. Deliberately slower than the shared ceiling above it: the ceiling carries balance
+     * between bands within a moment, this carries occupancy across tens of seconds.
+     */
+    occupancy: Record<OccupancyName, DistributionFollower>;
     pendingOnsets: readonly RawOnset[];
     /** Events detected before this audio time are discarded rather than presented. */
     transientGateUntilAudioTime: number;
@@ -229,6 +279,9 @@ export function createFeatureBusState(): FeatureBusState {
         excitation: Object.fromEntries(
             EXCITED_MEASURES.map((measure) => [measure, createExcitationFollower()]),
         ) as Record<ExcitationName, ExcitationFollower>,
+        occupancy: Object.fromEntries(
+            OCCUPANCY_CHANNELS.map((channel) => [channel, createDistributionFollower()]),
+        ) as Record<OccupancyName, DistributionFollower>,
         pendingOnsets: [],
         transientGateUntilAudioTime: 0,
         beat: { periodSeconds: 0, confidence: 0, anchorAudioTime: 0 },
@@ -276,6 +329,12 @@ function applyEffects(state: FeatureBusState, input: FeatureBusInput): FeatureBu
     if (input.effects.includes('clear-analysis-history')) {
         // Excitation is short-term history by definition. Carrying a mean across a seek would report
         // the new position as a large event purely because it differs from the old one.
+        //
+        // Occupancy is deliberately kept. It is a forty-second distribution, so discarding it on
+        // every seek and track change would mean the mapping was warming up more often than it was
+        // running, and a cold start puts every channel back on its raw value — which is the state
+        // this whole stage exists to leave. Statistics from the previous track are a reasonable
+        // prior, and the window replaces them within a minute either way.
         next = {
             ...next,
             audioToPlaybackOffset: 0,
@@ -386,16 +445,27 @@ function absorbSnapshot(
         return result.excitation;
     };
 
+    // Second stage: where this level sits inside its own recent distribution. See OCCUPANCY_CHANNELS
+    // for why only levels go through it. Applied after the shared ceiling rather than instead of it,
+    // so a band that is genuinely absent still reads absent — the distribution's own spread guard is
+    // what decides that, and it can only see absence in a value the ceiling has already scaled.
+    const occupancy = { ...state.occupancy };
+    const occupy = (channel: OccupancyName, level: number): number => {
+        const result = followDistribution(occupancy[channel], level, delta);
+        occupancy[channel] = result.follower;
+        return result.normalized;
+    };
+
     const continuous: ContinuousFeatures = {
         ...state.bus.continuous,
-        rms: normalizeWith('rms', snapshot.rms),
-        peak: normalizeWith('peak', snapshot.peak),
-        subBass: scaleBand('subBass'),
-        bass: scaleBand('bass'),
-        lowMid: scaleBand('lowMid'),
-        mid: scaleBand('mid'),
-        highMid: scaleBand('highMid'),
-        treble: scaleBand('treble'),
+        rms: occupy('rms', normalizeWith('rms', snapshot.rms)),
+        peak: occupy('peak', normalizeWith('peak', snapshot.peak)),
+        subBass: occupy('subBass', scaleBand('subBass')),
+        bass: occupy('bass', scaleBand('bass')),
+        lowMid: occupy('lowMid', scaleBand('lowMid')),
+        mid: occupy('mid', scaleBand('mid')),
+        highMid: occupy('highMid', scaleBand('highMid')),
+        treble: occupy('treble', scaleBand('treble')),
         rmsExcite: excite('rms', snapshot.rms),
         subBassExcite: excite('subBass', snapshot.bands.subBass),
         bassExcite: excite('bass', snapshot.bands.bass),
@@ -421,6 +491,7 @@ function absorbSnapshot(
         ...state,
         followers,
         excitation,
+        occupancy,
         audioToPlaybackOffset,
         beat: {
             periodSeconds: snapshot.beatPeriodSeconds,
