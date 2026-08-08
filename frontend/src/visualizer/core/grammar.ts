@@ -34,6 +34,16 @@ export interface SceneGrammar {
 
     maximumDominantPlugins: number;
     maximumHighCostPlugins: number;
+    /**
+     * Loops the scene must have, counted as historical *edges* once it is wired.
+     *
+     * This counted plugins carrying the `feedback` capability, which is the shape ADR-0007 rejected
+     * for persistence itself: a property of the scene inferred from which plugins selection happened
+     * to draw. The two numbers happen to agree today, because each loop-closing plugin nominates one
+     * port — but the edge is the thing that matters and the thing a plugin with two ports, or an
+     * authored graph, would disagree with the count on. Checked after wiring, alongside the material
+     * branch count, for the same reason: it is a question about edges.
+     */
     maximumFeedbackLoops: number;
     /**
      * Feedback stages the family requires.
@@ -44,6 +54,16 @@ export interface SceneGrammar {
      * the plugin-level stage those three describe into the scene.
      */
     minimumFeedbackLoops: number;
+    /**
+     * At least one loop must displace the image it reads.
+     *
+     * A loop that only mixes colour gives the scene a memory and no motion, and once the kernel
+     * stops dragging the accumulation itself (ADR-0012) that is the difference between a picture
+     * that flows and one that fades. A displacement applied to freshly generated material is a
+     * distortion; the same displacement applied to what it produced last frame, for hundreds of
+     * frames, is flow — and only a loop can make that true.
+     */
+    requireSpatialLoop: boolean;
     maximumSymmetryTransforms: number;
 
     requireVisibleSource: boolean;
@@ -99,6 +119,7 @@ export interface GrammarViolation {
         | 'no-visible-source'
         | 'no-motion-source'
         | 'too-few-branches'
+        | 'no-spatial-loop'
         | 'too-few-plugins';
     detail: string;
 }
@@ -141,6 +162,19 @@ export function isConfigurationNode(definition: VisualPluginDefinition): boolean
 /** A field that occupies space: the kind `fieldCount` is a budget for. */
 export function isSpatialField(definition: VisualPluginDefinition): boolean {
     return definition.category === 'field' && !isConfigurationNode(definition);
+}
+
+/**
+ * Declared by a plugin whose loop displaces the image it reads rather than only recolouring it.
+ *
+ * Not derivable from the ports: every one of these takes a colour texture and returns one, and
+ * whether the coordinates moved on the way through is a fact about the shader. Declared, and
+ * required by `requireSpatialLoop`.
+ */
+export const SPATIAL_FEEDBACK = 'spatial-feedback';
+
+export function displacesHistory(definition: VisualPluginDefinition): boolean {
+    return definition.capabilities.includes(SPATIAL_FEEDBACK);
 }
 
 export function declaresCapability(definition: VisualPluginDefinition, capability: string): boolean {
@@ -219,17 +253,21 @@ export function grammarViolations(
         });
     }
 
-    const feedback = definitions.filter((definition) => declaresCapability(definition, 'feedback')).length;
-    if (feedback > grammar.maximumFeedbackLoops) {
+    // Counted over plugins here and over edges in `structuralViolations`, deliberately. This is a
+    // necessary condition available before wiring, so assembly can reject a candidate set without
+    // paying to wire it; the edge count is the real one, and it is the only one that can see where a
+    // loop actually closed. A plugin able to close a loop that ends up not closing one fails there.
+    const closers = definitions.filter((definition) => declaresCapability(definition, 'feedback')).length;
+    if (closers > grammar.maximumFeedbackLoops) {
         violations.push({
             kind: 'too-many-feedback',
-            detail: `${feedback} feedback loops exceed ${grammar.maximumFeedbackLoops}`,
+            detail: `${closers} loop-closing plugins exceed ${grammar.maximumFeedbackLoops}`,
         });
     }
-    if (feedback < grammar.minimumFeedbackLoops) {
+    if (closers < grammar.minimumFeedbackLoops) {
         violations.push({
             kind: 'too-few-feedback',
-            detail: `${feedback} feedback loops below ${grammar.minimumFeedbackLoops}`,
+            detail: `${closers} loop-closing plugins below ${grammar.minimumFeedbackLoops}`,
         });
     }
 
@@ -292,6 +330,7 @@ export function wouldViolate(
         'no-visible-source',
         'no-motion-source',
         'too-few-branches',
+        'no-spatial-loop',
         'too-few-plugins',
     ];
 
@@ -320,6 +359,7 @@ export const ORGANIC_FLOW: SceneGrammar = {
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
     minimumFeedbackLoops: 1,
+    requireSpatialLoop: true,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: true,
@@ -347,6 +387,7 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     // Clean geometry still wants a trail behind it; without one this family had the least motion of
     // the four while being the one whose shapes move most legibly.
     minimumFeedbackLoops: 1,
+    requireSpatialLoop: true,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: false,
@@ -368,6 +409,7 @@ export const COLLISION_ENERGY: SceneGrammar = {
     maximumHighCostPlugins: 2,
     maximumFeedbackLoops: 1,
     minimumFeedbackLoops: 1,
+    requireSpatialLoop: true,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: false,
     requireMotionSource: true,
@@ -391,6 +433,7 @@ export const IMAGE_DREAM: SceneGrammar = {
     maximumHighCostPlugins: 1,
     maximumFeedbackLoops: 1,
     minimumFeedbackLoops: 1,
+    requireSpatialLoop: true,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: true,
@@ -418,6 +461,9 @@ export const REDUCED_GRAMMAR: SceneGrammar = {
     maximumHighCostPlugins: 0,
     maximumFeedbackLoops: 1,
     minimumFeedbackLoops: 0,
+    // The point of this rung is that the machine cannot afford a scene, so it cannot afford a loop
+    // either. The kernel's own accumulation is still there, which is what keeps the floor a floor.
+    requireSpatialLoop: false,
     maximumSymmetryTransforms: 0,
     requireVisibleSource: true,
     requireMotionSource: false,

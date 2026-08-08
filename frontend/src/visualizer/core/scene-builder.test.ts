@@ -14,7 +14,7 @@ import { peakConcentration } from './audio-mapping';
 import { allDefinitions } from '../plugins/registry';
 import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';
 import { assetResourceId, wireScene } from './wiring';
-import { ORGANIC_FLOW, REDUCED_GRAMMAR } from './grammar';
+import { ORGANIC_FLOW, REDUCED_GRAMMAR, SPATIAL_FEEDBACK } from './grammar';
 import type { PluginCategory, PortType, VisualPluginDefinition } from './plugin';
 
 const FULL_CATALOG = allDefinitions();
@@ -274,6 +274,7 @@ describe('structural predicates', () => {
         id: string,
         category: PluginCategory,
         outputs: { name: string; type: PortType }[],
+        overrides: Partial<VisualPluginDefinition> = {},
     ): VisualPluginDefinition => ({
         id,
         version: 1,
@@ -295,6 +296,7 @@ describe('structural predicates', () => {
             deactivate: () => undefined,
             destroy: () => undefined,
         }),
+        ...overrides,
     });
 
     const colour = (id: string, category: PluginCategory = 'source') =>
@@ -314,8 +316,62 @@ describe('structural predicates', () => {
         const scene = wireScene([colour('a'), colour('post', 'postprocess')]);
 
         expect(structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind))
-            .toEqual(['too-few-branches']);
+            .toContain('too-few-branches');
         expect(structuralViolations(scene, REDUCED_GRAMMAR)).toEqual([]);
+    });
+
+    test('a scene with no loop at all is rejected on the count and on the motion', () => {
+        // Both, and they are different complaints: one says the scene has no memory beyond the
+        // kernel's, the other that whatever memory it has is never displaced. See ADR-0012.
+        const scene = wireScene([colour('a'), colour('b'), colour('c'), colour('post', 'postprocess')]);
+        const kinds = structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind);
+
+        expect(kinds).toContain('too-few-feedback');
+        expect(kinds).toContain('no-spatial-loop');
+    });
+
+    test('a colour loop satisfies the count but not the motion', () => {
+        const mixer = definition('mix', 'compositor', [{ name: 'color', type: 'color-texture' }], {
+            inputs: [
+                { name: 'source', type: 'color-texture', required: true },
+                { name: 'history', type: 'color-texture', required: false },
+            ],
+            capabilities: ['feedback'],
+        });
+        const scene = wireScene([colour('a'), colour('b'), colour('c'), mixer]);
+        const kinds = structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind);
+
+        expect(kinds).not.toContain('too-few-feedback');
+        expect(kinds).toContain('no-spatial-loop');
+    });
+
+    test('a loop into a plugin that displaces what it reads satisfies both', () => {
+        const warp = definition('warp', 'transformer', [{ name: 'color', type: 'color-texture' }], {
+            inputs: [
+                { name: 'source', type: 'color-texture', required: true },
+                { name: 'history', type: 'color-texture', required: false },
+            ],
+            capabilities: ['feedback', SPATIAL_FEEDBACK],
+        });
+        const scene = wireScene([colour('a'), colour('b'), colour('c'), warp]);
+        const kinds = structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind);
+
+        expect(kinds).not.toContain('too-few-feedback');
+        expect(kinds).not.toContain('no-spatial-loop');
+    });
+
+    test('a value port chaining to itself is not an image loop', () => {
+        // `ParticleEmitter` and its neighbours each declare a `previous` port so they can chain, and
+        // the first in a chain has no upstream producer, so wiring closes it on itself. Counting
+        // that put four loops in a family whose ceiling is one.
+        const emitter = definition('emit', 'field', [{ name: 'emitters', type: 'particle-emitter' }], {
+            inputs: [{ name: 'previous', type: 'particle-emitter', required: false }],
+        });
+        const scene = wireScene([colour('a'), colour('b'), colour('c'), emitter]);
+
+        expect(scene.edges.some((edge) => edge.feedback)).toBe(true);
+        expect(structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind))
+            .toContain('too-few-feedback');
     });
 
     test('a spatial field contributes even when nothing in the graph reads it', () => {

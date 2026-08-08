@@ -8,6 +8,7 @@
 import { clamp01 } from './bindings';
 import {
     declaresCapability,
+    displacesHistory,
     grammarViolations,
     isConfigurationNode,
     isSpatialField,
@@ -420,6 +421,26 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         }
 
         chosen.push(picked);
+    }
+
+    // And at least one of those loops has to displace what it reads, or the scene has a memory and
+    // no motion. Repaired here for the same reason as the shortfall above: the plugins that warp
+    // their own history are a handful in a catalog of two hundred, and leaving it to a retry spends
+    // build attempts on a condition that can simply be satisfied.
+    if (grammar.requireSpatialLoop && !chosen.some(displacesHistory)) {
+        const candidates = eligible.filter((definition) =>
+            displacesHistory(definition)
+            && !conflictsWith(chosen, definition)
+            && !wouldViolate(chosen, definition, grammar)
+            && inputsSatisfiable(chosen, definition, assetTypes));
+
+        const picked = rng.weighted(
+            candidates,
+            (definition) => interactionWeight(definition, chosen, context),
+        );
+        if (picked) {
+            chosen.push(picked);
+        }
     }
 
     // A family asking to be dragged needs something to be dragged by. The field category alone does

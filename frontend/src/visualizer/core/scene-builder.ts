@@ -9,6 +9,7 @@
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
 import { compileGraph, type CompiledGraph } from './graph';
 import {
+    displacesHistory,
     grammarViolations,
     REDUCED_GRAMMAR,
     type GrammarViolation,
@@ -19,7 +20,7 @@ import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
 import { createRng } from './random';
 import { assembleScene, type SchedulerContext, type VisualTheme } from './scheduler';
-import { wireScene, type AssetResource, type WiredScene } from './wiring';
+import { isImagePortType, wireScene, type AssetResource, type WiredScene } from './wiring';
 
 export interface BuiltScene {
     entropy: string;
@@ -300,15 +301,62 @@ export function structuralViolations(
     scene: WiredScene,
     grammar: SceneGrammar,
 ): GrammarViolation[] {
+    const violations: GrammarViolation[] = [];
+
     const branches = materialBranchCount(scene);
     if (branches < grammar.minimumMaterialBranches) {
-        return [{
+        violations.push({
             kind: 'too-few-branches',
             detail: `${branches} material branches below ${grammar.minimumMaterialBranches}`,
-        }];
+        });
     }
 
-    return [];
+    // Counted as edges rather than as plugins carrying a capability. The two agree while each
+    // loop-closing plugin nominates one port, and the edge is what a plugin with two of them, or an
+    // authored graph, would disagree with the count on. See ADR-0012.
+    //
+    // Image loops only. `ParticleEmitter`, `ParticleForceField`, and `ParticleCollider` each declare
+    // a `previous` port so they can chain — each reads the list built so far — and the first in a
+    // chain has no upstream producer, so wiring closes it on itself. That is a harmless empty read
+    // of a value port, not a picture fed back into a picture, and counting it put four loops in a
+    // family whose ceiling is one.
+    const loops = scene.edges.filter((edge) => {
+        if (!edge.feedback) {
+            return false;
+        }
+
+        const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
+        const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+
+        return port !== undefined && isImagePortType(port.type);
+    });
+    if (loops.length < grammar.minimumFeedbackLoops) {
+        violations.push({
+            kind: 'too-few-feedback',
+            detail: `${loops.length} loops below ${grammar.minimumFeedbackLoops}`,
+        });
+    }
+    if (loops.length > grammar.maximumFeedbackLoops) {
+        violations.push({
+            kind: 'too-many-feedback',
+            detail: `${loops.length} loops exceed ${grammar.maximumFeedbackLoops}`,
+        });
+    }
+
+    // A loop that only mixes colour gives the scene a memory and no motion. Once the kernel stops
+    // dragging the accumulation itself, this is the difference between a picture that flows and one
+    // that fades.
+    if (grammar.requireSpatialLoop && !loops.some((edge) => {
+        const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
+        return sink !== undefined && displacesHistory(sink.definition);
+    })) {
+        violations.push({
+            kind: 'no-spatial-loop',
+            detail: 'no loop displaces the image it reads',
+        });
+    }
+
+    return violations;
 }
 
 /**

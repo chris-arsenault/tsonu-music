@@ -10,6 +10,7 @@ import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/pl
 import type { RenderPass } from '../../core/passes';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
 import { GLSL_HISTORY } from '../define';
+import { SPATIAL_FEEDBACK } from '../../core/grammar';
 
 export type FeedbackFlowMode =
     | 'zoom'
@@ -151,7 +152,10 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 : []),
         ],
         outputs: [{ name: 'color', type: 'color-texture', required: false }],
-        capabilities: ['feedback'],
+        // Every mode of this plugin resamples the history through a warp — zoom, rotate, translate,
+        // spiral, pinch, vortex, drift — so a loop closed here accumulates motion rather than only
+        // brightness. That is what `requireSpatialLoop` is asking for.
+        capabilities: ['feedback', SPATIAL_FEEDBACK],
         cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: 1, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.6,
