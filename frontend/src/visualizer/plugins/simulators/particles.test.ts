@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { silentFeatureBus } from '../../core/features';
+import { createParticleWorld, emitParticle } from '../../core/particle-physics';
 import { createImpactBus } from '../../core/impact';
 import type { FrameContext } from '../../core/plugin';
 import {
@@ -158,13 +159,18 @@ describe('particle graph contract', () => {
         expect(definition.outputs.map((port) => [port.name, port.type])).toEqual([
             ['mask', 'mask-texture'],
             ['color', 'color-texture'],
+            // The wake. Bodies already carry velocities; publishing them is what lets a body drag
+            // the image it passes through rather than only being drawn on top of it. See ADR-0012.
+            ['wake', 'vector-field'],
         ]);
-        expect(definition.parameters).toEqual({ brightness: 1, debug: 0 });
+        expect(Object.keys(definition.parameters ?? {}).sort())
+            .toEqual(['brightness', 'debug', 'wakeScale']);
         expect(instance.render({
             inputs: { state: 'ParticleSimulator#0.state' },
             outputs: {
                 mask: 'ParticleRenderer:discs#0.mask',
                 color: 'ParticleRenderer:discs#0.color',
+                wake: 'ParticleRenderer:discs#0.wake',
             },
             previous: {},
             renderWidth: 1280,
@@ -172,7 +178,48 @@ describe('particle graph contract', () => {
         })).toMatchObject([
             { output: 'ParticleRenderer:discs#0.mask', vertexCount: 0, clear: true },
             { output: 'ParticleRenderer:discs#0.color', vertexCount: 0, clear: true },
+            { output: 'ParticleRenderer:discs#0.wake', vertexCount: 0, blend: 'add' },
         ]);
+    });
+
+    test('the wake carries each body velocity into the geometry it draws', () => {
+        // The brush-on-water-colour case: what a body is doing has to reach the buffer before it can
+        // reach a field. Eight floats a body — position, radius, colour, velocity.
+        const definition = createParticleRenderer('discs');
+        let uploaded: { data: Float32Array; attributes: readonly { name: string }[] } | undefined;
+
+        const instance = definition.create({
+            instanceId: 'ParticleRenderer:discs#0',
+            seed: 0.5,
+            registerShader: () => undefined,
+        });
+
+        const world = createParticleWorld(4);
+        world.width = 800;
+        world.height = 600;
+        emitParticle(world, {
+            position: [10, 20],
+            velocity: [120, -60],
+            radius: 5,
+            mass: 1,
+            elasticity: 1,
+            friction: 0,
+            lifetime: 5,
+            color: [1, 1, 1],
+            emitterId: 1,
+        });
+
+        instance.update(frame({
+            inputs: { state: 'sim.state' },
+            readValue: <T>(resource: string | undefined) => (resource === 'sim.state'
+                ? { world, activeCount: 1, emitters: [], forces: [], colliders: [] }
+                : undefined) as T | undefined,
+            uploadGeometry: (upload) => { uploaded = upload; },
+        }));
+
+        expect(uploaded?.attributes.map((attribute) => attribute.name))
+            .toEqual(['aPosition', 'aRadius', 'aColor', 'aVelocity']);
+        expect([...(uploaded?.data ?? [])].slice(6, 8)).toEqual([120, -60]);
     });
 });
 

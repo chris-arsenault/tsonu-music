@@ -62,6 +62,23 @@ export interface SimpleShaderPlugin {
      * plugin actually kept frames it had nothing to constrain.
      */
     historyDriven?: boolean;
+    /**
+     * A second pass publishing the displacement this plugin's own material is undergoing.
+     *
+     * Almost every plugin in the catalog already computes where its material is going and throws it
+     * away — a warp's per-pixel offset, a shape's rotation, a scroll's direction — and until the
+     * kernel stopped owning the drag there was nowhere for it to go (ADR-0012). Published, it is an
+     * ordinary `vector-field` output that anything can read: a feedback warp so the displacement
+     * compounds over the accumulated image, a particle force, another warp.
+     *
+     * Written in UV per second, which is the unit the whole bus carries. The fragment gets the same
+     * uniforms as the main pass, so a mode selector and a bound amount read identically in both.
+     */
+    motion?: {
+        /** The output port to write to. Must appear in `outputs` with a motion-source type. */
+        port: string;
+        fragment: string;
+    };
 }
 
 /**
@@ -72,6 +89,7 @@ export interface SimpleShaderPlugin {
  */
 export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefinition {
     const shaderId = spec.id;
+    const motionShaderId = `${spec.id}:motion`;
 
     return {
         id: spec.id,
@@ -93,7 +111,9 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             gpu: spec.gpuCost ?? 1,
             cpu: 0,
             memory: spec.memoryCost ?? 1,
-            renderPasses: 1,
+            // Publishing the displacement costs a second pass, and the cost accounting has to know
+            // or the performance controller budgets for a plugin that is not the one running.
+            renderPasses: spec.motion ? 2 : 1,
             qualityScalable: true,
             dominant: spec.dominant ?? false,
         },
@@ -124,6 +144,14 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         vertex: QUAD_VERTEX_SHADER,
                         fragment: spec.fragment,
                     });
+
+                    if (spec.motion) {
+                        context.registerShader({
+                            id: motionShaderId,
+                            vertex: QUAD_VERTEX_SHADER,
+                            fragment: spec.motion.fragment,
+                        });
+                    }
                 },
 
                 activate() {
@@ -183,33 +211,54 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         }
                     }
 
-                    return [{
+                    const uniforms = {
+                        uTime: elapsed,
+                        uPhase: phase + spin,
+                        uSeed: context.seed,
+                        ...(spec.historyDriven ? { uDepth: depth } : {}),
+                        ...(spec.uniforms ?? {}),
+                        ...(spec.impactDriven
+                            ? {
+                                // No `uCentre`: that is a plugin's own static, and writing the
+                                // impact centre over it made every `hasImpact ? uImpactCentre :
+                                // uCentre` a no-op, since the two held the same value and the
+                                // last centre is retained after the energy decays. The
+                                // shockwave's audio-driven fallback centre never reached GL.
+                                uImpactCentre: impact.centre,
+                                uImpactRadius: impact.radius,
+                                uImpactEnergy: impact.energy,
+                            }
+                            : {}),
+                    };
+
+                    const passes: RenderPass[] = [{
                         kind: 'fullscreen',
                         shader: shaderId,
                         inputs,
                         output: render.outputs[spec.outputs[0]?.name],
                         blend: spec.blend ?? 'none',
                         clear: spec.clear ?? true,
-                        uniforms: {
-                            uTime: elapsed,
-                            uPhase: phase + spin,
-                            uSeed: context.seed,
-                            ...(spec.historyDriven ? { uDepth: depth } : {}),
-                            ...(spec.uniforms ?? {}),
-                            ...(spec.impactDriven
-                                ? {
-                                    // No `uCentre`: that is a plugin's own static, and writing the
-                                    // impact centre over it made every `hasImpact ? uImpactCentre :
-                                    // uCentre` a no-op, since the two held the same value and the
-                                    // last centre is retained after the energy decays. The
-                                    // shockwave's audio-driven fallback centre never reached GL.
-                                    uImpactCentre: impact.centre,
-                                    uImpactRadius: impact.radius,
-                                    uImpactEnergy: impact.energy,
-                                }
-                                : {}),
-                        },
+                        uniforms,
                     }];
+
+                    // The displacement this plugin's own material is undergoing, published as an
+                    // ordinary field. Same uniforms as the pass above, so a mode selector and a
+                    // bound amount mean the same thing in both — the second pass describes what the
+                    // first one did.
+                    const motionOutput = spec.motion && render.outputs[spec.motion.port];
+                    if (spec.motion && motionOutput) {
+                        passes.push({
+                            kind: 'fullscreen',
+                            shader: motionShaderId,
+                            inputs,
+                            output: motionOutput,
+                            blend: 'none',
+                            clear: true,
+                            uniforms,
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {

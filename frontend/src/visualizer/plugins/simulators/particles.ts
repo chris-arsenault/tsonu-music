@@ -118,14 +118,52 @@ const PARTICLE_VERTEX = `#version 300 es
 in vec2 aPosition;
 in float aRadius;
 in vec3 aColor;
+in vec2 aVelocity;
 out vec3 vColor;
+out vec2 vVelocity;
 
 uniform vec2 uWorldSize;
 
 void main() {
     vColor = aColor;
+    // World units are pixels a second; the bus carries UV a second.
+    vVelocity = aVelocity / max(vec2(1.0), uWorldSize);
     gl_PointSize = max(1.0, aRadius * 2.0);
     gl_Position = vec4(aPosition / max(vec2(1.0), uWorldSize * 0.5), 0.0, 1.0);
+}`;
+
+/**
+ * The wake: a body dragging the image it passes through, the way a brush drags wet paint.
+ *
+ * The bodies already carry velocities and this pass writes them into a field, so anything reading it
+ * displaces by what the particles are actually doing. Wired to a feedback warp, the accumulated
+ * image is pulled along behind each body — the deposit at the head stays put once the body has moved
+ * on, because the wake travels with the body and what it laid down two frames ago is outside it.
+ *
+ * Wider and softer than the body, because a brush is wider than a bristle: a wake exactly the size
+ * of the disc would drag only the pixels the disc already covers.
+ */
+const PARTICLE_WAKE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec3 vColor;
+in vec2 vVelocity;
+out vec4 fragColor;
+
+uniform float uWakeScale;
+
+void main() {
+    float distanceFromCentre = length(gl_PointCoord - 0.5);
+    float reach = 1.0 - smoothstep(0.1, 0.5, distanceFromCentre);
+    if (reach <= 0.0) {
+        discard;
+    }
+
+    // Additive, and correctly so: bodies moving the same way through the same place drag harder,
+    // and bodies moving oppositely cancel. Weight rides in b so a reader can average rather than
+    // sum if it wants to.
+    vec2 field = vVelocity * uWakeScale * reach;
+
+    fragColor = vec4(field, reach, 1.0);
 }`;
 
 const PARTICLE_MASK_FRAGMENT = `#version 300 es
@@ -584,6 +622,7 @@ export function createParticleRenderer(
     const colorShader = `particle-color:${mode}`;
     const debugShader = `particle-debug:${mode}`;
     const debugLineShader = `particle-debug-lines:${mode}`;
+    const wakeShader = `particle-wake:${mode}`;
 
     return {
         id: `ParticleRenderer:${mode}`,
@@ -593,9 +632,12 @@ export function createParticleRenderer(
         outputs: [
             { name: 'mask', type: 'mask-texture', required: false },
             { name: 'color', type: 'color-texture', required: false },
+            // The wake. Bodies carry velocities already; this is what lets them drag the image they
+            // pass through rather than only being drawn on top of it.
+            { name: 'wake', type: 'vector-field', required: false },
         ],
-        capabilities: ['particle-rendering'],
-        cost: { gpu: 2, cpu: 1, memory: 1, renderPasses: 4, qualityScalable: true, dominant: false },
+        capabilities: ['particle-rendering', 'vector-field'],
+        cost: { gpu: 2, cpu: 1, memory: 1, renderPasses: 5, qualityScalable: true, dominant: false },
         character: character({
             visualDensity: 0.6,
             motionEnergy: 0.8,
@@ -609,8 +651,20 @@ export function createParticleRenderer(
         parameters: {
             brightness: 1,
             debug: 0,
+            wakeScale: 1.6,
         },
         defaultBindings: [{
+            // How hard a body pulls the image it passes through. Large-scale force, because this is
+            // the parameter that decides whether the bodies are drawn over the picture or are
+            // moving it.
+            feature: 'bass',
+            role: 'large-scale-force',
+            parameter: 'wakeScale',
+            outputRange: [0.4, 3.2],
+            attack: 0.1,
+            release: 0.6,
+            curve: 'smooth',
+        }, {
             // The transient envelope rather than a level: a particle field is sparse, fast material
             // and the accumulation admits only a few percent of it per frame, so what makes a body
             // read at all is arriving bright on the hit that threw it.
@@ -627,7 +681,9 @@ export function createParticleRenderer(
         create(context): VisualPluginInstance {
             const geometryId = `particle-geometry:${mode}:${context.instanceId}`;
             const debugLineGeometryId = `particle-debug-line-geometry:${mode}:${context.instanceId}`;
-            const bodies = new Float32Array(PARTICLE_CAPACITY * 6);
+            // Eight floats a body: position, radius, colour, velocity. The velocity is what the
+            // wake pass writes into a field.
+            const bodies = new Float32Array(PARTICLE_CAPACITY * 8);
             let count = 0;
             let worldSize: readonly [number, number] = [1, 1];
             let debug = false;
@@ -655,6 +711,11 @@ export function createParticleRenderer(
                         vertex: DEBUG_LINE_VERTEX,
                         fragment: DEBUG_LINE_FRAGMENT,
                     });
+                    context.registerShader({
+                        id: wakeShader,
+                        vertex: PARTICLE_VERTEX,
+                        fragment: PARTICLE_WAKE_FRAGMENT,
+                    });
                 },
 
                 activate() {
@@ -677,23 +738,26 @@ export function createParticleRenderer(
                             continue;
                         }
 
-                        const output = count * 6;
+                        const output = count * 8;
                         bodies[output] = world.positions[index * 2];
                         bodies[output + 1] = world.positions[index * 2 + 1];
                         bodies[output + 2] = world.radii[index];
                         bodies[output + 3] = world.colors[index * 3];
                         bodies[output + 4] = world.colors[index * 3 + 1];
                         bodies[output + 5] = world.colors[index * 3 + 2];
+                        bodies[output + 6] = world.velocities[index * 2];
+                        bodies[output + 7] = world.velocities[index * 2 + 1];
                         count += 1;
                     }
 
                     frame.uploadGeometry({
                         id: geometryId,
-                        data: bodies.subarray(0, count * 6),
+                        data: bodies.subarray(0, count * 8),
                         attributes: [
                             { name: 'aPosition', components: 2 },
                             { name: 'aRadius', components: 1 },
                             { name: 'aColor', components: 3 },
+                            { name: 'aVelocity', components: 2 },
                         ],
                     });
 
@@ -739,6 +803,22 @@ export function createParticleRenderer(
                             // No static `uBrightness`: the resolved parameter carries it, and a
                             // pass-level default for a bound parameter is the shape that let two
                             // simulators integrate a fixed sixtieth of a second per frame.
+                            uniforms: {
+                                uWorldSize: worldSize,
+                            },
+                        },
+                        {
+                            kind: 'geometry',
+                            shader: wakeShader,
+                            geometry: geometryId,
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.wake,
+                            // Additive: bodies moving the same way through the same place drag
+                            // harder, and bodies moving oppositely cancel. Both are correct for a
+                            // velocity field.
+                            blend: 'add',
+                            clear: true,
                             uniforms: {
                                 uWorldSize: worldSize,
                             },

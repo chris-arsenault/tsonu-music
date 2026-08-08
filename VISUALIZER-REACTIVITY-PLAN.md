@@ -160,7 +160,7 @@ and points the edge at the plugin's own output.
 | 8.4 | `producesMotion` and `requireMotionSource` ask whether a field *reaches a consumer*, the predicate ADR-0008 deferred | `core/grammar.ts`, `core/scene-builder.ts` |
 | 8.5 | Retire the motion-field bus; remove the drag from `PERSISTENCE_SHADER`, keeping decay, black floor, and the integrator | `host/runtime.ts`, `host/composite-shaders.ts` |
 | 8.6 | A warp plugin whose `source` is historical, so displacement exists as a plugin before the kernel's is removed | `plugins/transformers/` |
-| 8.7 | Publish the discarded quantity from the families that already compute one — the table in the design notes below | catalog |
+| 8.7 | Publish the discarded quantity from the families that already compute one — the table below. **Mechanism done; `CoordinateWarpTransform` and `ParticleRenderer` done; eleven families remain** | catalog |
 | 8.8 | Editor: historical edges are drawn and togglable, since where a loop closes changes a composition more than which plugins are in it | `ui/editor/` |
 
 Order matters at two points. 8.6 lands before 8.5 so the picture never loses its

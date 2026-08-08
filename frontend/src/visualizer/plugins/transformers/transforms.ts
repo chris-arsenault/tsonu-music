@@ -107,6 +107,66 @@ void main() {
     fragColor = texture(uSource, clamp(p + 0.5, 0.0, 1.0));
 }`;
 
+/**
+ * The displacement the warp above applies, published rather than discarded (ADR-0012).
+ *
+ * The same nine branches produce the same `p`, and where the source is read *from* against where it
+ * is written *to* is exactly a displacement. Applied once to freshly generated material that is a
+ * distortion; read by a feedback warp and applied to what it produced last frame, it compounds.
+ *
+ * Sign is reversed against the sampling offset: the pass above reads at `p` and writes at `vUv`, so
+ * material travels from `p` toward `vUv`, and a field is a velocity — it points where the material
+ * is going.
+ */
+const COORDINATE_WARP_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uAmount;
+uniform float uTime;
+${GLSL_COMMON}
+
+/** How much of the warp is expressed per second. A warp is a position; a field is a rate. */
+const float WARP_RATE = 1.4;
+
+void main() {
+    vec2 p = vUv - 0.5;
+    float radius = length(p);
+    float angle = atan(p.y, p.x);
+
+    if (uMode < 0.5) {
+        float ripple = sin(radius * 18.0 - uTime * 0.7) * uAmount * 0.04;
+        p = vec2(angle / 6.2831853 + 0.5 + ripple, radius * (1.0 + uAmount * 0.12)) - 0.5;
+    } else if (uMode < 1.5) {
+        p = vec2(angle / 6.2831853, log(max(radius, 0.001)) * 0.25 + uTime * 0.1) - 0.5;
+    } else if (uMode < 2.5) {
+        p = rotate(p, uAmount * (1.0 - radius * 2.0));
+    } else if (uMode < 3.5) {
+        p *= 1.0 - uAmount * (1.0 - radius);
+    } else if (uMode < 4.5) {
+        p *= 1.0 + uAmount * (1.0 - radius);
+    } else if (uMode < 5.5) {
+        p *= 1.0 + uAmount * radius * radius;
+    } else if (uMode < 6.5) {
+        p += vec2(sin(p.y * 14.0 + uTime * 2.0), sin(p.x * 14.0 - uTime * 1.7)) * uAmount * 0.06;
+    } else if (uMode < 7.5) {
+        p *= 1.0 - uAmount * 0.4 * radius * radius;
+    } else {
+        p.x += p.y * uAmount * 0.3;
+    }
+
+    // The two polar modes rewrite the coordinate outright rather than nudging it, so their
+    // difference spans the frame rather than describing a local displacement. Bounded so one mode
+    // cannot dominate every field it is read beside.
+    vec2 field = clamp(((vUv - 0.5) - p) * WARP_RATE, vec2(-2.0), vec2(2.0));
+
+    fragColor = vec4(field, length(field), 1.0);
+}`;
+
 const DOMAIN_WARP_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -366,9 +426,15 @@ export function createCoordinateWarpTransform(
         id: `CoordinateWarpTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['coordinate-warp'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            // What it did to the coordinates, for anything that wants to do the same to something
+            // else — a feedback warp most usefully, which is where the compounding comes from.
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['coordinate-warp', 'vector-field'],
         fragment: COORDINATE_WARP_FRAGMENT,
+        motion: { port: 'motion', fragment: COORDINATE_WARP_MOTION },
         uniforms: { uMode: COORDINATE_WARP_MODES.indexOf(mode), uAmount: 0.4 },
         parameters: { amount: 0.4 },
         bindings: [{

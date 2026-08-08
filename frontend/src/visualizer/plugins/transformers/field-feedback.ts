@@ -114,13 +114,16 @@ export function createFieldFeedbackTransform(): VisualPluginDefinition {
         // thing present.
         activationWeight: 1.4,
         minimumDuration: 14,
+        // Matched by family, so one entry covers every mode. The last two are the point of ADR-0012
+        // rather than a nicety: a particle's wake and a warp's own displacement are fields like any
+        // other, and reading one here is what turns "bodies drawn over a picture" into "bodies
+        // dragging the picture they pass through".
         prefersWith: [
             'ProceduralVectorField:curl',
-            'ProceduralVectorField:turbulence',
-            'ProceduralVectorField:domain-warp',
-            'ProceduralVectorField:spiral',
             'AudioImpulseField:centre-shockwave',
             'MaskBoundaryField',
+            'ParticleRenderer:discs',
+            'CoordinateWarpTransform:twirl',
         ],
     });
 }
