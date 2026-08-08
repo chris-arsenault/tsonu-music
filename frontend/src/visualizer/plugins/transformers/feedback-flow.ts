@@ -166,13 +166,22 @@ void main() {
     // The particle trail injector and the temporal transform already close their loops this way,
     // with max and with mix. They were the two that could safely hold a long trail, and nothing in
     // the code said so.
-    float coverage = clamp(
-        max(incoming.a, max(incoming.r, max(incoming.g, incoming.b))) * uInject,
-        0.0,
-        1.0
-    );
-
-    fragColor = mix(previous, incoming, coverage);
+    // Taken as the brighter of the two, not as a blend between them.
+    //
+    // Compositing fixed the saturation and left a subtler version of the same mistake: a blend
+    // toward the incoming frame spends the history to make room for it. At an injection of 0.57
+    // against a source that fills the frame, 57 percent of the trail is replaced every frame — a
+    // time constant of twenty milliseconds, against the one-and-a-half seconds uDecay was set for.
+    // Measured on the harness as correlation surviving about a second, and visible as memory that
+    // exists where the source happens to be dark and is erased everywhere it is bright.
+    //
+    // Under max the two are independent. How long the trail lasts is uDecay and nothing else; how
+    // brightly new material writes is uInject and nothing else; and the result still cannot exceed
+    // the brighter input, so the bound survives. New material appears at full strength on the frame
+    // it is drawn rather than fading in over several, and the trail behind it decays on its own
+    // clock. That is the combine the particle trail injector has always used, which is the second
+    // reason it was one of the two that could hold a long trail.
+    fragColor = max(previous, incoming * uInject);
 }`;
 
 /**
@@ -300,16 +309,14 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 curve: 'smooth',
             },
             {
-                // How hard new material writes over the trail, as a coverage multiplier rather than
-                // an amplitude. At one, anything the source draws replaces the trail where it lands;
-                // at a third, it tints what is already there and lets the trail keep travelling
-                // through it. Independent of how long the trail lasts, which is what uDecay says —
-                // the two were one number, and tying them is what kept this family producing a smear
-                // instead of the tunnel its nine modes were written for.
+                // How brightly new material writes against the trail. It does not decide how long the
+                // trail lasts — under max the two are independent, which is the whole point of the
+                // operator. Near one so the present is not dimmer than its own history, which would
+                // read as the scene being lit from the past.
                 feature: 'rms',
                 role: 'intensity',
                 parameter: 'inject',
-                outputRange: [0.25, 0.9],
+                outputRange: [0.7, 1.1],
                 attack: 0.12,
                 release: 0.5,
                 curve: 'smooth',

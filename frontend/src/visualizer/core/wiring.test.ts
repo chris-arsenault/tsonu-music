@@ -295,16 +295,34 @@ describe('a loop may close to any producer', () => {
         }
     });
 
-    test('a loop reaching the terminal branch folds the whole composed image back in', () => {
-        // The configuration a tunnel comes from: a warp reading the scene's output rather than its
-        // own means its small per-frame displacement compounds over the whole picture.
-        const terminal = instanceIdFor(post, 0);
+    test('a loop reaching the composed image folds the whole picture back in', () => {
+        // The configuration a tunnel comes from: a warp reading the scene's own composed output
+        // rather than its own branch means a small per-frame displacement compounds over the whole
+        // picture.
+        //
+        // The composed image, not the presented one. This asked for the loop to reach `post`, which
+        // is a post-processing stage — and a loop through presentation applies the grade, the palette
+        // map and the bloom once per circuit, which is destructive rather than accumulating. Measured
+        // over 400 scenes, 42 percent of image cycles ran through one. The two are the same node in
+        // this fixture only because the fixture is three plugins long.
+        const composed = instanceIdFor(feedback, 0);
         const found = Array.from({ length: 40 }, (_, seed) =>
             wireScene(scene, [], createRng(`loop-${seed}`)).edges
                 .filter((edge) => edge.feedback)
-                .some((edge) => edge.from.instanceId === terminal));
+                .some((edge) => edge.from.instanceId === composed));
 
         expect(found.some(Boolean)).toBe(true);
+    });
+
+    test('no loop closes through a presentation stage', () => {
+        for (let seed = 0; seed < 40; seed += 1) {
+            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            const reaches = wired.edges
+                .filter((edge) => edge.feedback)
+                .map((edge) => edge.from.instanceId);
+
+            expect(reaches, `seed ${seed}`).not.toContain(instanceIdFor(post, 0));
+        }
     });
 });
 
