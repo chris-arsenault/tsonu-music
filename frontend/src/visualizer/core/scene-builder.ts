@@ -343,6 +343,20 @@ export function structuralViolations(
         });
     }
 
+    // A field has to reach something that reads it.
+    //
+    // This asked whether the scene *contained* a spatial field, which was the right question while a
+    // kernel pass summed every one of them whether or not anything was wired to it. ADR-0008 adopted
+    // that partly to stop assembly producing orphans and recorded that closing it properly belonged
+    // to a predicate about consumption. With the bus retired, a field nothing reads is a pass drawn
+    // into a texture that is sampled by nothing.
+    if (grammar.requireMotionSource && !consumesMotion(scene)) {
+        violations.push({
+            kind: 'no-motion-source',
+            detail: 'no spatial field reaches a consumer',
+        });
+    }
+
     // A loop that only mixes colour gives the scene a memory and no motion. Once the kernel stops
     // dragging the accumulation itself, this is the difference between a picture that flows and one
     // that fades.
@@ -357,6 +371,16 @@ export function structuralViolations(
     }
 
     return violations;
+}
+
+/** Whether any edge in the scene carries a spatial field from its producer to something that reads it. */
+export function consumesMotion(scene: WiredScene): boolean {
+    return scene.edges.some((edge) => {
+        const producer = scene.nodes.find((node) => node.instanceId === edge.from.instanceId);
+        const port = producer?.definition.outputs.find((output) => output.name === edge.from.port);
+
+        return port !== undefined && isMotionSource(port.type);
+    });
 }
 
 /**
@@ -406,12 +430,17 @@ export function contributingPluginIds(scene: WiredScene): Set<string> {
     const contributingInstances = new Set<string>();
 
     for (const node of scene.nodes) {
+        // A spatial field used to seed this set unconditionally, because the compositor summed every
+        // one of them into the motion bus whether or not the graph read it — so judging contribution
+        // by paths through the graph would have pruned exactly the plugins that moved the picture.
+        // With the bus retired (ADR-0012) that is no longer true in either direction: a field
+        // reaches the picture through an edge like everything else, and one nothing reads is a pass
+        // drawn into a texture that is sampled by nothing.
         const hasTerminalColour = node.definition.outputs.some((port) =>
             port.type === 'color-texture'
             && !forwardConsumed.has(`${node.instanceId}.${port.name}`));
-        const feedsMotion = node.definition.outputs.some((port) => isMotionSource(port.type));
 
-        if (hasTerminalColour || feedsMotion) {
+        if (hasTerminalColour) {
             contributingInstances.add(node.instanceId);
         }
     }

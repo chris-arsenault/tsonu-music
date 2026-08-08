@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
     buildFirstViableScene,
     buildScene,
+    consumesMotion,
     contributingPluginIds,
     materialBranchCount,
     structuralViolations,
@@ -374,15 +375,48 @@ describe('structural predicates', () => {
             .toContain('too-few-feedback');
     });
 
-    test('a spatial field contributes even when nothing in the graph reads it', () => {
-        // The compositor sums every field into the motion bus, so judging contribution by colour paths
-        // alone would prune exactly the plugins that move the picture.
-        const scene = wireScene([
+    test('a spatial field nothing reads is pruned like anything else', () => {
+        // This asserted the opposite, and was right to while a kernel pass summed every field into
+        // the motion bus whether or not the graph read it — judging contribution by paths would have
+        // pruned exactly the plugins that moved the picture. With the bus retired (ADR-0012) a field
+        // reaches the picture through an edge like everything else, and one nothing reads is a pass
+        // drawn into a texture that is sampled by nothing.
+        const orphaned = wireScene([
             colour('src'),
             definition('fld', 'field', [{ name: 'flow', type: 'vector-field' }]),
         ]);
 
-        expect(contributingPluginIds(scene)).toContain('fld');
+        expect(contributingPluginIds(orphaned)).not.toContain('fld');
+    });
+
+    test('a spatial field something reads contributes', () => {
+        const warp = definition('warp', 'transformer', [{ name: 'color', type: 'color-texture' }], {
+            inputs: [
+                { name: 'source', type: 'color-texture', required: true },
+                { name: 'field', type: 'vector-field', required: true },
+            ],
+        });
+        const wired = wireScene([
+            colour('src'),
+            definition('fld', 'field', [{ name: 'flow', type: 'vector-field' }]),
+            warp,
+        ]);
+
+        expect(contributingPluginIds(wired)).toContain('fld');
+        expect(consumesMotion(wired)).toBe(true);
+    });
+
+    test('a scene whose field reaches nothing fails the motion requirement', () => {
+        const scene = wireScene([
+            colour('a'),
+            colour('b'),
+            colour('c'),
+            definition('fld', 'field', [{ name: 'flow', type: 'vector-field' }]),
+        ]);
+
+        expect(consumesMotion(scene)).toBe(false);
+        expect(structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind))
+            .toContain('no-motion-source');
     });
 
     test('a field producing no spatial output is still pruned when nothing reads it', () => {
