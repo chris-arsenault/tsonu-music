@@ -372,17 +372,43 @@ describe('mask dimensions', () => {
     });
 
     test('a mask is a physics surface particles reflect from', () => {
+        // The route changed when the simulation moved to the CPU. It used to be a `boundary` port on
+        // the simulator taking a collision field; the world now holds explicit colliders, and a mask
+        // reaches the bodies as one — `ParticleCollider:mask` reads the signed distance field and
+        // publishes a surface into the simulator's collider list.
         const { graph } = build([
-            'ProceduralVectorField:curl',
             'MaskSignedDistanceField',
-            'MaskBoundaryField',
+            'ParticleCollider:mask',
+            'ParticleEmitter:point',
             'ParticleSimulator',
             'ParticleRenderer:sparks',
             'ToneMapper',
         ]);
 
+        const collider = graph?.order.find((node) => node.instanceId.startsWith('ParticleCollider:mask'));
         const simulator = graph?.order.find((node) => node.instanceId.startsWith('ParticleSimulator'));
-        expect(simulator?.inputs.boundary).toBeDefined();
+
+        expect(collider?.inputs.field).toBeDefined();
+        expect(simulator?.inputs.colliders).toBeDefined();
+        // Bodies to collide with it: the simulator has no implicit emitter, by design.
+        expect(simulator?.inputs.emitters).toBeDefined();
+    });
+
+    test('a mask boundary field still drags the accumulation', () => {
+        // `MaskBoundaryField` produces a collision field, which no plugin consumes any more. It is
+        // not dead: every motion-source type is summed into the field the accumulation is dragged
+        // through, so a mask edge deflects the image itself rather than only the bodies near it.
+        const { graph } = build([
+            'MaskSignedDistanceField',
+            'MaskBoundaryField',
+            // Something for the output stage to grade; the boundary field produces no colour.
+            'ProceduralTextureSource:cellular',
+            'ToneMapper',
+        ]);
+
+        const boundary = graph?.order.find((node) => node.instanceId.startsWith('MaskBoundaryField'));
+        expect(boundary?.inputs.field).toBeDefined();
+        expect(graph?.resources.some((resource) => resource.type === 'collision-field')).toBe(true);
     });
 
     test('a mask contains a system inside its silhouette', () => {

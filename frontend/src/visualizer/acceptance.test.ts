@@ -272,10 +272,19 @@ describe('section 26: masks drive particles, collision, containment, distortion,
         ], ASSET_RESOURCES)).toBe(true);
     });
 
-    test('collision, through a boundary deflection field', () => {
+    test('collision, through a mask surface bodies bounce off', () => {
+        // The simulation moved to the CPU and the world now holds explicit colliders, so a mask
+        // reaches the bodies as one rather than through a `boundary` port on the simulator. The
+        // emitter is explicit too: there is no implicit source of bodies.
         expect(sceneCompiles([
-            'MaskSignedDistanceField', 'MaskBoundaryField', 'ParticleForceField:curl',
+            'MaskSignedDistanceField', 'ParticleCollider:mask', 'ParticleEmitter:point',
             'ParticleSimulator', 'ParticleRenderer:points',
+        ], ASSET_RESOURCES)).toBe(true);
+    });
+
+    test('collision, through a boundary field that deflects the image', () => {
+        expect(sceneCompiles([
+            'MaskSignedDistanceField', 'MaskBoundaryField', 'ProceduralTextureSource:cellular',
         ], ASSET_RESOURCES)).toBe(true);
     });
 
