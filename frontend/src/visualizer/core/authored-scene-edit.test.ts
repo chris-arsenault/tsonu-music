@@ -27,7 +27,6 @@ import {
     setPaletteId,
     setPaletteStrength,
     setParameter,
-    setPersistencePin,
     setPosition,
     setPresent,
     setPromoted,
@@ -383,28 +382,9 @@ describe('the kernel tail', () => {
         expect(scene.kernel?.grade?.bindings?.length).toBeGreaterThan(0);
     });
 
-    test('a persistence value can be pinned and released independently', () => {
-        let scene = setPersistencePin(base, 'survivalPerSecond', 0.9);
-        scene = setPersistencePin(scene, 'transientPunch', 0.1);
-
-        expect(scene.kernel?.persistence).toEqual({ survivalPerSecond: 0.9, transientPunch: 0.1 });
-
-        scene = setPersistencePin(scene, 'survivalPerSecond', undefined);
-        expect(scene.kernel?.persistence).toEqual({ transientPunch: 0.1 });
-    });
-
-    test('releasing the last pin removes the section rather than leaving an empty one', () => {
-        // An absence is a question left to the kernel; an empty object is a claim to have answered it.
-        const pinned = setPersistencePin(base, 'survivalPerSecond', 0.9);
-
-        expect(setPersistencePin(pinned, 'survivalPerSecond', undefined).kernel?.persistence)
-            .toBeUndefined();
-    });
-
-    test('a zero pin is a pin', () => {
-        expect(setPersistencePin(base, 'transientPunch', 0).kernel?.persistence)
-            .toEqual({ transientPunch: 0 });
-    });
+    // Three tests for pinning and releasing the kernel accumulation's survival and punch stood here.
+    // The accumulation is gone (ADR-0013) and what a scene remembers is a blend node's source weight,
+    // which `setParameter` already covers — the tests above it exercise exactly that path.
 
     test('kernel input membership distinguishes explicit empty from automatic', () => {
         // Composite is the only stage with pinnable membership left. The motion sum it used to share

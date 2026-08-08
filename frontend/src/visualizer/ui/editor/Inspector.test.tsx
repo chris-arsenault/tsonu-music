@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, test, vi } from 'vitest';
 import Inspector, { defaultBinding } from './Inspector';
 import {
-    ACCUMULATE_NODE,
     COMPOSITE_NODE,
     GRADE_NODE,
     PALETTE_NODE,
@@ -144,13 +143,13 @@ describe('inspector', () => {
         expect(html).toContain('value="0"');
     });
 
-    test('an unpinned accumulation value reads as automatic rather than as zero', () => {
+    test('an unpinned kernel value reads as automatic rather than as zero', () => {
         const html = render(<Inspector
             node={node({
-                id: ACCUMULATE_NODE,
+                id: GRADE_NODE,
                 kind: 'kernel',
-                title: 'Accumulate',
-                parameters: [{ name: 'survivalPerSecond', value: Number.NaN }],
+                title: 'Grade',
+                parameters: [{ name: 'exposure', value: Number.NaN }],
             })}
             editable
             {...handlers}

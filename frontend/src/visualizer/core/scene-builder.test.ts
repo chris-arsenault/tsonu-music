@@ -10,7 +10,7 @@ import {
     type SceneBuildContext,
 } from './scene-builder';
 import { profileFor, QUALITY_LADDER } from './performance';
-import { isMotionSource } from './persistence';
+import { isMotionSource } from './fields';
 import { peakConcentration } from './audio-mapping';
 import { allDefinitions } from '../plugins/registry';
 import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';

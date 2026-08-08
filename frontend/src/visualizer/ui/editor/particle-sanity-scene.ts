@@ -115,11 +115,10 @@ export function particleSanityScene(): AuthoredScene {
         kernel: {
             compositeInputs: [`${RENDERER}.color`],
             grade: { bindings: [] },
+            // The accumulation used to be pinned to zero here, so the sanity scene showed the bodies
+            // the simulator produced this frame and nothing else. There is no accumulation to pin
+            // (ADR-0013), and the scene contains no loop, so it is already what it was asking for.
             palette: { id: 'monochrome-noir', strength: 0 },
-            persistence: {
-                survivalPerSecond: 0,
-                transientPunch: 0,
-            },
         },
     };
 }

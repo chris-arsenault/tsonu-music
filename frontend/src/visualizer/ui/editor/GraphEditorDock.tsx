@@ -8,7 +8,6 @@
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ACCUMULATE_NODE,
     buildEditorView,
     driverTarget,
     GRADE_NODE,
@@ -40,7 +39,6 @@ import {
     setLayerOverride,
     setMuted,
     setParameter,
-    setPersistencePin,
     setPaletteId,
     setPaletteStrength,
     setPosition,
@@ -55,7 +53,6 @@ import {
     type PluginLookup,
 } from '../../core/authored-scene-edit';
 import type { ParameterBinding } from '../../core/bindings';
-import type { PersistenceOverrides } from '../../core/persistence';
 import type { VisualPluginDefinition } from '../../core/plugin';
 import { assetResourceId } from '../../core/wiring';
 import { createM1Registry } from '../../plugins/registry';
@@ -505,23 +502,16 @@ export default function GraphEditorDock({
     /**
      * A parameter edited from the inspector.
      *
-     * The kernel tail's three surfaces are each their own thing — accumulation values are pinned or
-     * released, the grade's are ordinary parameters, and a driver's row belongs to the node it feeds.
+     * The kernel tail's two surfaces are each their own thing — the grade's values are ordinary
+     * parameters, and a driver's row belongs to the node it feeds. An accumulation branch stood here
+     * for pinned survival and punch; those are a blend node's parameters now (ADR-0013) and take the
+     * ordinary path below.
      */
     const onInspectorParameter = useCallback((
         node: EditorNode,
         parameter: string,
         value: number,
     ) => {
-        if (node.id === ACCUMULATE_NODE) {
-            editKernel(document_ && setPersistencePin(
-                document_,
-                parameter as keyof PersistenceOverrides,
-                value,
-            ));
-            return;
-        }
-
         if (node.id === GRADE_NODE) {
             editKernel(document_ && setGradeParameter(document_, parameter, value));
             return;

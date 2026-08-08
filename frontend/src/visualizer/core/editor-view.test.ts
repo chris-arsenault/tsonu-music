@@ -1,11 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import {
-    ACCUMULATE_NODE,
     buildEditorView,
     CANVAS_NODE,
     COMPOSITE_NODE,
     GRADE_NODE,
-    isPinned,
     PALETTE_NODE,
 } from './editor-view';
 import { emptyAuthoredScene, resolveAuthoredScene, type AuthoredScene } from './authored-scene';
@@ -261,19 +259,18 @@ describe('the implicit buses', () => {
 });
 
 describe('the kernel tail', () => {
-    test('the five stages are present and chained in the order they run', () => {
+    test('the four stages are present and chained in the order they run', () => {
         const built = view(scene());
         const ids = built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id);
 
-        expect(ids).toEqual([
-            PALETTE_NODE, COMPOSITE_NODE, ACCUMULATE_NODE, GRADE_NODE, CANVAS_NODE,
-        ]);
+        // Accumulate stood between composite and grade. The diagram loses a node because the pipeline
+        // did (ADR-0013), which is the point of deriving it rather than drawing it.
+        expect(ids).toEqual([PALETTE_NODE, COMPOSITE_NODE, GRADE_NODE, CANVAS_NODE]);
 
         const chain = built.edges.filter((edge) => edge.kind === 'kernel');
         expect(chain.map((edge) => `${edge.from.node}->${edge.to.node}`)).toEqual([
             `${PALETTE_NODE}->${COMPOSITE_NODE}`,
-            `${COMPOSITE_NODE}->${ACCUMULATE_NODE}`,
-            `${ACCUMULATE_NODE}->${GRADE_NODE}`,
+            `${COMPOSITE_NODE}->${GRADE_NODE}`,
             `${GRADE_NODE}->${CANVAS_NODE}`,
         ]);
     });
@@ -287,26 +284,9 @@ describe('the kernel tail', () => {
         expect(composite!.position.x).toBeGreaterThan(1200);
     });
 
-    test('an unpinned accumulation value has no constant to show', () => {
-        const rows = view(scene()).nodes
-            .find((node) => node.id === ACCUMULATE_NODE)!.parameters;
-
-        expect(rows.map((row) => row.name))
-            .toEqual(['survivalPerSecond', 'transientPunch']);
-        // Decided per frame from the theme, the layer stack and three audio channels. Showing zero
-        // would be a worse lie than showing nothing.
-        expect(rows.every((row) => !isPinned(row))).toBe(true);
-    });
-
-    test('a pinned accumulation value reads as pinned', () => {
-        const rows = view(scene({
-            kernel: { persistence: { survivalPerSecond: 0.8 } },
-        })).nodes.find((node) => node.id === ACCUMULATE_NODE)!.parameters;
-
-        expect(isPinned(rows[0])).toBe(true);
-        expect(rows[0].value).toBe(0.8);
-        expect(isPinned(rows[1])).toBe(false);
-    });
+    // Two tests for the accumulation node's pinned and unpinned rows stood here. The stage is gone
+    // and so is the section that pinned it; a blend node's source weight is an ordinary plugin
+    // parameter and the plugin-node tests above cover pinning one.
 
     test('the grade shows all effective values and bindings, including kernel defaults', () => {
         const grade = view(scene({
@@ -339,7 +319,7 @@ describe('the kernel tail', () => {
     test('a document that does not compile keeps the fixed kernel tail visible', () => {
         // There is no graph, so the layer stack and motion bus cannot be derived. The fixed stages
         // still exist, though: making them disappear makes a one-node removal look like it deleted
-        // Composite, Accumulate, Grade and Canvas as collateral.
+        // Composite, Grade and Canvas as collateral.
         const built = view(scene({
             nodes: [{ id: 'mix#0', pluginId: 'mix', position: { x: 0, y: 0 } }],
         }));
@@ -347,7 +327,6 @@ describe('the kernel tail', () => {
         expect(built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id)).toEqual([
             PALETTE_NODE,
             COMPOSITE_NODE,
-            ACCUMULATE_NODE,
             GRADE_NODE,
             CANVAS_NODE,
         ]);
@@ -374,7 +353,6 @@ describe('inspection targets', () => {
         const inspect = (id: string) => built.nodes.find((node) => node.id === id)?.inspect;
 
         expect(inspect(COMPOSITE_NODE)).toBe(COMPOSITE_NODE);
-        expect(inspect(ACCUMULATE_NODE)).toBe(ACCUMULATE_NODE);
         // The graded image is the canvas, so there is nothing separate to show.
         expect(inspect(GRADE_NODE)).toBeUndefined();
     });

@@ -6,7 +6,7 @@
  * counts and structural limits so a scene reads as one composition.
  */
 
-import { isMotionSource } from './persistence';
+import { isMotionSource } from './fields';
 import { isValuePortType, type PluginCategory, type VisualPluginDefinition } from './plugin';
 
 export type CountRange = [number, number];

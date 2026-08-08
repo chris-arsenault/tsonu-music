@@ -80,8 +80,10 @@ export function PerformanceTab({
                 <Row label="branches" value={String(readout.scene?.materialBranchCount ?? 0)} />
                 <Row label="modulators" value={String(readout.scene?.activeModulatorCount ?? 0)} />
                 <Row
-                    label="persistence"
-                    value={`${(readout.scene?.survivalPerSecond ?? 0).toFixed(3)}/s`}
+                    label="loop gain"
+                    value={readout.scene?.loopGains.length
+                        ? readout.scene.loopGains.map((gain) => gain.toFixed(2)).join(' · ')
+                        : 'no loops'}
                 />
                 <Row label="mutation" value={readout.scene?.lastMutation ?? 'none'} />
                 <Row label="assets" value={String(readout.scene?.assets.length ?? 0)} />

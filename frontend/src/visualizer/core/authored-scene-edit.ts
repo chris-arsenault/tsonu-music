@@ -20,7 +20,6 @@ import {
 } from './authored-scene';
 import { COMPOSITE_BINDINGS } from './composite-grade';
 import type { LayerOverride } from './layers';
-import type { PersistenceOverrides } from './persistence';
 import type { VisualPluginDefinition } from './plugin';
 
 /** Resolves a plugin id to its definition. Operations need port shapes, not the whole registry. */
@@ -425,32 +424,11 @@ export function setPaletteStrength(scene: AuthoredScene, strength: number | unde
     });
 }
 
-/**
- * Pins one accumulation value, or releases it back to the theme and the audio.
- *
- * Released rather than set to zero: the three are decided per frame from the theme, the layer stack
- * and three audio channels, and a zero is a value while an absence is a question left to the kernel.
- */
-export function setPersistencePin(
-    scene: AuthoredScene,
-    name: keyof PersistenceOverrides,
-    value: number | undefined,
-): AuthoredScene {
-    return updateKernel(scene, (kernel) => {
-        const persistence = { ...(kernel.persistence ?? {}) };
-
-        if (value === undefined) {
-            delete persistence[name];
-        } else {
-            persistence[name] = value;
-        }
-
-        return {
-            ...kernel,
-            persistence: Object.keys(persistence).length > 0 ? persistence : undefined,
-        };
-    });
-}
+// `setPersistencePin` stood here, holding the kernel accumulation's survival or transient punch still
+// so a trail could be studied while everything else kept running. The accumulation is gone
+// (ADR-0013). What a scene remembers is a blend node's source weight — an ordinary plugin parameter,
+// pinned by `setParameterOverride` like every other, and visible on the node it belongs to rather
+// than in a kernel section beside the graph.
 
 /** Overrides how one layer is presented, or clears the override. */
 export function setLayerOverride(

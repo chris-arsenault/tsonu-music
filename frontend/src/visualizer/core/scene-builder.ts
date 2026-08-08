@@ -15,7 +15,7 @@ import {
     type GrammarViolation,
     type SceneGrammar,
 } from './grammar';
-import { isMotionSource } from './persistence';
+import { isMotionSource } from './fields';
 import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
 import { createRng } from './random';

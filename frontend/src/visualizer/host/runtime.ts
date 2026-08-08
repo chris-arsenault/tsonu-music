@@ -32,14 +32,7 @@ import {
     type ResourceId,
 } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
-import {
-    advanceAccumulationSlot,
-    blackFloorFor,
-    frameSurvival,
-    injectionFor,
-    isMotionSource,
-    type PersistenceSettings,
-} from '../core/persistence';
+import { isMotionSource } from '../core/fields';
 import type { ScenePalette } from '../core/palette';
 import { liveKeys, planTargets, withRetiringNodes, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
@@ -49,19 +42,19 @@ import {
     GRADE_SHADER_ID,
     METER_SHADER,
     METER_SHADER_ID,
-    PERSISTENCE_SHADER,
-    PERSISTENCE_SHADER_ID,
 } from './composite-shaders';
 
 /**
  * Kernel-owned targets, outside the graph because they belong to the compositor rather than to any
  * plugin. Named so `releaseUnused` can be told to keep them across scene changes.
+ *
+ * `kernel:accumulate` was one of these, ping-ponged, holding the image the whole subsystem's memory
+ * lived in. Deleted with ADR-0013. Its guarantee — that every scene has memory — is a statement about
+ * graph structure that the grammar already enforces, and since ADR-0012 took away its drag it had
+ * been a stationary temporal average applied downstream of the only thing that moved: the image was
+ * blurred over half a second in the direction of nowhere.
  */
 const COMPOSITE_KEY = 'kernel:composite';
-const ACCUMULATE_KEYS = ['kernel:accumulate#0', 'kernel:accumulate#1'] as const;
-
-/** Whichever accumulation slot currently holds the presented image, as an inspectable name. */
-const ACCUMULATE_KEY = 'kernel:accumulate';
 
 const METER_KEYS = ['kernel:meter#0', 'kernel:meter#1'] as const;
 
@@ -77,7 +70,7 @@ const METER_ADAPT_SECONDS = 0.9;
  * `kernel:motion` was one of these. It is gone with the bus that produced it: a scene's displacement
  * now lives on the edges of the graph, where the inspector can already reach it by resource.
  */
-export const KERNEL_STAGES: readonly string[] = [COMPOSITE_KEY, ACCUMULATE_KEY];
+export const KERNEL_STAGES: readonly string[] = [COMPOSITE_KEY];
 
 export interface ActiveInstance {
     instanceId: string;
@@ -105,11 +98,6 @@ export interface RuntimeFrame {
     controls?: DiagnosticsControls;
     /** The active quality profile, so the ladder's plugin-level rungs take effect. */
     profile?: QualityProfile;
-    /**
-     * How strongly this scene accumulates and how far the accumulation is dragged, decided in
-     * `core/persistence.ts` from the theme, the layer stack, and the audio.
-     */
-    persistence: PersistenceSettings;
     /** The scene's colour scheme, one entry per material branch. */
     palette: ScenePalette;
     /**
@@ -117,8 +105,14 @@ export interface RuntimeFrame {
      * resolved through the same path as a plugin's, so grading is not a hard-coded feature mapping.
      */
     grade: Readonly<Record<string, number>>;
-    /** Discards the accumulation, for a seek or track change landing on unrelated material. */
-    clearAccumulation?: boolean;
+    /**
+     * Blanks every historical slot, for a seek or track change landing on unrelated material.
+     *
+     * This cleared one kernel-owned buffer. A scene's memory now lives in the ping-pong slots of
+     * whichever resources something reads historically, so the same intent has to reach all of them —
+     * there is no single buffer left to discard.
+     */
+    clearHistory?: boolean;
     /**
      * Plugins that have left the scene but are still finishing their deactivation policy. They keep
      * updating and rendering into their old resources, which is what makes drain and dissolve visible
@@ -159,21 +153,8 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
     let frameParity = 0;
     // Kernel-level, so an impact published by one plugin is readable by every other.
     let impacts: ImpactBus = createImpactBus();
-    /**
-     * False until the accumulation has been written at least once. Without this a track opening
-     * paused would present a buffer nothing had drawn into.
-     */
-    let accumulationPrimed = false;
-    /**
-     * Which accumulation slot currently holds the image.
-     *
-     * Tracked rather than derived from the frame counter, because the accumulation is written only on
-     * frames that advance while the counter increments on every one.
-     */
-    let accumulationSlot: 0 | 1 = 0;
     let meterSlot: 0 | 1 = 0;
 
-    device.registerShader(PERSISTENCE_SHADER);
     device.registerShader(GRADE_SHADER);
     device.registerShader(METER_SHADER);
     const values = new Map<ResourceId, unknown>();
@@ -354,12 +335,18 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             device.advanceCompilation();
 
             // The kernel's own targets outlive any scene, so they are declared live alongside the
-            // plan's. Without this a scene change would delete the accumulation and every trail in it.
-            const kernelKeys = new Set<string>([COMPOSITE_KEY, ...ACCUMULATE_KEYS]);
+            // plan's. The accumulation was one of these; the composite and the meter are what is left.
+            const kernelKeys = new Set<string>([COMPOSITE_KEY, ...METER_KEYS]);
             device.releaseUnused(new Set([...liveKeys(plan), ...kernelKeys]));
             for (const target of plan.targets) {
                 device.acquireTarget(target.key, target.width, target.height);
                 stats.targetsAllocated += 1;
+            }
+
+            // Before anything reads a historical slot, so a seek cannot carry the previous passage
+            // into the first frame of the new one.
+            if (frame.clearHistory) {
+                clearHistorySlots(device, plan);
             }
 
             // Semantic values describe this frame's authored graph. Keeping a value from a previous
@@ -521,46 +508,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             if (inspected && plan.writeKeys[inspected]) {
                 presentSingle(device, plan, inspected, presentShaderId, stats);
             } else {
-                if (frame.clearAccumulation) {
-                    // Actually cleared, not merely re-primed.
-                    //
-                    // Setting the primed flag alone only forces the accumulation pass to run, and on
-                    // a seek the clock is frozen: survival over a zero delta is exactly 1 and the
-                    // black floor is exactly 0, so that pass copied the whole pre-seek image forward
-                    // with about one percent of the new composite mixed in. That is precisely the
-                    // outcome this call exists to prevent — the previous passage dragged across the
-                    // new one.
-                    for (const key of ACCUMULATE_KEYS) {
-                        const target = device.acquireTarget(key, plan.width, plan.height);
-                        device.beginPass(target, 'none', true);
-                    }
-                    accumulationPrimed = false;
-                }
-
                 composite(device, plan, frame, presentShaderId, stats);
-
-                // A frozen clock advances nothing, so the accumulation holds exactly rather than
-                // screening the same frame into itself and brightening while paused.
-                if (deltaSeconds > 0 || !accumulationPrimed) {
-                    // The slot flips only when something is actually written to it. Deriving it from
-                    // the frame counter instead meant that under a frozen clock — a pause, or simply
-                    // an element that has not started — the write was skipped while the slot kept
-                    // alternating, so the screen swapped between the last two accumulations every
-                    // frame. That is a flicker at refresh rate.
-                    const write = advanceAccumulationSlot(accumulationSlot, true);
-
-                    advanceAccumulation(
-                        device,
-                        plan,
-                        frame,
-                        deltaSeconds,
-                        { write, read: accumulationSlot },
-                        stats,
-                    );
-
-                    accumulationSlot = write;
-                    accumulationPrimed = true;
-                }
 
                 // The kernel's own stages are inspectable by name, alongside plugin resources.
                 //
@@ -571,13 +519,15 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 // detail. Presented ungraded, so what is shown is what the stage holds.
                 if (inspected === COMPOSITE_KEY) {
                     presentKernelStage(device, inspected, plan, presentShaderId, stats);
-                } else if (inspected === ACCUMULATE_KEY) {
-                    presentKernelStage(device, ACCUMULATE_KEYS[accumulationSlot], plan, presentShaderId, stats);
                 } else {
-                    const meterWrite = advanceAccumulationSlot(meterSlot, true);
+                    // Metered from the composite rather than from an accumulation buffer, and that is
+                    // the whole present path now: layers → composite → meter → grade → canvas. The
+                    // grade is the only stage that compresses, and since ADR-0013 it is the only
+                    // bound on the whole pipeline rather than the last of four.
+                    const meterWrite = meterSlot === 0 ? 1 : 0;
                     advanceMeter(
                         device,
-                        ACCUMULATE_KEYS[accumulationSlot],
+                        COMPOSITE_KEY,
                         plan,
                         deltaSeconds,
                         { write: meterWrite, read: meterSlot },
@@ -585,7 +535,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     );
                     meterSlot = meterWrite;
 
-                    presentTarget(device, ACCUMULATE_KEYS[accumulationSlot], plan, frame.grade, meterSlot, stats);
+                    presentTarget(device, COMPOSITE_KEY, plan, frame.grade, meterSlot, stats);
                 }
             }
 
@@ -595,12 +545,10 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
         reinitialize() {
             device.invalidate();
-            // The kernel's shaders and its accumulation went with the context, so both are rebuilt
-            // here rather than leaving the composite stage pointing at programs that no longer exist.
-            device.registerShader(PERSISTENCE_SHADER);
+            // The kernel's shaders went with the context, so they are rebuilt here rather than
+            // leaving the present path pointing at programs that no longer exist.
             device.registerShader(GRADE_SHADER);
             device.registerShader(METER_SHADER);
-            accumulationPrimed = false;
 
             for (const active of instances) {
                 void active.instance.initialize();
@@ -746,53 +694,33 @@ function composite(
 // explicitly, and where a field reaches the picture is worth being able to see.
 
 /**
- * Drags the accumulation through the motion field, decays it, and screens the new composite on top.
+ * Blanks every historical slot the plan allocates.
  *
- * The one pass that gives the subsystem a memory. Everything upstream of it regenerates from nothing
- * each frame, which is exactly why the result read as a still picture with small local animation.
+ * `advanceAccumulation` stood here, dragging one kernel-owned buffer through the summed motion field
+ * and screening the composite onto it. Deleted with ADR-0013, along with the buffer.
+ *
+ * What survives is the intent behind `clearAccumulation`: on a seek the clock is frozen, so a decay
+ * over a zero delta is exactly one, and anything holding the previous passage would carry it across
+ * the new one indefinitely. That used to be one texture and is now however many resources the scene
+ * reads historically, so the clear follows the plan instead of a constant.
  */
-function advanceAccumulation(
-    device: Device,
-    plan: RenderPlan,
-    frame: RuntimeFrame,
-    deltaSeconds: number,
-    slots: { write: 0 | 1; read: 0 | 1 },
-    stats: RuntimeStats,
-): void {
-    const program = device.useProgram(PERSISTENCE_SHADER_ID);
-    if (!program) {
-        stats.skippedPasses += 1;
-        return;
+function clearHistorySlots(device: Device, plan: RenderPlan): void {
+    for (const entry of plan.targets) {
+        if (entry.slot === undefined) {
+            continue;
+        }
+
+        const target = device.acquireTarget(entry.key, entry.width, entry.height);
+        device.beginPass(target, 'none', true);
     }
-
-    const write = device.acquireTarget(ACCUMULATE_KEYS[slots.write], plan.width, plan.height);
-    const read = device.acquireTarget(ACCUMULATE_KEYS[slots.read], plan.width, plan.height);
-    const compositeTarget = device.acquireTarget(COMPOSITE_KEY, plan.width, plan.height);
-
-    const survival = frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds);
-
-    device.beginPass(write, 'none', true);
-    device.bindTexture(program, 'uComposite', compositeTarget.texture, 0);
-    device.bindTexture(program, 'uHistory', read.texture, 1);
-    device.setUniforms(program, {
-        uResolution: [plan.width, plan.height],
-        uSurvival: survival,
-        // Complement of survival at rest, overridden by a transient so a hit arrives on screen
-        // instead of seeping in at a fiftieth of its brightness.
-        uInjection: injectionFor(survival, frame.persistence.transientPunch),
-        uBlackFloor: blackFloorFor(deltaSeconds),
-        uDelta: Math.max(0, deltaSeconds),
-    });
-    device.drawFullscreen();
-    stats.passesExecuted += 1;
 }
 
 /**
- * Grades the accumulation onto the canvas.
+ * Grades the composite onto the canvas.
  *
- * The final stage, and the only one that compresses. `ToneMapper` sits inside the graph, so it runs
- * before the accumulation and cannot be the last word: whatever it rolled off was accumulated back
- * into clipping and then presented with no compression at all.
+ * The final stage, and the only one that compresses — and since ADR-0013 the only stage that bounds
+ * the pipeline at all. `ToneMapper` sits inside the graph, so it cannot be the last word: whatever it
+ * rolls off can be added back by anything downstream of it.
  */
 /**
  * Reduces the presented image to one texel of average luminance, smoothed against its own last value.

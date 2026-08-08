@@ -179,7 +179,9 @@ function render(readout: KernelReadout): void {
         ['audio', readout.contextState + (readout.flatlined ? ' flat' : '')],
         ['analysis', readout.analysisPath],
         ['theme', scene?.themeId ?? '—'],
-        ['persistence', scene ? `${scene.survivalPerSecond.toFixed(3)}/s` : '—'],
+        ['loop gain', scene?.loopGains.length
+            ? scene.loopGains.map((gain) => gain.toFixed(2)).join(' · ')
+            : '—'],
         ['layers', String(scene?.layerCount ?? 0)],
         ['branches', String(scene?.materialBranchCount ?? 0)],
         ['passes', String(readout.render?.passesExecuted ?? 0)],

@@ -95,10 +95,6 @@ function canonicalKernel(kernel: AuthoredKernel): Record<string, unknown> {
             id: kernel.palette.id,
             strength: kernel.palette.strength,
         }),
-        persistence: kernel.persistence && omitUndefined({
-            survivalPerSecond: kernel.persistence.survivalPerSecond,
-            transientPunch: kernel.persistence.transientPunch,
-        }),
         layers: kernel.layers && Object.fromEntries(
             Object.keys(kernel.layers).sort().map((id) => [id, omitUndefined({
                 blendMode: kernel.layers![id].blendMode,
@@ -478,11 +474,9 @@ function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[
         };
     }
 
-    if (isRecord(raw.persistence)) {
-        kernel.persistence = finiteNumbers(raw.persistence, [
-            'survivalPerSecond', 'transientPunch',
-        ]);
-    }
+    // `raw.persistence` is read past rather than rejected. It pinned the kernel accumulation, which no
+    // longer exists (ADR-0013), and a document written before that is still a valid graph — refusing
+    // to open one over a section that has no effect either way would lose the part that still works.
 
     if (isRecord(raw.layers)) {
         const layers: Record<string, LayerOverride> = {};

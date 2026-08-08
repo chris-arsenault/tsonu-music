@@ -100,8 +100,14 @@ export interface KernelReadout {
         materialBranchCount: number;
         /** Independently phased, audio-bound parameters moving this frame. */
         activeModulatorCount: number;
-        /** Fraction of the accumulated image surviving one second. */
-        survivalPerSecond: number;
+        /**
+         * Gain of each cycle in the live scene, largest first.
+         *
+         * This was the kernel accumulation's survival per second, which described one buffer that no
+         * longer exists (ADR-0013). How long a scene remembers is now a property of its loops: at 0.9
+         * a cycle settles at ten copies of what enters it, and at one or above it never settles.
+         */
+        loopGains: readonly number[];
         /** Every live instance's resolved parameters, so the editor can show them moving. */
         parameters: Record<string, Record<string, number>>;
         /** The document in control, if one is. */
@@ -470,7 +476,7 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         layerCount: renderer.layerCount(),
                         materialBranchCount: renderer.materialBranchCount(),
                         activeModulatorCount: renderer.activeModulatorCount(),
-                        survivalPerSecond: renderer.persistence().survivalPerSecond,
+                        loopGains: [...renderer.loopGains()].sort((left, right) => right - left),
                         parameters: renderer.liveParameters(),
                         authored: renderer.authoredScene(),
                         problems: renderer.sceneProblems(),

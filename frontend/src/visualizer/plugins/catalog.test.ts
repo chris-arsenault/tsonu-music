@@ -24,7 +24,7 @@ import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, IMAGE_DREAM_THEME, ORGA
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
-import { isMotionSource } from '../core/persistence';
+import { isMotionSource } from '../core/fields';
 import { TEMPORAL_MODES } from './transformers/transforms';
 import type { FrameContext } from '../core/plugin';
 

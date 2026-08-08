@@ -361,7 +361,6 @@ describe('the kernel tail', () => {
         expect(result.scene.kernel.gradeParameters).toEqual(COMPOSITE_PARAMETERS);
         expect(result.scene.kernel.gradeBindings).toBe(COMPOSITE_BINDINGS);
         expect(result.scene.kernel.palette).toBeUndefined();
-        expect(result.scene.kernel.persistence).toBeUndefined();
         expect(result.scene.kernel.layers).toBeUndefined();
         expect(result.scene.kernel.compositeInputs).toBeUndefined();
     });
@@ -391,12 +390,11 @@ describe('the kernel tail', () => {
         expect(result.ok && result.scene.kernel.gradeBindings).toEqual(bindings);
     });
 
-    test('input membership, persistence pins and layer overrides come through', () => {
+    test('input membership, palette and layer overrides come through', () => {
         const result = resolveAuthoredScene(document({
             kernel: {
                 compositeInputs: ['src#0'],
                 palette: { id: 'monochrome-noir', strength: 0 },
-                persistence: { survivalPerSecond: 0.9 },
                 layers: { 'src#0': { opacity: 0 } },
             },
         }), REGISTRY);
@@ -405,16 +403,15 @@ describe('the kernel tail', () => {
         if (!result.ok) return;
         expect(result.scene.kernel.compositeInputs).toEqual(['src#0']);
         expect(result.scene.kernel.palette).toEqual({ id: 'monochrome-noir', strength: 0 });
-        expect(result.scene.kernel.persistence).toEqual({ survivalPerSecond: 0.9 });
         expect(result.scene.kernel.layers).toEqual({ 'src#0': { opacity: 0 } });
     });
 
     test('resolving twice does not share the mutable sections between the results', () => {
-        const kernel = { persistence: { survivalPerSecond: 0.5 } };
+        const kernel = { palette: { id: 'monochrome-noir', strength: 0.5 } };
         const first = resolveAuthoredScene(document({ kernel }), REGISTRY);
 
-        kernel.persistence.survivalPerSecond = 0.1;
+        kernel.palette.strength = 0.1;
 
-        expect(first.ok && first.scene.kernel.persistence?.survivalPerSecond).toBe(0.5);
+        expect(first.ok && first.scene.kernel.palette?.strength).toBe(0.5);
     });
 });

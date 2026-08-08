@@ -16,11 +16,6 @@ import { resolveAuthoredScene } from './core/authored-scene';
 import { removeNode, setParameter } from './core/authored-scene-edit';
 import { mergeUniforms, parameterUniformName, resolveParameters } from './core/parameters';
 import { silentFeatureBus } from './core/features';
-import {
-    applyPersistenceOverrides,
-    frameSurvival,
-    type PersistenceSettings,
-} from './core/persistence';
 import { assetResourceId, type AssetResource } from './core/wiring';
 import type { BuiltScene } from './core/scene-builder';
 
@@ -212,26 +207,20 @@ describe('an authored document drives the frame', () => {
         expect(mergeUniforms(undefined, advanced)[parameterUniformName(parameter)]).toBe(0.375);
     });
 
-    test('a pinned survival reaches the accumulation instead of the theme value', () => {
+    test('a document written against the old kernel section still opens', () => {
+        // The `persistence` block pinned the kernel accumulation, which no longer exists (ADR-0013).
+        // A document carrying one is still a valid graph, so it is read past rather than rejected —
+        // refusing to open one over a section with no effect either way would lose the part that
+        // still works.
         const { document } = captured();
-        const pinned = resolveAuthoredScene({
-            ...document,
-            kernel: { persistence: { survivalPerSecond: 0.9 } },
-        }, REGISTRY);
+        const legacy = resolveAuthoredScene(
+            { ...document, kernel: { persistence: { survivalPerSecond: 0.9 } } } as typeof document,
+            REGISTRY,
+        );
 
-        expect(pinned.ok).toBe(true);
-        if (!pinned.ok) return;
-
-        const computed: PersistenceSettings = {
-            survivalPerSecond: 0.05,
-            transientPunch: 0.2,
-        };
-        const applied = applyPersistenceOverrides(computed, pinned.scene.kernel.persistence);
-
-        expect(applied.survivalPerSecond).toBe(0.9);
-        expect(frameSurvival(applied.survivalPerSecond, 1)).toBeCloseTo(0.9, 6);
-        // The punch was not pinned, so it still follows what the scene computed.
-        expect(applied.transientPunch).toBe(0.2);
+        expect(legacy.ok).toBe(true);
+        if (!legacy.ok) return;
+        expect(legacy.scene.graph.order.length).toBeGreaterThan(0);
     });
 
     test('an edit to one node leaves every other node instance-identical', () => {

@@ -16,7 +16,7 @@ import { isSuppressedByQuality } from './core/passes';
 import { planTargets, RESOURCE_SIZING } from './core/render-plan';
 import { compileGraph } from './core/graph';
 import { assetResourceId, wireScene, type AssetResource } from './core/wiring';
-import { isMotionSource } from './core/persistence';
+import { isMotionSource } from './core/fields';
 import { MASK_SET_OPERATIONS } from './plugins/compositors/composition';
 import { advanceMutation, createMutationState } from './core/scheduler';
 import { POLICY_DURATIONS } from './core/deactivation';

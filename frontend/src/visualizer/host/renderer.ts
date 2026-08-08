@@ -9,7 +9,6 @@
 import type { CompiledGraph } from '../core/graph';
 import {
     advanceCrossfade,
-    composeLayers,
     createLayer,
     crossfadesBetween,
     isCrossfadeComplete,
@@ -17,11 +16,6 @@ import {
     type Crossfade,
     type VisualLayer,
 } from '../core/layers';
-import {
-    persistenceSettings,
-    DEFAULT_THEME_PERSISTENCE,
-    type PersistenceSettings,
-} from '../core/persistence';
 import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from '../core/composite-grade';
 import {
     buildScenePalette,
@@ -46,6 +40,7 @@ import type { QualityProfile } from '../core/performance';
 import type { DiagnosticsControls } from '../core/diagnostics';
 import { buildFirstViableScene, variedThemeOrder } from '../core/scene-builder';
 import { compileGraph } from '../core/graph';
+import { graphCycles } from '../core/loop-gain';
 import { distributeReactivity } from '../core/audio-mapping';
 import { createRng, freshSceneEntropy, instanceSeed, type Rng } from '../core/random';
 import {
@@ -57,7 +52,6 @@ import {
 import { selectKernelInputs } from '../core/kernel-inputs';
 import { captureScene } from '../core/scene-capture';
 import { applyLayerOverrides, type LayerOverride } from '../core/layers';
-import { applyPersistenceOverrides, type PersistenceOverrides } from '../core/persistence';
 import { setParameter } from '../core/authored-scene-edit';
 import {
     decideMutation,
@@ -163,8 +157,14 @@ export interface Renderer {
     materialBranchCount(): number;
     /** Audio-bound parameters also receiving concurrent slow modulation. */
     activeModulatorCount(): number;
-    /** How strongly the composite accumulates and how far it is dragged, as of the last frame. */
-    persistence(): PersistenceSettings;
+    /**
+     * Gain of each cycle in the live scene, as the diagnostics overlay reports it.
+     *
+     * This was `persistence()`, reporting the kernel accumulation's survival and punch. There is no
+     * kernel accumulation (ADR-0013), and the question it was standing in for — how long does this
+     * scene remember — is now answered per loop, by the product of the gains around it.
+     */
+    loopGains(): readonly number[];
     resize(): void;
     dispose(): void;
 }
@@ -257,11 +257,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     runtime.setGraph(scene.graph, instances);
 
     let lostHandled = false;
-    /** Last frame's composite settings, for the diagnostics overlay. */
-    let lastPersistence: PersistenceSettings = {
-        survivalPerSecond: 0,
-        transientPunch: 0,
-    };
 
     /**
      * The compositor's own parameter state, advanced each frame exactly as a plugin instance's is.
@@ -280,7 +275,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let sceneProblems: AuthoredProblem[] = [];
     /** What drives the grade. A document may replace these exactly as it replaces a plugin's. */
     let gradeBindings: readonly ParameterBinding[] = COMPOSITE_BINDINGS;
-    let persistenceOverrides: PersistenceOverrides | undefined;
     let layerOverrides: Record<string, LayerOverride> | undefined;
 
     function colourStrength(theme: typeof scene.theme): number {
@@ -647,7 +641,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
         gradeParameters = { ...built.kernel.gradeParameters };
         gradeBindings = built.kernel.gradeBindings;
-        persistenceOverrides = built.kernel.persistence;
         layerOverrides = built.kernel.layers;
 
         return [];
@@ -718,16 +711,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     0,
                 );
 
-                lastPersistence = applyPersistenceOverrides(persistenceSettings({
-                    themePersistence:
-                        scene.theme.targetCharacter?.persistence ?? DEFAULT_THEME_PERSISTENCE,
-                    layerWeights: composeLayers(composedLayers).feedbackContributors
-                        .map((contributor) => contributor.weight),
-                    rms: frame.features.continuous.rms,
-                    transient: frame.features.continuous.transient,
-                    reducedMotion: frame.profile.reducedMotion,
-                }), persistenceOverrides);
-
                 return runtime.renderFrame({
                     clock: frame.clock,
                     features: frame.features,
@@ -737,18 +720,14 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     renderHeight: canvas.height,
                     layers: composedLayers,
                     crossfades,
-                    // Section 11 gives every layer a feedback participation weight and makes injection
-                    // the compositor's duty. The weights were computed and consumed by nothing; this is
-                    // where they finally decide how strongly the scene accumulates.
-                    persistence: lastPersistence,
                     // Walked along the scheme's own colours by the integrated drift, rather than
                     // hue-rotated: rotating a designed palette destroys the relationships that made
                     // it designed within a few seconds.
                     palette: driftPalette(basePalette, grade.hueDrift ?? 0),
                     grade,
                     // A seek or a new track lands on unrelated material; keeping the old image in the
-                    // accumulation would drag the previous passage across the new one.
-                    clearAccumulation: frame.clearTransients,
+                    // scene's historical slots would drag the previous passage across the new one.
+                    clearHistory: frame.clearTransients,
                     clearTransients: frame.clearTransients,
                     controls: frame.controls,
                     profile: frame.profile,
@@ -776,7 +755,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 sceneProblems = [];
                 gradeBindings = COMPOSITE_BINDINGS;
                 paletteOverride = undefined;
-                persistenceOverrides = undefined;
                 layerOverrides = undefined;
 
                 return applyBuild(buildFresh(profile), false);
@@ -889,8 +867,9 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 );
             },
 
-            persistence() {
-                return lastPersistence;
+            loopGains() {
+                return graphCycles(scene.wired.nodes, scene.wired.edges, scene.parameterOverrides)
+                    .map((cycle) => cycle.gain);
             },
 
             mutate(profile, playbackTime) {

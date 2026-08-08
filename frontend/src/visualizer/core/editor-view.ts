@@ -29,7 +29,9 @@ import type { ResourceId } from './passes';
 /** The kernel's own stages, in the order they run. Ids match the runtime's target keys. */
 export const PALETTE_NODE = 'kernel:palette';
 export const COMPOSITE_NODE = 'kernel:composite';
-export const ACCUMULATE_NODE = 'kernel:accumulate';
+// An `ACCUMULATE_NODE` stood between the composite and the grade, carrying the survival and punch
+// pins. The stage it drew is gone (ADR-0013), and drawing a node for a pass that does not run is the
+// kind of diagram that gets trusted and then contradicts the code.
 export const GRADE_NODE = 'kernel:grade';
 export const CANVAS_NODE = 'kernel:canvas';
 
@@ -469,22 +471,6 @@ function appendKernelTail(
     // stage for it would be drawing something that does not run. Where a field reaches the picture is
     // now an ordinary edge to an ordinary node, which the canvas already shows.
 
-    nodes.push({
-        id: ACCUMULATE_NODE,
-        kind: 'kernel',
-        title: 'Accumulate',
-        subtitle: 'survival, drag, punch',
-        position: { x: column(1), y: 0 },
-        inputs: [{ name: 'composite', required: true, connected: true }],
-        outputs: [{ name: 'accumulation', required: false, connected: true }],
-        parameters: [
-            pinnedRow('survivalPerSecond', kernel?.persistence?.survivalPerSecond),
-            pinnedRow('transientPunch', kernel?.persistence?.transientPunch),
-        ],
-        inspect: ACCUMULATE_NODE,
-        problems: [],
-    });
-
     const gradeValues = { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) };
     const gradeBindings = kernel?.grade?.bindings ?? COMPOSITE_BINDINGS;
     nodes.push({
@@ -544,15 +530,9 @@ function appendKernelTail(
             type: 'palette',
         },
         {
-            id: 'kernel:composite-accumulate',
+            id: 'kernel:composite-grade',
             kind: 'kernel',
             from: { node: COMPOSITE_NODE, port: 'composite' },
-            to: { node: ACCUMULATE_NODE, port: 'composite' },
-        },
-        {
-            id: 'kernel:accumulate-grade',
-            kind: 'kernel',
-            from: { node: ACCUMULATE_NODE, port: 'accumulation' },
             to: { node: GRADE_NODE, port: 'accumulation' },
         },
         {

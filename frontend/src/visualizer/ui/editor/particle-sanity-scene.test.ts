@@ -14,9 +14,9 @@ describe('particle sanity scene', () => {
             .toEqual({ brightness: 1, debug: 1 });
         expect(document.nodes.filter((node) => node.pluginId.startsWith('ParticleCollider:')))
             .toHaveLength(2);
-        expect(document.kernel?.persistence).toEqual({
-            survivalPerSecond: 0,
-            transientPunch: 0,
-        });
+        // The scene draws exactly what the simulator produced this frame. That used to need the
+        // kernel accumulation pinned to zero; with the accumulation gone (ADR-0013) it follows from
+        // the graph holding no loop.
+        expect(document.edges.some((edge) => edge.feedback)).toBe(false);
     });
 });

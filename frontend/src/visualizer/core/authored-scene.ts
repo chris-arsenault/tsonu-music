@@ -27,7 +27,6 @@ import {
 } from './graph';
 import type { DistributedBinding } from './audio-mapping';
 import type { LayerOverride } from './layers';
-import type { PersistenceOverrides } from './persistence';
 import type { PluginRegistry, VisualPluginDefinition } from './plugin';
 import { instanceSeed } from './random';
 import type { WiredScene } from './wiring';
@@ -128,8 +127,11 @@ export interface AuthoredKernel {
         id?: string;
         strength?: number;
     };
-    /** Pinned accumulation values. Absent members keep following the theme and the audio. */
-    persistence?: PersistenceOverrides;
+    // A `persistence` block pinned the kernel accumulation's survival and transient punch, so a trail
+    // could be held still while something else was studied. There is no kernel accumulation to pin
+    // (ADR-0013): what a scene remembers is now a blend node's source weight, which is an ordinary
+    // parameter and is pinned like any other. Documents written before this are still readable; the
+    // block is dropped on load rather than rejected.
     /** Presentation overrides per layer, keyed by the instance that produced it. */
     layers?: Record<string, LayerOverride>;
 }
@@ -197,7 +199,6 @@ export interface ResolvedKernel {
         id?: string;
         strength?: number;
     };
-    persistence?: PersistenceOverrides;
     layers?: Record<string, LayerOverride>;
 }
 
@@ -401,7 +402,6 @@ export function resolveKernel(kernel: AuthoredKernel | undefined): ResolvedKerne
         gradeParameters: { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) },
         gradeBindings: kernel?.grade?.bindings ?? COMPOSITE_BINDINGS,
         ...(kernel?.palette ? { palette: { ...kernel.palette } } : {}),
-        ...(kernel?.persistence ? { persistence: { ...kernel.persistence } } : {}),
         ...(kernel?.layers ? { layers: { ...kernel.layers } } : {}),
     };
 }
