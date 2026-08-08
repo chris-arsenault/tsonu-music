@@ -22,12 +22,13 @@ plugin is `dominance: 'primary'`. Only legibility needs a renderer. Held until t
 rebuilt loops have been looked at, because a fitness function tuned against
 unrendered output is guesswork.
 
-**The layer stack dilutes whatever accumulates.** Median five material branches
-against `maximumFeedbackLoops: 1`, and a measured median of 40 percent of branches
-routing through the loop sink. The other 60 percent are regenerated at fixed screen
-positions each frame and summed in at full weight, so even a deep loop arrives
-diluted about 2.5 to 1. Untouched by ADR-0013, which changed what a loop does and
-not how many branches pass through one.
+**A field can be drawn that wiring never connects.** `collision-energy` with masks
+loaded fails on one seed in twenty: all thirty-two candidates leave their spatial
+field unread, the prune removes it, and the field count then fails. A consumer is
+present in those candidates, so this is a wiring gap rather than a selection one —
+a selection-side repair was tried and had no effect. Theme fallback covers it and
+a test asserts that (200 of 200 entropies still produce a scene), so the cost is
+one family being unavailable for one entropy rather than a black frame.
 
 **A quarter of scenes are exempt from motion by grammar.** `GEOMETRIC_SIGNAL` sets
 `requireSpatialLoop: false` and `requireMotionSource: false`, citing spec §15's
@@ -87,6 +88,14 @@ the role goes quiet with it.
   closing end (was 10), and the median cycle memory is a 1.09-second time constant,
   65 frames at sixty a second, against a kernel that held 0.26 to 0.72 seconds and
   accumulated nothing at any depth.
+- Scenes reaching the canvas in pieces: a colour output nothing read became its own
+  layer and the layer stack summed them, so a source no transform consumed was drawn
+  flat over the picture having passed through nothing — which is why the spectrum
+  read as a thin spectrogram behind the image and why the layers appeared not to
+  interact. N branches take N-1 joins and nothing did that arithmetic. Measured
+  before: 38 of 400 scenes arrived as one image, median three layers. After: 400 of
+  400, and in all 340 scenes holding a waveform or spectrum source, every one of
+  those sources feeds something downstream.
 - Saturation falling with the particle count: the count was never the limit. The
   emission rate was, and the whole subsystem was unbound. See step 4.
 - `spectralCentroid` pinned at its ceiling: the linear 8 kHz cut is gone. See step 2.
