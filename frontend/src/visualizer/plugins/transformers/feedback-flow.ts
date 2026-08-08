@@ -103,6 +103,8 @@ uniform vec2 uResolution;
 uniform float uMode;
 uniform float uStrength;
 uniform float uDecay;
+/** How hard this frame's material enters the loop. Independent of uDecay — see main(). */
+uniform float uInject;
 uniform float uRotation;
 uniform vec2 uDrift;
 uniform float uDelta;
@@ -132,19 +134,25 @@ void main() {
 
     // Attenuated and bounded, through the one helper every historical read uses. uDecay is the
     // fraction surviving a second, so a trail is a duration rather than a frame count.
-    float survival = uDelta > 0.0 ? pow(clamp(uDecay, 0.0, 1.0), uDelta) : 1.0;
     vec4 previous = history(uHistory, sampleUv, uDecay, uDelta);
     vec4 incoming = texture(uSource, vUv);
 
-    // A leaky integrator, not a screen. Screen combines each channel toward one independently and
-    // has no fixed point, so any pixel receiving repeated contribution climbs to white and the
-    // channels saturate in the order they started — which is the wash with a colour cast ADR-0007
-    // recorded on a real device and fixed for the kernel's own accumulation. This loop had the same
-    // combine: a source at 0.3 against a survival of 0.97 settles at 0.935.
+    // Injection is its own parameter, not the complement of survival (ADR-0013).
     //
-    // Survival and injection are complements here too, so a static image converges to exactly
-    // itself and the trail comes from the warp — which is the whole subject of this plugin.
-    fragColor = previous + incoming * (1.0 - survival);
+    // It was incoming times one-minus-survival, which makes the two coefficients sum to one — and the
+    // weights of a convex blend sum to one however many frames it runs for, so the steady state held
+    // exactly one copy of the source, warped into a smear and no further. That is a motion blur, and
+    // it is what this family produced while being the part of the catalog most obviously meant to
+    // make tunnels: nine modes computing MilkDrop's zoom, rotation and translation from audio, each
+    // applied to material that could never build up.
+    //
+    // Free of survival, a cycle here settles at incoming / (1 - perFrameSurvival) copies laid along
+    // the warp's path. Bounded by the geometric series and by the grade's roll-off, which is the
+    // only stage that compresses now — the wash ADR-0007 recorded came from a screen blend, which
+    // has no fixed point in a different way: it drives every channel toward one independently, so
+    // the brightest saturates first and the rest follow as a colour cast. This is a weighted sum,
+    // and it converges wherever uDecay is below one.
+    fragColor = previous + incoming * uInject;
 }`;
 
 /**
@@ -244,7 +252,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         activationRules: { activationWeight: 1.5, minimumDuration: 12, prefersWith: ['PaletteMapper'] },
         // `decay` is the fraction of a trail surviving one second. It was 0.94 per frame at sixty,
         // which is 0.024 over a second.
-        parameters: { strength: 0.02, decay: 0.024, rotation: 0.15 },
+        parameters: { strength: 0.02, decay: 0.024, inject: 0.3, rotation: 0.15 },
         defaultBindings: [
             {
                 // Bass drives large-scale expansion, per the section 20 mapping table.
@@ -265,6 +273,18 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 outputRange: [0.002, 0.4],
                 attack: 0.25,
                 release: 0.9,
+                curve: 'smooth',
+            },
+            {
+                // How hard the present enters the loop, free of how long the past survives. The two
+                // were one number, and tying them is what kept this family producing a smear instead
+                // of the tunnel its nine modes were written for.
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'inject',
+                outputRange: [0.12, 0.5],
+                attack: 0.12,
+                release: 0.5,
                 curve: 'smooth',
             },
             {
@@ -326,6 +346,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         uMode: feedbackModeIndex(mode),
                         uStrength: 0.02,
                         uDecay: 0.024,
+                        uInject: 0.3,
                         uRotation: 0.15,
                         uDrift: drift,
                     };

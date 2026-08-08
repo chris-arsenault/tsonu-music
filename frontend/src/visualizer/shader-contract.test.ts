@@ -348,6 +348,31 @@ describe('every declared loop gain is a per-second survival', () => {
         expect(GLSL_HISTORY).toMatch(/pow\s*\(\s*clamp\s*\(\s*decay/);
         expect(GLSL_HISTORY).toMatch(/clamp\s*\(\s*sampled/);
     });
+
+    /**
+     * No stage may inject the complement of its own survival.
+     *
+     * The defect this whole rebuild came from, written down so it cannot come back quietly. Weighting
+     * the incoming frame by one minus the survival makes the two coefficients sum to one, and the
+     * weights of a convex blend sum to one however many frames it runs for — so the steady state of
+     * any loop through it is exactly one copy of its source, warped into a smear. It looks like the
+     * responsible choice, because it is the thing that guarantees a fixed point, and it is the exact
+     * statement of "this cannot accumulate".
+     *
+     * What bounds the pipeline instead is the grade's roll-off, globally, once (ADR-0013).
+     */
+    test('no shader injects the complement of its own survival', () => {
+        const complement = /\*\s*\(\s*1\.0\s*-\s*(survival|decay|uDecay|uSurvival)\s*\)/;
+
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                expect(
+                    complement.test(source.fragment),
+                    `${definition.id} weights its input by the complement of its survival`,
+                ).toBe(false);
+            }
+        }
+    });
 });
 
 /**
