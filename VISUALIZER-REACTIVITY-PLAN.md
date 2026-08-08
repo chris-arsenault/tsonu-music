@@ -21,7 +21,7 @@ has a decision in it that should be made deliberately rather than inside a fix.
 | 6 | The mask-to-particle path, and the two red tests | R5 | done |
 | 7 | A palette reachable without album artwork | R8 (part) | done |
 | 8 | Historical edges — see [ADR-0012](./docs/adr/0012-visualizer-historical-edges.md) | R9 | designed |
-| 9 | **[hold]** `DomainWarpTransform` driver typing | R7 | design first |
+| 9 | `DomainWarpTransform` driver typing | R7 | done |
 | 10 | **[hold]** Scene selection fitness | R8 | design first |
 
 ## Principles for this pass
@@ -209,14 +209,33 @@ assembled scenes, and 75.3 percent of scenes read some field. The remainder are
 geometric-signal, whose theme excludes the plugins that require one — section 15
 names no field in that family.
 
-### Step 9 — `DomainWarpTransform` driver typing [R7]
+### Step 9 — `DomainWarpTransform` driver typing [R7] — done
 
-Four of six modes read a signed vector field through `luminance()`. The fix is
-not merely to read `driver.rg`: two of the four want a scalar driver and there is
-no scalar-image port for them to ask for. The decision is whether to add one,
-whether to split the plugin, or whether to derive a scalar from the field's
-magnitude — and the same question governs any later plugin that wants an image as
-a control signal.
+Held on a premise that was wrong. The note here said two of the four broken modes
+wanted a scalar driver and no scalar-image port existed to ask for one, so the
+decision was whether to add a port, split the plugin, or derive a scalar from the
+field's magnitude.
+
+There was nothing to decide. Every `vector-field` producer in the catalog writes
+`vec4(x, y, magnitude, 1)` — the procedural and audio fields, the mask boundary
+field's proximity, a particle wake's coverage, and all twenty-four motion passes
+added in step 8.7. The scalar those modes wanted was in `.b` the whole time, and
+the convention was already universal before the question was raised.
+
+`luminance(driver.rgb)` on a roughly zero-mean signed pair is close to zero, so
+`luminance − 0.5` was a constant −0.5: a fixed shift, a fixed rotation, a fixed
+zoom, and a `local-zoom` that reduced to the identity. All four now read `.b`, and
+the modes needing a signed value centre it explicitly rather than assuming a half,
+because the channel is non-negative.
+
+The first mode is renamed `luminance` to `gradient`. It displaces along the slope
+of the strength field, which is what a scalar driver means geometrically, and the
+old name is what invited reading a field as a picture in the first place.
+
+`shader-contract.test.ts` now rejects any plugin that takes a `vector-field` and
+reads it through `luminance()`. The convention held across the whole catalog and
+was still invisible to the one plugin that most needed it, which is the argument
+for testing it rather than documenting it.
 
 ### Step 10 — Scene selection fitness [R8]
 

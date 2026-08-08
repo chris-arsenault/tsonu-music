@@ -155,6 +155,25 @@ void main() {
     fragColor = resampleMotion(vUv, warped(vUv));
 }`;
 
+/**
+ * Reads the driver as what it is: a field, not a picture.
+ *
+ * Four of the six modes took `luminance(driver.rgb)`. The driver is a `vector-field`, and every
+ * producer of one writes `vec4(x, y, magnitude, 1)` — a signed, roughly zero-mean pair in `rg`. Its
+ * luminance is therefore close to zero rather than to a half, so `luminance − 0.5` was a constant
+ * −0.5 and those four modes collapsed: a fixed shift, a fixed rotation, a fixed zoom, and a
+ * `local-zoom` that reduced to the identity. Measured as "very simple transforms, no warp".
+ *
+ * The scalar those modes wanted is `.b`, and it was there the whole time. Every producer in the
+ * catalog fills it — magnitude for the procedural and audio fields, boundary proximity for the mask
+ * field, coverage for a particle wake, and magnitude again for all twenty-four motion passes. It is
+ * non-negative, which is why the modes that need a signed value centre it explicitly rather than
+ * assuming a half.
+ *
+ * The first mode is renamed `gradient`: it displaces along the slope of the strength field, which is
+ * what a scalar driver means geometrically, and calling it `luminance` was what invited reading it
+ * as a picture.
+ */
 const DOMAIN_WARP_BODY = `
 uniform sampler2D uSource;
 uniform sampler2D uField;
@@ -163,23 +182,37 @@ uniform float uMode;
 uniform float uAmount;
 ${GLSL_COMMON}
 
+/** The magnitude channel every vector field publishes. */
+float strengthAt(vec2 uv) {
+    return texture(uField, clamp(uv, 0.0, 1.0)).b;
+}
+
 vec2 warped(vec2 vUv) {
     vec4 driver = texture(uField, vUv);
+    float strength = driver.b;
     vec2 offset;
 
-    if (uMode < 0.5) {                       // luminance displacement
-        offset = vec2(luminance(driver.rgb) - 0.5) * uAmount * 0.2;
+    if (uMode < 0.5) {                       // gradient displacement
+        // Down the slope of the strength field, which is what a scalar driver means: material runs
+        // off the ridges and gathers in the troughs, as it would on a height map.
+        vec2 texel = 1.0 / uResolution;
+        vec2 slope = vec2(
+            strengthAt(vUv + vec2(texel.x, 0.0)) - strengthAt(vUv - vec2(texel.x, 0.0)),
+            strengthAt(vUv + vec2(0.0, texel.y)) - strengthAt(vUv - vec2(0.0, texel.y))
+        ) * 0.5;
+        offset = -slope * uAmount * 0.6;
     } else if (uMode < 1.5) {                // vector displacement
         offset = driver.rg * uAmount * 0.1;
     } else if (uMode < 2.5) {                // angular displacement
-        float angle = (luminance(driver.rgb) - 0.5) * uAmount * 3.0;
-        offset = rotate(vUv - 0.5, angle) - (vUv - 0.5);
+        // Strong regions of the field turn further than weak ones.
+        offset = rotate(vUv - 0.5, strength * uAmount * 1.5) - (vUv - 0.5);
     } else if (uMode < 3.5) {                // scale modulation
-        offset = (vUv - 0.5) * (luminance(driver.rgb) - 0.5) * uAmount * 0.4;
+        // Centred so the frame can pull in as well as push out; the scalar is non-negative.
+        offset = (vUv - 0.5) * (strength - 0.5) * uAmount * 0.4;
     } else if (uMode < 4.5) {                // rotation modulation
         offset = rotate(vUv - 0.5, driver.r * uAmount) - (vUv - 0.5);
     } else {                                 // local zoom
-        offset = -(vUv - 0.5) * luminance(driver.rgb) * uAmount * 0.3;
+        offset = -(vUv - 0.5) * strength * uAmount * 0.3;
     }
 
     return clamp(vUv + offset, 0.0, 1.0);
@@ -465,7 +498,9 @@ export const COORDINATE_WARP_MODES = [
 ] as const;
 
 export const DOMAIN_WARP_MODES = [
-    'luminance', 'vector', 'angular', 'scale', 'rotation', 'local-zoom',
+    // `luminance` was the first of these, and the name is what invited reading a signed vector field
+    // as a picture. It displaces along the slope of the driver's strength, so it is `gradient`.
+    'gradient', 'vector', 'angular', 'scale', 'rotation', 'local-zoom',
 ] as const;
 
 export const TILING_MODES = [

@@ -345,6 +345,47 @@ describe('a plugin that may close an image loop attenuates and bounds it', () =>
     });
 });
 
+/**
+ * What a `vector-field` carries, and why it is worth a test.
+ *
+ * Every producer writes `vec4(x, y, magnitude, 1)`: a signed pair in `rg` and a non-negative scalar
+ * in `b`. Four of `DomainWarpTransform`'s six modes did not know that and read the driver through
+ * `luminance(rgb)` instead — which on a roughly zero-mean pair is close to zero, so `luminance − 0.5`
+ * was a constant and those modes collapsed to a fixed shift, rotation and zoom. The convention held
+ * across the whole catalog and was still invisible to the one plugin that most needed it.
+ */
+describe('a vector field carries a vector and a magnitude', () => {
+    const producers = CATALOG.filter((definition) =>
+        definition.outputs.some((port) => port.type === 'vector-field'));
+
+    test('the catalog has some', () => {
+        expect(producers.length).toBeGreaterThan(10);
+    });
+
+    test('no consumer reads a field through luminance', () => {
+        // `luminance` of a signed zero-mean pair is not a brightness and not a scalar anybody wants.
+        // A plugin needing a scalar from a field reads `.b`.
+        const readsFieldAsPicture: string[] = [];
+
+        for (const definition of CATALOG) {
+            const takesField = definition.inputs.some((port) => port.type === 'vector-field');
+            if (!takesField) {
+                continue;
+            }
+
+            const combined = shaderSources(definition)
+                .map((source) => source.fragment)
+                .join('\n');
+
+            if (/luminance\s*\(\s*\w*[Dd]river/.test(combined) || /luminance\s*\(\s*texture\s*\(\s*uField/.test(combined)) {
+                readsFieldAsPicture.push(definition.id);
+            }
+        }
+
+        expect(readsFieldAsPicture, 'fields read as pictures').toEqual([]);
+    });
+});
+
 describe('uniform names do not collide', () => {
     /** Names `defineShaderPlugin` sends as scalars to every plugin it builds. */
     const BOILERPLATE = ['uTime', 'uPhase', 'uSeed'];

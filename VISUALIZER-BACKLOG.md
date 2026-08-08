@@ -20,12 +20,6 @@ whether the output reads as a Milkdrop-class visualizer: there, the per-frame
 audio variables set the coordinate transform applied to the previous frame, so a
 two percent change compounds across hundreds of frames into a tunnel.
 
-**`DomainWarpTransform` reads a vector field through `luminance()`.** Four of six
-modes treat a signed, roughly zero-mean driver as a colour, so `luminance − 0.5`
-is close to a constant and they collapse to a fixed shift, rotation, or zoom;
-`local zoom` reduces to the identity. Reading `driver.rg` is not the whole fix —
-two of the four want a scalar driver and no scalar-image port exists.
-
 **Selection checks legality and never asks whether a scene is good.**
 `buildFirstViableScene` returns the first candidate satisfying the grammar and
 discards up to thirty-one others unexamined. Scoring them needs a fitness
@@ -77,8 +71,11 @@ the role goes quiet with it.
 - Saturation falling with the particle count: the count was never the limit. The
   emission rate was, and the whole subsystem was unbound. See step 4.
 - `spectralCentroid` pinned at its ceiling: the linear 8 kHz cut is gone. See step 2.
-- `DomainWarpTransform` rendering nearly black with "no warp": explained, not yet
-  fixed. See the held item above.
+- `DomainWarpTransform` rendering nearly black with "no warp": fixed. It read a
+  signed vector field through `luminance()`; the scalar its four broken modes
+  wanted was in `.b`, which every field producer has always written. The held
+  design question — whether to add a scalar-image port — rested on a premise that
+  was never true. See step 9.
 
 ## Working notes
 
