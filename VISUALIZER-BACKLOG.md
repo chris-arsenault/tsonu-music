@@ -1,26 +1,37 @@
 # Visualizer backlog
 
 Open work, most likely to matter first. Findings and evidence live in
-`docs/visualizer-audit-2026-07.md`; completed repairs in `VISUALIZER-REPAIR-PLAN.md`.
+`docs/visualizer-audit-2026-07.md` and `docs/visualizer-audit-2026-08.md`;
+completed repairs in `VISUALIZER-REPAIR-PLAN.md` and
+`VISUALIZER-REACTIVITY-PLAN.md`.
 
-## Known regressions
+## Held for design
 
-**Saturation fell when particle count did.** Mean scene saturation measured 0.72
-after the composition work and 0.47 after the particle rewrite. Solid contact at a
-visible size caps the count at 4096, down from 16384, so coverage dropped. Point
-size is the obvious lever and was deliberately not tuned in the same commit as the
-rewrite.
+Three items from the August audit are repairs only in the sense that something is
+wrong. Each has a decision inside it that should be made deliberately rather than
+inside a fix, and each is written up in `VISUALIZER-REACTIVITY-PLAN.md`.
 
-## Unexplained measurements
+**The accumulation admits one transform.** The previous frame is translated along
+a motion field and nothing else — no audio-driven zoom, rotation, centre, or
+anisotropic scale. Everything the audio touches is regenerated from nothing each
+frame and then attenuated thirty-six fold on the way into a buffer with a
+0.6-second time constant. This is the largest open item and the one that decides
+whether the output reads as a Milkdrop-class visualizer: there, the per-frame
+audio variables set the coordinate transform applied to the previous frame, so a
+two percent change compounds across hundreds of frames into a tunnel.
 
-**`DomainWarpTransform` layers render nearly black.** Measured mean luminance 6.8
-and 14.4 against a particle layer at 76 in the same scene. Reported as "very simple
-transforms, no warp". Cause unknown — the transforms are selected and running.
+**`DomainWarpTransform` reads a vector field through `luminance()`.** Four of six
+modes treat a signed, roughly zero-mean driver as a colour, so `luminance − 0.5`
+is close to a constant and they collapse to a fixed shift, rotation, or zoom;
+`local zoom` reduces to the identity. Reading `driver.rg` is not the whole fix —
+two of the four want a scalar driver and no scalar-image port exists.
 
-**`spectralCentroid` is pinned at its ceiling.** Median 0.999 against
-`CENTROID_CEILING_HZ` of 8000, which makes it dead as a control signal. It drives
-palette tint and complexity. Filed as tuning during the audit and skipped, which was
-the wrong call: a measured-dead channel is a defect.
+**Selection checks legality and never asks whether a scene is good.**
+`buildFirstViableScene` returns the first candidate satisfying the grammar and
+discards up to thirty-one others unexamined. Scoring them needs a fitness
+function; bound-parameter count and role diversity are measurable, but branch
+contrast and focal structure are what decide whether a scene is worth looking at,
+and neither has a measure yet.
 
 ## Not built
 
@@ -33,23 +44,54 @@ which is not a good reason.
 grid stores one list per cell sized to one diameter. Deep pile-ups still need more
 relaxation passes than a frame affords. Only matters if piles become a visual goal.
 
+**A second lateral measure.** The `lateral-force` role admits exactly one feature,
+`stereoBalance`, so a binding distributed there has nothing to fall back to. The
+channel works now, but on near-mono material it correctly reports no movement and
+the role goes quiet with it.
+
 ## Deliberate, recorded here so they are not mistaken for oversights
 
 - **Persistence injection is 2–4% per frame**, attenuating a layer 30–40× between
-  transients. Measured; left alone.
-- **Excitation channels read as gates** (median 0.000, 95th percentile 1.000). That is
-  what an excitation channel is for; binding kind-preservation makes it safe.
+  transients. Measured; left alone, and now part of the accumulation-transform
+  item above rather than a tuning question on its own.
+- **Excitation channels read as gates** (median 0.000, 95th percentile 1.000). That
+  is what an excitation channel is for; binding kind-preservation makes it safe,
+  and they are deliberately excluded from the occupancy normalisation for the same
+  reason.
+- **Level channels no longer express inter-band balance as amplitude.** Each is
+  normalised against its own distribution, so a treble-bound parameter is
+  expressive on a bass-heavy mix. Balance survives in the raw material every later
+  stage derives from and in excitation, which is measured from raw energy. This
+  reverses a decision recorded in `core/features.ts`, on purpose.
+- **Positions in the particle catalog are world pixels**, so emitter origins,
+  force centres, and collider geometry are unbound: any range would be a different
+  fraction of the frame at every render size. Worth revisiting if these become
+  normalised coordinates.
 - **Seven severity-3 audit items** left in place with reasons, in
-  `VISUALIZER-REPAIR-PLAN.md`. The notable one is a `smoothstep` with inverted edges —
-  formally unspecified, correct on every mainstream driver, untestable here.
+  `VISUALIZER-REPAIR-PLAN.md`. The notable one is a `smoothstep` with inverted
+  edges — formally unspecified, correct on every mainstream driver, untestable
+  here.
+
+## Resolved since the last revision
+
+- Saturation falling with the particle count: the count was never the limit. The
+  emission rate was, and the whole subsystem was unbound. See step 4.
+- `spectralCentroid` pinned at its ceiling: the linear 8 kHz cut is gone. See step 2.
+- `DomainWarpTransform` rendering nearly black with "no warp": explained, not yet
+  fixed. See the held item above.
 
 ## Working notes
 
 `frontend/devlab/` is the harness: gitignored, port 26010, five audio beds. The
-inspect dropdown now covers the kernel's own stages (`kernel:composite`,
+inspect dropdown covers the kernel's own stages (`kernel:composite`,
 `kernel:motion`, `kernel:accumulate`) as well as plugin resources — the composition
 was a black box between layers and canvas, and that is why the grade went
 undiagnosed through sixteen commits of fixing things upstream of it.
 
 Measure the middle of a chain, not its ends. Every wrong conclusion in this work came
 from inferring a middle stage from its two ends.
+
+Measure the consumer as well as the producer. The July pass fixed a producer
+emitting four channels in the bottom one percent of their range and stopped there;
+the consumers were still authored against a distribution nothing had, and the
+median binding traversed nineteen percent of its range for another month.

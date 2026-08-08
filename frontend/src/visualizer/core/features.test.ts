@@ -7,6 +7,7 @@ import {
     silentFeatureBus,
     stereoBalance,
     TRANSIENT_GATE_SECONDS,
+    type ContinuousFeatures,
     type FeatureBusInput,
     type FeatureBusState,
     type FeatureSnapshot,
@@ -583,7 +584,7 @@ describe('level channels occupy the range their consumers assume', () => {
     /** Runs ninety seconds and reports what `channel` took after the distribution warmed up. */
     function run(
         material: (frame: number) => FeatureSnapshot,
-        channel: keyof typeof bus,
+        channel: keyof ContinuousFeatures,
     ): number[] {
         let state = createFeatureBusState();
         let audioTime = 100;
@@ -605,7 +606,6 @@ describe('level channels occupy the range their consumers assume', () => {
         return values;
     }
 
-    const bus = createFeatureBusState().bus.continuous;
     const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
 
     test('a mid-range band spreads across the range rather than sitting in a tenth of it', () => {
