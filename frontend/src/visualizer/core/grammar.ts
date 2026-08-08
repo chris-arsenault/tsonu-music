@@ -387,7 +387,11 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     // Clean geometry still wants a trail behind it; without one this family had the least motion of
     // the four while being the one whose shapes move most legibly.
     minimumFeedbackLoops: 1,
-    requireSpatialLoop: true,
+    // A trail, but not a warped one. Section 15 describes this family as a waveform or spectrum
+    // source, parametric or SDF geometry, symmetry, and *restrained* feedback — it names no field,
+    // and a loop that displaces what it reads is the opposite of restrained. The other three
+    // families take one; requiring it here would erase the distinction between them.
+    requireSpatialLoop: false,
     maximumSymmetryTransforms: 1,
     requireVisibleSource: true,
     requireMotionSource: false,

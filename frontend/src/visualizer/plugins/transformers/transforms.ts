@@ -6,14 +6,24 @@
  * since stacking two of them reads as noise rather than as order.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON, GLSL_HISTORY } from '../define';
+import {
+    character,
+    defineShaderPlugin,
+    GLSL_COMMON,
+    GLSL_HISTORY,
+    GLSL_RESAMPLE_MOTION,
+} from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
 
-const SYMMETRY_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
+/**
+ * Uniforms and the coordinate function, shared by this transform's colour pass and its motion pass.
+ *
+ * The two passes answer the same question — which coordinate does this pixel read from — and one of
+ * them then samples the source while the other reports the displacement. Sharing the function is
+ * what stops them drifting apart, which duplicated branch logic across two shaders would guarantee
+ * eventually.
+ */
+const SYMMETRY_BODY = `
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uMode;
@@ -21,8 +31,8 @@ uniform float uSectors;
 uniform float uPhase;
 ${GLSL_COMMON}
 
-void main() {
-    vec2 p = vUv - 0.5;
+vec2 folded(vec2 uv) {
+    vec2 p = uv - 0.5;
 
     if (uMode < 0.5) {                       // horizontal mirror
         p.x = abs(p.x);
@@ -63,14 +73,31 @@ void main() {
         p.x = abs(p.x);
     }
 
-    fragColor = texture(uSource, clamp(p + 0.5, 0.0, 1.0));
+    return clamp(p + 0.5, 0.0, 1.0);
 }`;
 
-const COORDINATE_WARP_FRAGMENT = `#version 300 es
+const SYMMETRY_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
+${SYMMETRY_BODY}
 
+void main() {
+    fragColor = texture(uSource, folded(vUv));
+}`;
+
+const SYMMETRY_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${SYMMETRY_BODY}
+${GLSL_RESAMPLE_MOTION}
+
+void main() {
+    fragColor = resampleMotion(vUv, folded(vUv));
+}`;
+
+const COORDINATE_WARP_BODY = `
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uMode;
@@ -78,8 +105,8 @@ uniform float uAmount;
 uniform float uTime;
 ${GLSL_COMMON}
 
-void main() {
-    vec2 p = vUv - 0.5;
+vec2 warped(vec2 uv) {
+    vec2 p = uv - 0.5;
     float radius = length(p);
     float angle = atan(p.y, p.x);
 
@@ -104,74 +131,31 @@ void main() {
         p.x += p.y * uAmount * 0.3;
     }
 
-    fragColor = texture(uSource, clamp(p + 0.5, 0.0, 1.0));
+    return clamp(p + 0.5, 0.0, 1.0);
 }`;
 
-/**
- * The displacement the warp above applies, published rather than discarded (ADR-0012).
- *
- * The same nine branches produce the same `p`, and where the source is read *from* against where it
- * is written *to* is exactly a displacement. Applied once to freshly generated material that is a
- * distortion; read by a feedback warp and applied to what it produced last frame, it compounds.
- *
- * Sign is reversed against the sampling offset: the pass above reads at `p` and writes at `vUv`, so
- * material travels from `p` toward `vUv`, and a field is a velocity — it points where the material
- * is going.
- */
+const COORDINATE_WARP_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${COORDINATE_WARP_BODY}
+
+void main() {
+    fragColor = texture(uSource, warped(vUv));
+}`;
+
 const COORDINATE_WARP_MOTION = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform vec2 uResolution;
-uniform float uMode;
-uniform float uAmount;
-uniform float uTime;
-${GLSL_COMMON}
-
-/** How much of the warp is expressed per second. A warp is a position; a field is a rate. */
-const float WARP_RATE = 1.4;
+${COORDINATE_WARP_BODY}
+${GLSL_RESAMPLE_MOTION}
 
 void main() {
-    vec2 p = vUv - 0.5;
-    float radius = length(p);
-    float angle = atan(p.y, p.x);
-
-    if (uMode < 0.5) {
-        float ripple = sin(radius * 18.0 - uTime * 0.7) * uAmount * 0.04;
-        p = vec2(angle / 6.2831853 + 0.5 + ripple, radius * (1.0 + uAmount * 0.12)) - 0.5;
-    } else if (uMode < 1.5) {
-        p = vec2(angle / 6.2831853, log(max(radius, 0.001)) * 0.25 + uTime * 0.1) - 0.5;
-    } else if (uMode < 2.5) {
-        p = rotate(p, uAmount * (1.0 - radius * 2.0));
-    } else if (uMode < 3.5) {
-        p *= 1.0 - uAmount * (1.0 - radius);
-    } else if (uMode < 4.5) {
-        p *= 1.0 + uAmount * (1.0 - radius);
-    } else if (uMode < 5.5) {
-        p *= 1.0 + uAmount * radius * radius;
-    } else if (uMode < 6.5) {
-        p += vec2(sin(p.y * 14.0 + uTime * 2.0), sin(p.x * 14.0 - uTime * 1.7)) * uAmount * 0.06;
-    } else if (uMode < 7.5) {
-        p *= 1.0 - uAmount * 0.4 * radius * radius;
-    } else {
-        p.x += p.y * uAmount * 0.3;
-    }
-
-    // The two polar modes rewrite the coordinate outright rather than nudging it, so their
-    // difference spans the frame rather than describing a local displacement. Bounded so one mode
-    // cannot dominate every field it is read beside.
-    vec2 field = clamp(((vUv - 0.5) - p) * WARP_RATE, vec2(-2.0), vec2(2.0));
-
-    fragColor = vec4(field, length(field), 1.0);
+    fragColor = resampleMotion(vUv, warped(vUv));
 }`;
 
-const DOMAIN_WARP_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
+const DOMAIN_WARP_BODY = `
 uniform sampler2D uSource;
 uniform sampler2D uField;
 uniform vec2 uResolution;
@@ -179,7 +163,7 @@ uniform float uMode;
 uniform float uAmount;
 ${GLSL_COMMON}
 
-void main() {
+vec2 warped(vec2 vUv) {
     vec4 driver = texture(uField, vUv);
     vec2 offset;
 
@@ -198,14 +182,31 @@ void main() {
         offset = -(vUv - 0.5) * luminance(driver.rgb) * uAmount * 0.3;
     }
 
-    fragColor = texture(uSource, clamp(vUv + offset, 0.0, 1.0));
+    return clamp(vUv + offset, 0.0, 1.0);
 }`;
 
-const TILING_FRAGMENT = `#version 300 es
+const DOMAIN_WARP_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
+${DOMAIN_WARP_BODY}
 
+void main() {
+    fragColor = texture(uSource, warped(vUv));
+}`;
+
+const DOMAIN_WARP_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${DOMAIN_WARP_BODY}
+${GLSL_RESAMPLE_MOTION}
+
+void main() {
+    fragColor = resampleMotion(vUv, warped(vUv));
+}`;
+
+const TILING_BODY = `
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uMode;
@@ -213,7 +214,7 @@ uniform float uRepeat;
 uniform float uTime;
 ${GLSL_COMMON}
 
-void main() {
+vec2 tiled(vec2 vUv) {
     vec2 p = vUv;
     float repeat = max(uRepeat, 1.0);
 
@@ -248,7 +249,28 @@ void main() {
         p = hash(cell) > 0.5 ? local : vec2(local.y, 1.0 - local.x);
     }
 
-    fragColor = texture(uSource, clamp(p, 0.0, 1.0));
+    return clamp(p, 0.0, 1.0);
+}`;
+
+const TILING_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${TILING_BODY}
+
+void main() {
+    fragColor = texture(uSource, tiled(vUv));
+}`;
+
+const TILING_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${TILING_BODY}
+${GLSL_RESAMPLE_MOTION}
+
+void main() {
+    fragColor = resampleMotion(vUv, tiled(vUv));
 }`;
 
 const EDGE_CONTOUR_FRAGMENT = `#version 300 es
@@ -295,11 +317,7 @@ void main() {
     }
 }`;
 
-const SHOCKWAVE_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
+const SHOCKWAVE_BODY = `
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uMode;
@@ -311,43 +329,88 @@ uniform float uImpactRadius;
 uniform float uImpactEnergy;
 ${GLSL_COMMON}
 
-void main() {
-    // A live impact wins: the ring is centred where the collision happened and travels outward with it.
-    // With no impact, spectral flux drives a ring from the centre so the transform still responds to audio.
+/** Where the ring is and how hard it is pushing, shared by both passes. */
+struct Shock {
+    vec2 direction;
+    float band;
+    float strength;
+    float distance;
+};
+
+Shock shockAt(vec2 vUv) {
+    // A live impact wins: the ring is centred where the collision happened and travels outward with
+    // it. With no impact, spectral flux drives a ring from the centre so the transform still
+    // responds to audio.
     bool hasImpact = uImpactEnergy > 0.001;
     vec2 centre = hasImpact ? uImpactCentre : uCentre;
     float ringRadius = hasImpact ? uImpactRadius : uRadius;
-    float strength = uAmount * (hasImpact ? clamp(uImpactEnergy, 0.0, 2.0) : 1.0);
 
     vec2 toCentre = vUv - centre;
     float distance = length(toCentre);
-    // A band travelling outward, rather than a global distortion.
-    float band = 1.0 - smoothstep(0.0, 0.14, abs(distance - ringRadius));
-    vec2 direction = normalize(toCentre + 1e-5);
-    vec2 offset = vec2(0.0);
 
+    return Shock(
+        normalize(toCentre + 1e-5),
+        // A band travelling outward, rather than a global distortion.
+        1.0 - smoothstep(0.0, 0.14, abs(distance - ringRadius)),
+        uAmount * (hasImpact ? clamp(uImpactEnergy, 0.0, 2.0) : 1.0),
+        distance
+    );
+}
+
+/** How far this pixel reads from where it writes. Zero for the chromatic mode: see below. */
+vec2 shockOffset(Shock shock) {
     if (uMode < 0.5) {                       // radial bulge
-        offset = direction * band * strength * 0.08;
+        return shock.direction * shock.band * shock.strength * 0.08;
     } else if (uMode < 1.5) {                // compression ring
-        offset = -direction * band * strength * 0.06;
+        return -shock.direction * shock.band * shock.strength * 0.06;
     } else if (uMode < 2.5) {                // refraction ring
-        offset = direction * band * strength * 0.05 * sin(distance * 40.0);
+        return shock.direction * shock.band * shock.strength * 0.05 * sin(shock.distance * 40.0);
     } else if (uMode < 3.5) {                // chromatic shock
-        float shift = band * strength * 0.02;
+        // The channels separate about the pixel rather than the image moving, so there is no net
+        // displacement to report — a field claiming one here would drag the accumulation for
+        // something the eye reads as colour fringing.
+        return vec2(0.0);
+    } else if (uMode < 4.5) {                // directional blast
+        return vec2(shock.band * shock.strength * 0.09, 0.0);
+    }
+
+    // gravitational lens
+    return -shock.direction * shock.strength * 0.05 / max(shock.distance * shock.distance, 0.02);
+}
+`;
+
+const SHOCKWAVE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${SHOCKWAVE_BODY}
+
+void main() {
+    Shock shock = shockAt(vUv);
+
+    if (uMode >= 2.5 && uMode < 3.5) {
+        float shift = shock.band * shock.strength * 0.02;
         fragColor = vec4(
-            texture(uSource, clamp(vUv + direction * shift, 0.0, 1.0)).r,
+            texture(uSource, clamp(vUv + shock.direction * shift, 0.0, 1.0)).r,
             texture(uSource, vUv).g,
-            texture(uSource, clamp(vUv - direction * shift, 0.0, 1.0)).b,
+            texture(uSource, clamp(vUv - shock.direction * shift, 0.0, 1.0)).b,
             1.0
         );
         return;
-    } else if (uMode < 4.5) {                // directional blast
-        offset = vec2(band * strength * 0.09, 0.0);
-    } else {                                 // gravitational lens
-        offset = -direction * strength * 0.05 / max(distance * distance, 0.02);
     }
 
-    fragColor = texture(uSource, clamp(vUv + offset, 0.0, 1.0));
+    fragColor = texture(uSource, clamp(vUv + shockOffset(shock), 0.0, 1.0));
+}`;
+
+const SHOCKWAVE_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+${SHOCKWAVE_BODY}
+${GLSL_RESAMPLE_MOTION}
+
+void main() {
+    fragColor = resampleMotion(vUv, vUv + shockOffset(shockAt(vUv)));
 }`;
 
 export const SYMMETRY_MODES = [
@@ -381,10 +444,14 @@ export function createSymmetryTransform(
         id: `SymmetryTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
         // Declared so the grammar's symmetry cap applies; two stacked read as noise.
-        capabilities: ['symmetry'],
+        capabilities: ['symmetry', 'vector-field'],
         fragment: SYMMETRY_FRAGMENT,
+        motion: { port: 'motion', fragment: SYMMETRY_MOTION },
         uniforms: { uMode: SYMMETRY_MODES.indexOf(mode), uSectors: 6 },
         parameters: { sectors: 6, spin: 0 },
         bindings: [
@@ -462,9 +529,13 @@ export function createDomainWarpTransform(
             // Uses one source or field to distort another, so the driver is required.
             { name: 'field', type: 'vector-field', required: true },
         ],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['domain-warp'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['domain-warp', 'vector-field'],
         fragment: DOMAIN_WARP_FRAGMENT,
+        motion: { port: 'motion', fragment: DOMAIN_WARP_MOTION },
         uniforms: { uMode: DOMAIN_WARP_MODES.indexOf(mode), uAmount: 1 },
         parameters: { amount: 1 },
         bindings: [{
@@ -488,9 +559,13 @@ export function createTilingTransform(
         id: `TilingTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['tiling'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['tiling', 'vector-field'],
         fragment: TILING_FRAGMENT,
+        motion: { port: 'motion', fragment: TILING_MOTION },
         uniforms: { uMode: TILING_MODES.indexOf(mode), uRepeat: 3 },
         parameters: { repeat: 3 },
         bindings: [{
@@ -548,10 +623,14 @@ export function createShockwaveTransform(
         id: `ShockwaveTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
         // Consumes impacts and onsets, which is why it belongs beside the impact simulator.
-        capabilities: ['shockwave', 'impact-consumer'],
+        capabilities: ['shockwave', 'impact-consumer', 'vector-field'],
         fragment: SHOCKWAVE_FRAGMENT,
+        motion: { port: 'motion', fragment: SHOCKWAVE_MOTION },
         uniforms: { uMode: SHOCKWAVE_MODES.indexOf(mode), uAmount: 1, uRadius: 0.3, uCentre: [0.5, 0.5] },
         parameters: { amount: 1, radius: 0.3 },
         bindings: [{

@@ -17,7 +17,7 @@ import {
 import { silentFeatureBus } from '../core/features';
 import { compileGraph } from '../core/graph';
 import { assetResourceId, wireScene, type AssetResource } from '../core/wiring';
-import { buildScene } from '../core/scene-builder';
+import { buildScene, consumesMotion } from '../core/scene-builder';
 import { profileFor, QUALITY_LADDER } from '../core/performance';
 import { COLLISION_ENERGY, GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } from '../core/grammar';
 import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, IMAGE_DREAM_THEME, ORGANIC_FLOW_THEME, THEMES } from './themes';
@@ -672,8 +672,11 @@ describe('scenes accumulate and move', () => {
         // Section 15 describes geometric signal as a waveform or spectrum source, parametric or SDF
         // geometry, symmetry, and restrained feedback. It names no field, so its scenes accumulate and
         // decay without being dragged. Requiring motion everywhere would erase the distinction.
-        const undragged = scenesFor(GEOMETRIC_SIGNAL_THEME).filter((scene) =>
-            !scene.graph.resources.some((resource) => isMotionSource(resource.type)));
+        //
+        // Asked about consumption rather than production. Almost every transform now publishes the
+        // displacement it applies (ADR-0012), so a scene containing one has a motion resource
+        // whether or not anything reads it — and being dragged is a fact about an edge.
+        const undragged = scenesFor(GEOMETRIC_SIGNAL_THEME).filter((scene) => !consumesMotion(scene.wired));
 
         expect(undragged.length).toBeGreaterThan(0);
     });

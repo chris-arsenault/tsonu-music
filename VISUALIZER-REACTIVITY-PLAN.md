@@ -160,27 +160,40 @@ and points the edge at the plugin's own output.
 | 8.4 | `producesMotion` and `requireMotionSource` ask whether a field *reaches a consumer*, the predicate ADR-0008 deferred | `core/grammar.ts`, `core/scene-builder.ts` |
 | 8.5 | Retire the motion-field bus; remove the drag from `PERSISTENCE_SHADER`, keeping decay, black floor, and the integrator | `host/runtime.ts`, `host/composite-shaders.ts` |
 | 8.6 | A warp plugin whose `source` is historical, so displacement exists as a plugin before the kernel's is removed | `plugins/transformers/` |
-| 8.7 | Publish the discarded quantity from the families that already compute one — the table below. **Mechanism done; `CoordinateWarpTransform` and `ParticleRenderer` done; eleven families remain** | catalog |
+| 8.7 | Publish the discarded quantity from the families that already compute one — the table below | catalog |
 | 8.8 | Editor: historical edges are drawn and togglable, since where a loop closes changes a composition more than which plugins are in it | `ui/editor/` |
 
 Order matters at two points. 8.6 lands before 8.5 so the picture never loses its
 drag between commits, and 8.2 lands before 8.1 so no loop can be closed before the
 bound on it exists.
 
-**What each family already computes and throws away**, for 8.7:
+**What each family computed and threw away**, all now published:
 
-| family | discarded quantity |
+| family | quantity | how it is derived |
+| --- | --- | --- |
+| `CoordinateWarpTransform` (9), `DomainWarpTransform` (6), `SymmetryTransform` (8), `TilingTransform` (8), `ShockwaveTransform` (6) | the per-pixel offset it applies once | the coordinate function is shared between the colour pass and the motion pass, so the two cannot disagree about what the transform did |
+| `FeedbackFlowTransform` (9) | MilkDrop's `zoom/rot/dx/dy`, already audio-bound | the same shared warp function; the vector-field mode publishes zero rather than republishing what it read |
+| `SDFShapeSource` (7) | the turn and the breath | rotation is tangential and grows with radius, the pulse is radial; both known exactly from the shader |
+| `ProceduralTextureSource` (8) | stripes, rings, checker and angular scroll on `uTime` | the direction is read off the expression per mode; the three static modes publish nothing |
+| `SignalTraceSource` (8), `SpectrumGeometrySource` (8) | how the waveform and each band are moving | vertex *i* is the same position every frame, so differencing it across frames is a real velocity; drawn as sized points because a one-pixel line displaces nothing |
+| `WaveFieldView`, `ReactionDiffusionView` | propagation, chemical gradient | central differences over the state; the wave needs no derivation at all, since velocity is already a channel |
+| `ParticleRenderer` (4) | body velocities | already carried; the vertex buffer grew to bring them to the GPU |
+
+Deliberately silent, with the reason:
+
+| family | why |
 | --- | --- |
-| `CoordinateWarpTransform` (9), `DomainWarpTransform` (6) | the per-pixel offset it applies once |
-| `FeedbackFlowTransform` (9) | zoom, rotate, translate, spiral, pinch — MilkDrop's `zoom/rot/dx/dy`, already audio-bound |
-| `SymmetryTransform` (8), `SDFShapeSource` (7) | `spin`, an integrated phase velocity |
-| `ProceduralTextureSource` (8) | stripes, rings, checker, and angular all scroll on `uTime` |
-| `SignalTraceSource` (9), `ParametricCurveSource` (8) | the tangent the trace sweeps along |
-| `SpectrumGeometrySource` (8) | the rise and fall of each band |
-| `WaveFieldSimulator`, `ReactionDiffusionSimulator` | propagation direction, chemical gradient |
-| `ShockwaveTransform` (4) | the expanding ring on a hit |
-| `ParticleRenderer` (4) | body velocities |
-| `AlbumArtSource`, `LayerMixer`, `MaskRouter` | nothing, honestly — static imagery, or a join |
+| `LayerMixer`, `MaskRouter`, `ColorTransform`, `PaletteMapper`, `GlowAndScatter`, `ToneMapper` | a join, a route, or a colour operation — no coordinate moves |
+| `AlbumArtSource`, `AlbumArtEdges`, `ProceduralPalette` | static material |
+| `ParametricCurveSource` (8) | the curve is redrawn from parameters each frame and does not travel; the modes that animate do so by changing shape, which is not a displacement of anything |
+| `EdgeContourTransform`, `TemporalTransform` | neighbour taps and history taps, not a displacement of present material |
+| `ParticleSimulator`, `ParticleEmitter`, `ParticleForceField`, `ParticleCollider` | value nodes that publish configuration, not pixels |
+| `FieldFeedbackTransform`, `FlowFieldCompositor` | they read a field to decide their warp; republishing it would put one displacement in the graph twice |
+
+Measured after: seventeen families publish, thirteen of them have their motion
+read in assembled scenes, and 77.7 percent of scenes read some field. The
+remainder are geometric-signal, whose theme now excludes the plugins that require
+one — section 15 names no field in that family.
 
 ### Step 9 — `DomainWarpTransform` driver typing [R7]
 

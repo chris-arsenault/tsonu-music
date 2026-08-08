@@ -265,10 +265,15 @@ describe('plugin render contracts', () => {
         const { frame, uploads } = frameContext();
         instance.update(frame);
 
-        expect(uploads).toHaveLength(1);
+        // Two uploads: the strip the colour pass draws, and the same vertices carrying the velocity
+        // the motion pass publishes. See ADR-0012.
+        // The helper divides by three, which is the colour buffer's stride; the motion buffer packs
+        // four floats a vertex — a position and a velocity — so its count reads four thirds of that.
+        expect(uploads).toHaveLength(2);
         expect(uploads[0].vertexCount).toBe(256);
+        expect(uploads[1].vertexCount).toBeCloseTo(256 * 4 / 3, 5);
 
-        const passes = instance.render({
+        const colourOnly = instance.render({
             inputs: {},
             outputs: { color: 'trace.color' },
             previous: {},
@@ -276,9 +281,22 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        expect(countPasses(passes)).toBe(1);
-        expect(isGeometryPass(passes[0])).toBe(true);
-        expect(passes[0].output).toBe('trace.color');
+        // The motion pass appears only when something asked for the port, so a scene that does not
+        // read the trace's motion does not pay for it.
+        expect(countPasses(colourOnly)).toBe(1);
+        expect(isGeometryPass(colourOnly[0])).toBe(true);
+        expect(colourOnly[0].output).toBe('trace.color');
+
+        const withMotion = instance.render({
+            inputs: {},
+            outputs: { color: 'trace.color', motion: 'trace.motion' },
+            previous: {},
+            renderWidth: 640,
+            renderHeight: 360,
+        });
+
+        expect(countPasses(withMotion)).toBe(2);
+        expect(withMotion[1].output).toBe('trace.motion');
     });
 
     test('the feedback transform reads its previous frame when one is wired', () => {

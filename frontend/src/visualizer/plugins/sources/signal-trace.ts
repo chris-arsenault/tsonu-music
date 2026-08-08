@@ -35,6 +35,47 @@ export const SIGNAL_TRACE_MODES: readonly SignalTraceMode[] = [
 
 const SHADER_ID = 'signal-trace';
 const GEOMETRY_ID = 'signal-trace-vertices';
+const MOTION_SHADER_ID = 'signal-trace:motion';
+const MOTION_GEOMETRY_ID = 'signal-trace-motion-vertices';
+
+/**
+ * The trace's own movement, published as a field (ADR-0012).
+ *
+ * Drawn as sized points rather than as the line strip the colour pass uses. A line is one pixel wide
+ * on every driver that caps `lineWidth`, and a displacement field one pixel wide displaces nothing —
+ * it has to have reach before anything reading it can carry material along the trace.
+ */
+const MOTION_VERTEX = `#version 300 es
+in vec2 aPosition;
+in vec2 aVelocity;
+out vec2 vVelocity;
+
+uniform float uReach;
+
+void main() {
+    vVelocity = aVelocity;
+    gl_PointSize = uReach;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
+
+const MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vVelocity;
+out vec4 fragColor;
+
+uniform float uWakeScale;
+
+void main() {
+    float falloff = 1.0 - smoothstep(0.1, 0.5, length(gl_PointCoord - 0.5));
+    if (falloff <= 0.0) {
+        discard;
+    }
+
+    // Positions are already in clip space, which spans two units across the frame against UV's one.
+    vec2 field = vVelocity * 0.5 * uWakeScale * falloff;
+
+    fragColor = vec4(field, falloff, 1.0);
+}`;
 const MAX_VERTICES = 2048;
 
 const VERTEX = `#version 300 es
@@ -158,9 +199,14 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
         version: 1,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
-        capabilities: ['waveform-geometry'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            // What the waveform is doing to the shape, which is the thing this plugin knows and
+            // nothing else in the graph can see.
+            { name: 'motion', type: 'vector-field', required: false },
+        ],
+        capabilities: ['waveform-geometry', 'vector-field'],
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.35,
             motionEnergy: 0.6,
@@ -176,7 +222,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             activationWeight: 7,
             minimumDuration: 8,
         },
-        parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4 },
+        parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4, wakeScale: 1.2 },
         defaultBindings: [
             {
                 feature: 'rmsExcite',
@@ -196,6 +242,17 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                 curve: 'sqrt',
             },
             {
+                // How hard the trace pulls the image it is drawn over, for anything reading its
+                // motion. Large-scale force, as every other drag parameter takes.
+                feature: 'bass',
+                role: 'large-scale-force',
+                parameter: 'wakeScale',
+                outputRange: [0.3, 2.4],
+                attack: 0.1,
+                release: 0.6,
+                curve: 'smooth',
+            },
+            {
                 feature: 'treble',
                 parameter: 'brightness',
                 outputRange: [0.9, 2.2],
@@ -208,16 +265,35 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
 
         create(context): VisualPluginInstance {
             const vertices = new Float32Array(MAX_VERTICES * 3);
+            /**
+             * Last frame's vertices, so the trace can say how fast it is moving (ADR-0012).
+             *
+             * Vertex `i` is the same position along the trace every frame — the same angle on a
+             * circle, the same column on an oscilloscope — so differencing it across frames is a
+             * genuine velocity of the material drawn there, not an artefact of regenerating the
+             * geometry. It is what the waveform is doing to the shape, which is the thing this
+             * plugin knows and nothing else in the graph can see.
+             */
+            const previous = new Float32Array(MAX_VERTICES * 3);
+            /** Position and velocity per vertex, for the pass that publishes the motion. */
+            const motion = new Float32Array(MAX_VERTICES * 4);
+            let hasPrevious = false;
             let vertexCount = 0;
             let phase = 0;
 
             return {
                 initialize() {
                     context.registerShader({ id: SHADER_ID, vertex: VERTEX, fragment: FRAGMENT });
+                    context.registerShader({
+                        id: MOTION_SHADER_ID,
+                        vertex: MOTION_VERTEX,
+                        fragment: MOTION_FRAGMENT,
+                    });
                 },
 
                 activate() {
                     phase = context.seed * Math.PI * 2;
+                    hasPrevious = false;
                 },
 
                 update(frame) {
@@ -241,6 +317,30 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         ],
                     };
                     frame.uploadGeometry(upload);
+
+                    // A frozen clock gives no velocity rather than an infinite one, and the first
+                    // frame after activation has nothing to difference against.
+                    const rate = hasPrevious && frame.deltaSeconds > 0 ? 1 / frame.deltaSeconds : 0;
+                    for (let index = 0; index < vertexCount; index += 1) {
+                        const from = index * 3;
+                        const to = index * 4;
+                        motion[to] = vertices[from];
+                        motion[to + 1] = vertices[from + 1];
+                        motion[to + 2] = (vertices[from] - previous[from]) * rate;
+                        motion[to + 3] = (vertices[from + 1] - previous[from + 1]) * rate;
+                    }
+
+                    previous.set(vertices.subarray(0, vertexCount * 3));
+                    hasPrevious = true;
+
+                    frame.uploadGeometry({
+                        id: MOTION_GEOMETRY_ID,
+                        data: motion.subarray(0, vertexCount * 4),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aVelocity', components: 2 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
@@ -248,7 +348,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         return [];
                     }
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'geometry',
                         shader: SHADER_ID,
                         geometry: GEOMETRY_ID,
@@ -262,6 +362,24 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                             uBrightness: 1.4,
                         },
                     }];
+
+                    if (render.outputs.motion) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: MOTION_SHADER_ID,
+                            geometry: MOTION_GEOMETRY_ID,
+                            // Points, not the line strip above: a one-pixel line displaces nothing.
+                            primitive: 'points',
+                            vertexCount,
+                            output: render.outputs.motion,
+                            // Overlapping samples moving together drag harder; moving apart, cancel.
+                            blend: 'add',
+                            clear: true,
+                            uniforms: { uReach: 14 },
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {

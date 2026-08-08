@@ -318,6 +318,32 @@ vec4 history(sampler2D previous, vec2 uv, float decay, float delta) {
 }
 `;
 
+/**
+ * The displacement a resampling transform applies, as a field (ADR-0012).
+ *
+ * Every transform that warps, folds, tiles, or shocks answers one question per pixel — which
+ * coordinate to read from — and the difference between where it reads and where it writes is exactly
+ * a displacement. Each of those plugins now shares its coordinate function between the colour pass
+ * and the motion pass, so the two cannot disagree about what the transform did.
+ *
+ * The sign is reversed against the sampling offset. A transform reads at `source` and writes at
+ * `uv`, so material travels from `source` toward `uv`, and a field is a velocity — it points where
+ * the material is going.
+ */
+export const GLSL_RESAMPLE_MOTION = `
+/** How much of a resampling is expressed per second. A warp is a position; a field is a rate. */
+const float RESAMPLE_RATE = 1.4;
+
+vec4 resampleMotion(vec2 uv, vec2 source) {
+    // Bounded because the polar and tiling modes rewrite the coordinate outright rather than nudging
+    // it, so their difference spans the frame rather than describing a local displacement, and one
+    // mode should not dominate every field it is read beside.
+    vec2 field = clamp((uv - source) * RESAMPLE_RATE, vec2(-2.0), vec2(2.0));
+
+    return vec4(field, length(field), 1.0);
+}
+`;
+
 /** GLSL helpers shared across the catalog, prepended where needed. */
 export const GLSL_COMMON = `
 float hash(vec2 p) {

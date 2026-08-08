@@ -110,6 +110,19 @@ describe('every shader is structurally well formed', () => {
         }
     });
 
+    test('no shader body contains a backtick', () => {
+        // Every shader in the catalog is a template literal, so a backtick inside a GLSL comment
+        // terminates the string early. TypeScript then reports a syntax error somewhere after the
+        // shader with no indication that a comment caused it, which cost four separate diagnoses
+        // while this work was going on. A backtick can only ever appear here by that mistake.
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                expect(source.fragment.includes('`'), `${definition.id} fragment`).toBe(false);
+                expect(source.vertex.includes('`'), `${definition.id} vertex`).toBe(false);
+            }
+        }
+    });
+
     test('no shader interpolates an undefined value', () => {
         // A template literal referencing a missing constant produces the literal text "undefined".
         for (const definition of CATALOG) {

@@ -13,10 +13,28 @@ import {
     ORGANIC_FLOW,
 } from '../core/grammar';
 import { DEFAULT_MUTATION_POLICY, type VisualTheme } from '../core/scheduler';
+import { DOMAIN_WARP_MODES } from './transformers/transforms';
 
 export const GEOMETRIC_SIGNAL_THEME: VisualTheme = {
     id: 'geometric-signal',
     grammar: GEOMETRIC_SIGNAL,
+    /**
+     * The three plugins that cannot run without a field.
+     *
+     * Section 15 describes this family as a waveform or spectrum source, parametric or SDF geometry,
+     * symmetry, and restrained feedback. It names no field, and that is the distinction between this
+     * family and the other three — its scenes accumulate and decay without being dragged.
+     *
+     * Excluding them became necessary when the transforms began publishing the displacement they
+     * apply (ADR-0012). Fields went from something a scene had to select on purpose to something
+     * almost every transform emits, so a plugin that requires one became satisfiable everywhere, and
+     * all twenty-four sampled scenes in this family ended up dragged.
+     */
+    excludedPlugins: [
+        'FieldFeedbackTransform',
+        'FlowFieldCompositor',
+        ...DOMAIN_WARP_MODES.map((mode) => `DomainWarpTransform:${mode}`),
+    ],
     targetCharacter: {
         geometricOrder: 0.85,
         visualDensity: 0.3,

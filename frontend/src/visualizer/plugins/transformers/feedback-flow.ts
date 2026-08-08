@@ -44,33 +44,21 @@ export const FEEDBACK_FLOW_MODES: readonly FeedbackFlowMode[] = [
 ];
 
 const SHADER_ID = 'feedback-flow';
+const MOTION_SHADER_ID = 'feedback-flow:motion';
 
 /** Mode selector passed as a uniform, so one program serves every mode. */
 export function feedbackModeIndex(mode: FeedbackFlowMode): number {
     return FEEDBACK_FLOW_MODES.indexOf(mode);
 }
 
-const FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform sampler2D uHistory;
-/** Steers the vector-field mode. Unbound and unread by the other eight. */
-uniform sampler2D uField;
-uniform vec2 uResolution;
-uniform float uMode;
-uniform float uStrength;
-uniform float uDecay;
-uniform float uRotation;
-uniform vec2 uDrift;
-uniform float uDelta;
-${GLSL_HISTORY}
-
-/** Frames a second the strength constant is tuned against. */
-const float REFERENCE_RATE = 60.0;
-
+/**
+ * The nine warps, shared by the colour pass and the pass that publishes them.
+ *
+ * Both answer the same question — where does this pixel read its history from — and one of them then
+ * samples while the other reports the displacement. Sharing the function is what stops them drifting
+ * apart, which two copies of nine branches would guarantee eventually.
+ */
+const WARP_BODY = `
 vec2 warp(vec2 uv, float mode, float strength) {
     vec2 centered = uv - 0.5;
     float radius = length(centered);
@@ -100,7 +88,30 @@ vec2 warp(vec2 uv, float mode, float strength) {
     }
 
     return centered + 0.5;
-}
+}`;
+
+const FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uHistory;
+/** Steers the vector-field mode. Unbound and unread by the other eight. */
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uStrength;
+uniform float uDecay;
+uniform float uRotation;
+uniform vec2 uDrift;
+uniform float uDelta;
+${GLSL_HISTORY}
+
+/** Frames a second the strength constant is tuned against. */
+const float REFERENCE_RATE = 60.0;
+
+${WARP_BODY}
 
 void main() {
     // uStrength describes what one frame does, so it is corrected for the frame this actually is.
@@ -136,6 +147,56 @@ void main() {
     fragColor = previous + incoming * (1.0 - survival);
 }`;
 
+/**
+ * The affine this plugin applies to its own history, published as a field (ADR-0012).
+ *
+ * These nine modes are MilkDrop's `zoom`, `rot`, `dx/dy`, and the warps between them, and they are
+ * already driven by audio-bound parameters. The plugin applies them to its own loop; publishing them
+ * lets a second stage apply the same transform to something else — a branch that is not this one, or
+ * the whole composed image.
+ *
+ * The vector-field mode publishes nothing. It is reading a field to decide its warp, so republishing
+ * it would put the same displacement into the graph twice under two names, and anything summing both
+ * would double it.
+ */
+const MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uHistory;
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uStrength;
+uniform float uDecay;
+uniform float uRotation;
+uniform vec2 uDrift;
+uniform float uDelta;
+
+const float REFERENCE_RATE = 60.0;
+
+${WARP_BODY}
+
+void main() {
+    if (uMode > 7.5) {
+        fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+
+    // Per second rather than per frame, which is what the bus carries: the warp is expressed for
+    // this frame's delta, so dividing by it recovers the rate.
+    float step = uStrength * max(uDelta, 0.0) * REFERENCE_RATE;
+    vec2 source = warp(vUv, uMode, step);
+
+    // Reversed against the sampling offset, as everywhere: the colour pass reads at the warped
+    // point and writes at this one, so material travels from there toward here.
+    vec2 field = clamp((vUv - source) * REFERENCE_RATE, vec2(-2.0), vec2(2.0));
+
+    fragColor = vec4(field, length(field), 1.0);
+}`;
+
 export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): VisualPluginDefinition {
     return {
         id: `FeedbackFlowTransform:${mode}`,
@@ -151,12 +212,19 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 ? [{ name: 'field', type: 'vector-field' as const, required: true }]
                 : []),
         ],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            // MilkDrop's zoom, rot and dx/dy, offered to the rest of the graph rather than kept for
+            // this plugin's own loop. The vector-field mode publishes zero: it is reading a field to
+            // decide its warp, and republishing it would put one displacement into the graph twice.
+            { name: 'motion', type: 'vector-field', required: false },
+        ],
         // Every mode of this plugin resamples the history through a warp — zoom, rotate, translate,
         // spiral, pinch, vortex, drift — so a loop closed here accumulates motion rather than only
         // brightness. That is what `requireSpatialLoop` is asking for.
         capabilities: ['feedback', SPATIAL_FEEDBACK],
-        cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: 1, qualityScalable: true, dominant: false },
+        // Two passes: the loop, and the affine it publishes.
+        cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: 2, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.6,
             motionEnergy: 0.7,
@@ -212,6 +280,11 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
             return {
                 initialize() {
                     context.registerShader({ id: SHADER_ID, vertex: QUAD_VERTEX_SHADER, fragment: FRAGMENT });
+                    context.registerShader({
+                        id: MOTION_SHADER_ID,
+                        vertex: QUAD_VERTEX_SHADER,
+                        fragment: MOTION_FRAGMENT,
+                    });
                 },
 
                 activate() {
@@ -235,27 +308,47 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         return [];
                     }
 
-                    return [{
+                    const inputs = {
+                        uSource: source,
+                        // Falls back to the incoming frame when no feedback edge is wired, so the
+                        // plugin degrades to a passthrough rather than sampling nothing.
+                        uHistory: render.previous.history ?? source,
+                        ...(field ? { uField: field } : {}),
+                    };
+                    const uniforms = {
+                        uMode: feedbackModeIndex(mode),
+                        uStrength: 0.02,
+                        uDecay: 0.024,
+                        uRotation: 0.15,
+                        uDrift: drift,
+                    };
+
+                    const passes: RenderPass[] = [{
                         kind: 'fullscreen',
                         shader: SHADER_ID,
-                        inputs: {
-                            uSource: source,
-                            // Falls back to the incoming frame when no feedback edge is wired, so the
-                            // plugin degrades to a passthrough rather than sampling nothing.
-                            uHistory: render.previous.history ?? source,
-                            ...(field ? { uField: field } : {}),
-                        },
+                        inputs,
                         output: render.outputs.color,
                         blend: 'none',
                         clear: false,
-                        uniforms: {
-                            uMode: feedbackModeIndex(mode),
-                            uStrength: 0.02,
-                            uDecay: 0.024,
-                            uRotation: 0.15,
-                            uDrift: drift,
-                        },
+                        uniforms,
                     }];
+
+                    // The affine, published so a second stage can apply the same transform to
+                    // something that is not this plugin's own loop. Same uniforms, so the two passes
+                    // describe one warp.
+                    if (render.outputs.motion) {
+                        passes.push({
+                            kind: 'fullscreen',
+                            shader: MOTION_SHADER_ID,
+                            inputs,
+                            output: render.outputs.motion,
+                            blend: 'none',
+                            clear: true,
+                            uniforms,
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {

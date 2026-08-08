@@ -93,6 +93,43 @@ void main() {
 }`;
 
 /**
+ * The direction the reaction is spreading (ADR-0012).
+ *
+ * A Gray-Scott system has a real gradient — chemical B diffuses down its own concentration — and the
+ * view already differences neighbouring texels to find the membranes. Publishing the gradient makes
+ * the pattern's own growth available to anything that displaces, so material can be carried along
+ * the spreading front instead of the front merely being drawn over it.
+ */
+const REACTION_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform vec2 uResolution;
+uniform float uContrast;
+${GLSL_COMMON}
+
+void main() {
+    vec2 texel = 1.0 / uResolution;
+    float centre = texture(uSource, vUv).g;
+    float right = texture(uSource, vUv + vec2(texel.x, 0.0)).g;
+    float left = texture(uSource, vUv - vec2(texel.x, 0.0)).g;
+    float up = texture(uSource, vUv + vec2(0.0, texel.y)).g;
+    float down = texture(uSource, vUv - vec2(0.0, texel.y)).g;
+
+    // Central differences, which are symmetric where the one-sided pair the view uses is not. Down
+    // the gradient, because a reaction spreads into what it has not reached yet.
+    vec2 gradient = vec2(right - left, up - down) * 0.5;
+    vec2 field = -gradient * uContrast * 12.0;
+
+    // Away from the flat interior, where the gradient is noise rather than a front.
+    field *= smoothstep(0.0, 0.02, length(gradient));
+
+    fragColor = vec4(field, length(field), 1.0);
+}`;
+
+/**
  * Damped wave equation. Height in red, velocity in green, so one texel carries a full oscillator.
  */
 const WAVE_FIELD_FRAGMENT = `#version 300 es
@@ -164,6 +201,40 @@ void main() {
     float rim = clamp(length(state.ba) * 30.0, 0.0, 1.0);
 
     fragColor = vec4(vec3(shade + rim * 0.5), max(shade, rim));
+}`;
+
+/**
+ * Which way the wave front is travelling (ADR-0012).
+ *
+ * The state carries height in red and velocity in green, so this is the one plugin in the catalog
+ * whose motion needs no derivation at all: a point on a wave moves along the height gradient at a
+ * rate its velocity gives. Rising water carries material outward from a crest, falling water draws
+ * it back, and the sign follows without being chosen.
+ */
+const WAVE_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform vec2 uResolution;
+uniform float uGain;
+${GLSL_COMMON}
+
+void main() {
+    vec2 texel = 1.0 / uResolution;
+    float right = texture(uSource, vUv + vec2(texel.x, 0.0)).r;
+    float left = texture(uSource, vUv - vec2(texel.x, 0.0)).r;
+    float up = texture(uSource, vUv + vec2(0.0, texel.y)).r;
+    float down = texture(uSource, vUv - vec2(0.0, texel.y)).r;
+
+    vec2 slope = vec2(right - left, up - down) * 0.5;
+    float velocity = texture(uSource, vUv).g;
+
+    // Down the slope, scaled by how fast the surface is moving here.
+    vec2 field = -slope * velocity * uGain * 40.0;
+
+    fragColor = vec4(field, length(field), 1.0);
 }`;
 
 export function createReactionDiffusionSimulator(): VisualPluginDefinition {
@@ -238,9 +309,13 @@ export function createReactionDiffusionView(): VisualPluginDefinition {
         id: 'ReactionDiffusionView',
         category: 'transformer',
         inputs: [{ name: 'source', type: 'reaction-diffusion-state', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['reaction-diffusion-view'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['reaction-diffusion-view', 'vector-field'],
         fragment: REACTION_VIEW_FRAGMENT,
+        motion: { port: 'motion', fragment: REACTION_MOTION_FRAGMENT },
         uniforms: { uContrast: 3 },
         parameters: { contrast: 3 },
         bindings: [
@@ -325,9 +400,13 @@ export function createWaveFieldView(): VisualPluginDefinition {
         id: 'WaveFieldView',
         category: 'transformer',
         inputs: [{ name: 'source', type: 'wave-field-state', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['wave-field-view'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['wave-field-view', 'vector-field'],
         fragment: WAVE_VIEW_FRAGMENT,
+        motion: { port: 'motion', fragment: WAVE_MOTION_FRAGMENT },
         uniforms: { uGain: 2.5 },
         parameters: { gain: 2.5 },
         bindings: [

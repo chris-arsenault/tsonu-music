@@ -22,6 +22,50 @@ function impactKey(impact: ImpactEvent): string {
 }
 
 const SPECTRUM_SHADER = 'spectrum-geometry';
+const SPECTRUM_MOTION_SHADER = 'spectrum-geometry:motion';
+const SPECTRUM_MOTION_GEOMETRY = 'spectrum-motion-vertices';
+
+/**
+ * The rise and fall of each band, published as a field (ADR-0012).
+ *
+ * Vertex `i` is the same bin every frame — the same column of a contour, the same spoke of a radial
+ * — so differencing it across frames is how fast that band is growing, which is a real velocity of
+ * the material drawn there rather than an artefact of regenerating the geometry.
+ *
+ * Drawn as sized points rather than the line strip the colour pass uses: a line is one pixel wide
+ * wherever `lineWidth` is capped, and a one-pixel displacement field displaces nothing.
+ */
+const SPECTRUM_MOTION_VERTEX = `#version 300 es
+in vec2 aPosition;
+in vec2 aVelocity;
+out vec2 vVelocity;
+
+uniform float uReach;
+
+void main() {
+    vVelocity = aVelocity;
+    gl_PointSize = uReach;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
+
+const SPECTRUM_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vVelocity;
+out vec4 fragColor;
+
+uniform float uWakeScale;
+
+void main() {
+    float falloff = 1.0 - smoothstep(0.1, 0.5, length(gl_PointCoord - 0.5));
+    if (falloff <= 0.0) {
+        discard;
+    }
+
+    // Clip space spans two units across the frame against UV's one.
+    vec2 field = vVelocity * 0.5 * uWakeScale * falloff;
+
+    fragColor = vec4(field, falloff, 1.0);
+}`;
 const GLYPH_SHADER = 'transient-glyph';
 const SPECTRUM_GEOMETRY = 'spectrum-vertices';
 const GLYPH_GEOMETRY = 'glyph-vertices';
@@ -182,12 +226,17 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         version: 1,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
-        capabilities: ['spectrum-geometry'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            // How fast each band is rising, which is what this plugin knows about the music that
+            // nothing downstream of it can see.
+            { name: 'motion', type: 'vector-field', required: false },
+        ],
+        capabilities: ['spectrum-geometry', 'vector-field'],
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
-        parameters: { gain: 1.15, brightness: 1.3 },
+        parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2 },
         defaultBindings: [
             {
                 feature: 'rms',
@@ -199,6 +248,16 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                 outputRange: [0.75, 2.1],
                 attack: 0.12,
                 release: 0.5,
+                curve: 'smooth',
+            },
+            {
+                // How hard a rising band pulls the image, for anything reading this motion.
+                feature: 'bass',
+                role: 'large-scale-force',
+                parameter: 'wakeScale',
+                outputRange: [0.3, 2.4],
+                attack: 0.1,
+                release: 0.6,
                 curve: 'smooth',
             },
         {
@@ -213,6 +272,11 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
 
         create(context): VisualPluginInstance {
             const vertices = new Float32Array(MAX_BINS * 3);
+            /** Last frame's vertices, so each bin can say how fast it is rising. */
+            const previous = new Float32Array(MAX_BINS * 3);
+            /** Position and velocity per bin, for the pass that publishes the motion. */
+            const motion = new Float32Array(MAX_BINS * 4);
+            let hasPrevious = false;
             let count = 0;
             let phase = 0;
 
@@ -223,10 +287,16 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         vertex: SPECTRUM_VERTEX,
                         fragment: SPECTRUM_FRAGMENT,
                     });
+                    context.registerShader({
+                        id: SPECTRUM_MOTION_SHADER,
+                        vertex: SPECTRUM_MOTION_VERTEX,
+                        fragment: SPECTRUM_MOTION_FRAGMENT,
+                    });
                 },
 
                 activate() {
                     phase = context.seed * Math.PI * 2;
+                    hasPrevious = false;
                 },
 
                 update(frame) {
@@ -247,6 +317,30 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                             { name: 'aMagnitude', components: 1 },
                         ],
                     });
+
+                    // A frozen clock gives no velocity rather than an infinite one, and the first
+                    // frame after activation has nothing to difference against.
+                    const rate = hasPrevious && frame.deltaSeconds > 0 ? 1 / frame.deltaSeconds : 0;
+                    for (let index = 0; index < count; index += 1) {
+                        const from = index * 3;
+                        const to = index * 4;
+                        motion[to] = vertices[from];
+                        motion[to + 1] = vertices[from + 1];
+                        motion[to + 2] = (vertices[from] - previous[from]) * rate;
+                        motion[to + 3] = (vertices[from + 1] - previous[from + 1]) * rate;
+                    }
+
+                    previous.set(vertices.subarray(0, count * 3));
+                    hasPrevious = true;
+
+                    frame.uploadGeometry({
+                        id: SPECTRUM_MOTION_GEOMETRY,
+                        data: motion.subarray(0, count * 4),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aVelocity', components: 2 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
@@ -254,7 +348,7 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         return [];
                     }
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'geometry',
                         shader: SPECTRUM_SHADER,
                         geometry: SPECTRUM_GEOMETRY,
@@ -265,6 +359,23 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         clear: true,
                         uniforms: { uBrightness: 1.3 },
                     }];
+
+                    if (render.outputs.motion) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: SPECTRUM_MOTION_SHADER,
+                            geometry: SPECTRUM_MOTION_GEOMETRY,
+                            // Points, not the line strip above: a one-pixel line displaces nothing.
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.motion,
+                            blend: 'add',
+                            clear: true,
+                            uniforms: { uReach: 16 },
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate() {

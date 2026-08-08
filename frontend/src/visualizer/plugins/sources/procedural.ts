@@ -313,6 +313,57 @@ export function createProceduralPalette(): VisualPluginDefinition {
     });
 }
 
+/**
+ * Where a procedural texture's pattern is travelling (ADR-0012).
+ *
+ * These modes do not resample anything — they generate — so there is no read position to difference.
+ * What there is instead is exact: every one of them animates by adding `uTime` to a coordinate, and
+ * the direction that displaces the pattern in is known from the expression rather than inferred. A
+ * stripe field scrolling in x publishes a field pointing along x.
+ *
+ * The three static modes publish nothing, which is the honest answer for a pattern that does not
+ * move. A field of zero is read as no contribution rather than as a contribution of no size.
+ */
+const PROCEDURAL_TEXTURE_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uSeed;
+uniform float uMode;
+uniform float uScale;
+uniform float uContrast;
+${GLSL_COMMON}
+
+void main() {
+    vec2 p = (vUv - 0.5) * uScale;
+    vec2 field = vec2(0.0);
+
+    if (uMode < 0.5) {                       // stripes: the phase advances along x
+        field = vec2(-1.5 / max(uScale, 0.001), 0.0);
+    } else if (uMode < 1.5) {                // gradient: its ripple travels along x
+        field = vec2(-0.25 / max(uScale, 0.001), 0.0);
+    } else if (uMode < 2.5) {                // value noise: the sample point drifts diagonally
+        field = vec2(-0.15, -0.15) / max(uScale, 0.001);
+    } else if (uMode < 3.5) {                // curl noise: two layers drifting against each other
+        field = vec2(-0.1, 0.08) / max(uScale, 0.001);
+    } else if (uMode < 4.5) {                // cellular: static
+        field = vec2(0.0);
+    } else if (uMode < 5.5) {                // checker: the lattice slides diagonally
+        field = vec2(-0.2, -0.2) / max(uScale, 0.001);
+    } else if (uMode < 6.5) {                // rings: the wavefront travels outward from the centre
+        field = normalize(p + 1e-5) * (2.0 / 24.0) / max(uScale, 0.001);
+    } else {                                 // angular: the ramp rotates about the centre
+        vec2 radial = normalize(p + 1e-5);
+        field = vec2(-radial.y, radial.x) * 0.05 * 6.2831853 * length(p);
+    }
+
+    fragColor = vec4(field, length(field), 1.0);
+}`;
+
 export const PROCEDURAL_TEXTURE_MODES = [
     'stripes', 'gradient', 'value-noise', 'curl-noise', 'cellular', 'checker', 'rings', 'angular',
 ] as const;
@@ -320,6 +371,49 @@ export const PROCEDURAL_TEXTURE_MODES = [
 export const PARAMETRIC_CURVE_MODES = [
     'spirograph', 'harmonograph', 'rose', 'hypotrochoid', 'epitrochoid', 'superformula', 'torus-knot', 'pendulum',
 ] as const;
+
+/**
+ * An SDF shape turns and breathes, and both are known exactly (ADR-0012).
+ *
+ * The colour pass rotates its coordinate by `uTime * 0.035 + uPhase` — where `uPhase` carries the
+ * integrated `spin`, a rate the music sets — and scales it by a pulse. A rotation about the centre
+ * is a tangential field whose magnitude grows with radius; a pulse is a radial one. This is the
+ * plugin's own animation, published so it can reach the accumulated image rather than being redrawn
+ * from nothing every frame.
+ */
+const SDF_SHAPE_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uSeed;
+uniform float uMode;
+uniform float uMorph;
+uniform float uRepeat;
+uniform float uEnergy;
+${GLSL_COMMON}
+
+/** Matches the colour pass: a slow constant plus whatever the audio-driven spin is adding. */
+const float BASE_SPIN = 0.035;
+
+void main() {
+    vec2 p = (vUv - 0.5) * 2.0;
+    p.x *= uResolution.x / max(uResolution.y, 1.0);
+
+    // Tangential: a rotation carries a point perpendicular to its radius, faster further out.
+    vec2 radial = normalize(p + 1e-5);
+    vec2 tangent = vec2(-radial.y, radial.x) * (BASE_SPIN + uEnergy * 0.08) * length(p);
+
+    // Radial: the pulse that scales the whole shape, breathing in and out about the centre.
+    float breath = 0.06 * 0.8 * cos(uTime * 0.8 + uPhase) + uEnergy * 0.02;
+
+    vec2 field = tangent + radial * breath;
+
+    fragColor = vec4(field, length(field), 1.0);
+}`;
 
 export const SDF_SHAPE_MODES = [
     'primitive', 'smooth-union', 'subtraction', 'polygon', 'morph', 'mandala', 'glyph',
@@ -332,9 +426,13 @@ export function createProceduralTextureSource(
         id: `ProceduralTextureSource:${mode}`,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['procedural'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['procedural', 'vector-field'],
         fragment: PROCEDURAL_TEXTURE_FRAGMENT,
+        motion: { port: 'motion', fragment: PROCEDURAL_TEXTURE_MOTION },
         uniforms: {
             uMode: PROCEDURAL_TEXTURE_MODES.indexOf(mode),
             uScale: 2,
@@ -410,9 +508,13 @@ export function createSdfShapeSource(
         id: `SDFShapeSource:${mode}`,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['procedural', 'sdf'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['procedural', 'sdf', 'vector-field'],
         fragment: SDF_SHAPE_FRAGMENT,
+        motion: { port: 'motion', fragment: SDF_SHAPE_MOTION },
         uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1, uEnergy: 0.35 },
         parameters: { morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
         bindings: [
