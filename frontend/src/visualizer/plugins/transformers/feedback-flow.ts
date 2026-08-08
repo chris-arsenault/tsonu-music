@@ -9,6 +9,7 @@
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
+import { GLSL_HISTORY } from '../define';
 
 export type FeedbackFlowMode =
     | 'zoom'
@@ -64,8 +65,9 @@ uniform float uDecay;
 uniform float uRotation;
 uniform vec2 uDrift;
 uniform float uDelta;
+${GLSL_HISTORY}
 
-/** Frames a second the decay and strength constants are tuned against. */
+/** Frames a second the strength constant is tuned against. */
 const float REFERENCE_RATE = 60.0;
 
 vec2 warp(vec2 uv, float mode, float strength) {
@@ -100,10 +102,10 @@ vec2 warp(vec2 uv, float mode, float strength) {
 }
 
 void main() {
-    // Both constants describe what one frame does, so both are corrected for the frame this actually
-    // is. Without it the same scene smeared and drifted at different rates on different hardware.
-    float frames = max(uDelta, 0.0) * REFERENCE_RATE;
-    float step = uStrength * frames;
+    // uStrength describes what one frame does, so it is corrected for the frame this actually is.
+    // Without it the same scene drifted at different rates on different hardware. Decay is no longer
+    // corrected here: it is a per-second figure that history() raises to the frame's own delta.
+    float step = uStrength * max(uDelta, 0.0) * REFERENCE_RATE;
 
     vec2 sampleUv;
     if (uMode > 7.5) {
@@ -116,11 +118,21 @@ void main() {
         sampleUv = warp(vUv, uMode, step);
     }
 
-    vec4 history = texture(uHistory, sampleUv) * pow(uDecay, frames);
+    // Attenuated and bounded, through the one helper every historical read uses. uDecay is the
+    // fraction surviving a second, so a trail is a duration rather than a frame count.
+    float survival = uDelta > 0.0 ? pow(clamp(uDecay, 0.0, 1.0), uDelta) : 1.0;
+    vec4 previous = history(uHistory, sampleUv, uDecay, uDelta);
     vec4 incoming = texture(uSource, vUv);
 
-    // Screen-style combination, so trails accumulate without clipping to white immediately.
-    fragColor = 1.0 - (1.0 - incoming) * (1.0 - history);
+    // A leaky integrator, not a screen. Screen combines each channel toward one independently and
+    // has no fixed point, so any pixel receiving repeated contribution climbs to white and the
+    // channels saturate in the order they started — which is the wash with a colour cast ADR-0007
+    // recorded on a real device and fixed for the kernel's own accumulation. This loop had the same
+    // combine: a source at 0.3 against a survival of 0.97 settles at 0.935.
+    //
+    // Survival and injection are complements here too, so a static image converges to exactly
+    // itself and the trail comes from the warp — which is the whole subject of this plugin.
+    fragColor = previous + incoming * (1.0 - survival);
 }`;
 
 export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): VisualPluginDefinition {
@@ -151,7 +163,9 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
             dominance: 'supporting',
         },
         activationRules: { activationWeight: 1.5, minimumDuration: 12, prefersWith: ['PaletteMapper'] },
-        parameters: { strength: 0.02, decay: 0.94, rotation: 0.15 },
+        // `decay` is the fraction of a trail surviving one second. It was 0.94 per frame at sixty,
+        // which is 0.024 over a second.
+        parameters: { strength: 0.02, decay: 0.024, rotation: 0.15 },
         defaultBindings: [
             {
                 // Bass drives large-scale expansion, per the section 20 mapping table.
@@ -169,7 +183,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 feature: 'rms',
                 role: 'intensity',
                 parameter: 'decay',
-                outputRange: [0.9, 0.985],
+                outputRange: [0.002, 0.4],
                 attack: 0.25,
                 release: 0.9,
                 curve: 'smooth',
@@ -233,7 +247,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         uniforms: {
                             uMode: feedbackModeIndex(mode),
                             uStrength: 0.02,
-                            uDecay: 0.94,
+                            uDecay: 0.024,
                             uRotation: 0.15,
                             uDrift: drift,
                         },

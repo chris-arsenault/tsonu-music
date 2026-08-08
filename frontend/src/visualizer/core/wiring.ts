@@ -366,14 +366,51 @@ function ownOutputFor(
     return definition.outputs.find((candidate) => portsCompatible(candidate.type, port.type));
 }
 
-/** A port that reads its own plugin's previous frame, by declaration or by the older naming convention. */
-function isFeedbackPort(port: PluginPort): boolean {
+/**
+ * A port a plugin nominates as its historical read.
+ *
+ * The nomination is a hint about where a previous frame is most useful to this plugin, not a
+ * statement that history may only occur there — see ADR-0012. What it still decides is which port a
+ * self-closing loop lands on when the plugin has several.
+ */
+export function isFeedbackPort(port: PluginPort): boolean {
     return port.feedbackFrom !== undefined
         || port.name === 'history' || port.name === 'feedback' || port.name === 'previous';
 }
 
-function declaresFeedback(definition: VisualPluginDefinition): boolean {
+/**
+ * A loop carrying an image, which is the kind that can run away visually.
+ *
+ * The distinction the attenuation contract turns on, and it is already in the port types. A
+ * simulator closing a loop on `reaction-diffusion-state` or `wave-field-state` is advancing its own
+ * state, bounded by its own dynamics — Gray-Scott stays inside nought to one because the reaction
+ * does, not because anything decays it — and no other plugin produces those types, so such a loop
+ * cannot be cross-wired anywhere else. A loop carrying a colour or mask texture is a picture being
+ * fed back into a picture, and that is what diverges.
+ */
+export function isImagePortType(type: PluginPort['type']): boolean {
+    return type === 'color-texture' || type === 'mask-texture';
+}
+
+/**
+ * Whether a plugin may sit at the closing end of an image loop.
+ *
+ * The attenuation contract (ADR-0012). The kernel owns the combine for its own accumulation and can
+ * promise that a static image converges to itself; it does not own a loop closed through the graph
+ * and cannot. What it can require is that whatever closes one is lossy, which is not a restriction
+ * so much as physics — a feedback path over an image that does not attenuate diverges whatever is
+ * in it.
+ *
+ * This is a precondition on wiring, checkable and checked, rather than a hope about which plugins
+ * selection happens to draw. ADR-0007 rejected the latter shape for persistence itself, and
+ * persistence is still guaranteed by the kernel regardless of what the graph does.
+ */
+export function attenuatesHistory(definition: VisualPluginDefinition): boolean {
     return definition.capabilities.includes('feedback');
+}
+
+function declaresFeedback(definition: VisualPluginDefinition): boolean {
+    return attenuatesHistory(definition);
 }
 
 /** The last colour output in the chain, which for a well-formed scene is the final stage. */

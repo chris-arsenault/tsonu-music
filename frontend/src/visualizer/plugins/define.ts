@@ -243,6 +243,32 @@ export function character(overrides: Partial<SelectionCharacter> = {}): Selectio
     };
 }
 
+/**
+ * The one way to read a historical edge, mirroring `core/persistence.ts` (ADR-0012).
+ *
+ * Any input may be satisfied by another node's previous frame, so a loop can be closed anywhere the
+ * wiring allows. The kernel owns the combine for its own accumulation and can promise that a static
+ * image converges to itself; it does not own this one and cannot. What it can require is that every
+ * loop is lossy, and that a loop which runs hot saturates rather than reaching infinity and then
+ * `NaN` — which would blank the frame, the worst failure available and the hardest to read
+ * backwards.
+ *
+ * Both bounds live here rather than at each call site. The three plugins that closed loops before
+ * this existed each wrote `pow(uDecay, delta * 60.0)`, which buries a per-frame-at-sixty assumption
+ * in a constant, and none of them clamped.
+ */
+export const GLSL_HISTORY = `
+const float HISTORY_CEILING = 8.0;
+
+/** Attenuated and bounded previous frame. The decay is the fraction surviving one second. */
+vec4 history(sampler2D previous, vec2 uv, float decay, float delta) {
+    float survival = delta > 0.0 ? pow(clamp(decay, 0.0, 1.0), delta) : 1.0;
+    vec4 sampled = texture(previous, clamp(uv, 0.0, 1.0)) * survival;
+
+    return clamp(sampled, vec4(-HISTORY_CEILING), vec4(HISTORY_CEILING));
+}
+`;
+
 /** GLSL helpers shared across the catalog, prepended where needed. */
 export const GLSL_COMMON = `
 float hash(vec2 p) {

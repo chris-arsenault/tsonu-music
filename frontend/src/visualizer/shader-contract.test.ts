@@ -12,6 +12,8 @@
 
 import { describe, expect, test } from 'vitest';
 import { allDefinitions } from './plugins/registry';
+import { GLSL_HISTORY } from './plugins/define';
+import { isFeedbackPort, isImagePortType } from './core/wiring';
 import { parameterUniformName } from './core/parameters';
 import type { VisualPluginDefinition } from './core/plugin';
 
@@ -273,6 +275,60 @@ describe('the kernel owns the frame timebase and geometry', () => {
         }
 
         expect(declared, 'plugin overriding a kernel-owned uniform').toEqual([]);
+    });
+});
+
+/**
+ * The attenuation contract (ADR-0012).
+ *
+ * Any edge may carry a previous frame, so a loop can be closed wherever wiring allows. The kernel
+ * owns the combine for its own accumulation and can promise a fixed point; it does not own one
+ * closed through the graph. What it requires instead is that whatever closes a loop is lossy and
+ * bounded, and both live in one GLSL helper so no plugin has to be trusted to write them itself —
+ * each of the three that closed loops before this existed wrote `pow(uDecay, delta * 60.0)`, burying
+ * a per-frame-at-sixty assumption in a constant, and none of them clamped.
+ */
+describe('a plugin that may close an image loop attenuates and bounds it', () => {
+    // Scoped by port type, not by capability. A simulator closing a loop on its own state type is
+    // advancing a simulation bounded by its own dynamics — Gray-Scott stays inside nought to one
+    // because the reaction does — and nothing else produces those types, so such a loop cannot be
+    // cross-wired anywhere. A loop carrying a colour or mask texture is a picture fed back into a
+    // picture, and that is the one that diverges.
+    const closers = CATALOG.filter((definition) =>
+        definition.capabilities.includes('feedback')
+        && definition.inputs.some((port) => isFeedbackPort(port) && isImagePortType(port.type)));
+
+    test('the catalog has some', () => {
+        expect(closers.length).toBeGreaterThan(0);
+    });
+
+    test('each declares a per-second decay parameter', () => {
+        for (const definition of closers) {
+            expect(definition.parameters?.decay, `${definition.id} decay`).toBeTypeOf('number');
+            // Per second, not per frame. A per-frame figure looks like 0.94; over a second that is
+            // 0.024, so anything close to one here is the old units surviving the conversion.
+            expect(definition.parameters?.decay, `${definition.id} decay is per second`)
+                .toBeLessThan(0.85);
+        }
+    });
+
+    test('each reads its history through the shared helper rather than sampling it raw', () => {
+        for (const definition of closers) {
+            const combined = shaderSources(definition)
+                .map((source) => source.fragment)
+                .join('\n');
+
+            expect(combined, `${definition.id} uses history()`).toMatch(/\bhistory\s*\(\s*uHistory/);
+            expect(
+                /texture\s*\(\s*uHistory/.test(combined),
+                `${definition.id} samples uHistory directly`,
+            ).toBe(false);
+        }
+    });
+
+    test('the helper attenuates by delta and clamps', () => {
+        expect(GLSL_HISTORY).toMatch(/pow\s*\(\s*clamp\s*\(\s*decay/);
+        expect(GLSL_HISTORY).toMatch(/clamp\s*\(\s*sampled/);
     });
 });
 

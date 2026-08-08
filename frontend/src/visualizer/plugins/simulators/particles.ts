@@ -6,7 +6,7 @@
  * textures. No texture is used as a substitute for an emitter or a force configuration.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON, GLSL_HISTORY } from '../define';
 import type { ParameterBinding } from '../../core/bindings';
 import { resourceIdFor } from '../../core/graph';
 import type {
@@ -202,11 +202,12 @@ uniform float uDecay;
 uniform float uAmount;
 uniform float uDelta;
 ${GLSL_COMMON}
+${GLSL_HISTORY}
 
 void main() {
-    vec4 history = texture(uHistory, vUv) * pow(uDecay, max(uDelta, 0.0) * 60.0);
+    vec4 previous = history(uHistory, vUv, uDecay, uDelta);
     vec4 incoming = texture(uSource, vUv) * uAmount;
-    fragColor = max(history, incoming);
+    fragColor = max(previous, incoming);
 }`;
 
 export function createParticleEmitter(mode: EmitterMode = 'point'): VisualPluginDefinition {
@@ -801,14 +802,16 @@ export function createParticleTrailInjector(): VisualPluginDefinition {
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['feedback', 'particle-trails'],
         fragment: TRAIL_FRAGMENT,
-        uniforms: { uDecay: 0.9, uAmount: 1 },
-        parameters: { decay: 0.9, amount: 1 },
+        uniforms: { uDecay: 0.05, uAmount: 1 },
+        parameters: { decay: 0.05, amount: 1 },
         bindings: [
             {
                 feature: 'lowMid',
                 role: 'deformation',
+                // Per second; the old [0.86, 0.985] was 1e-4 to 0.40 once the per-frame exponent
+                // was applied.
                 parameter: 'decay',
-                outputRange: [0.86, 0.985],
+                outputRange: [0.01, 0.4],
                 attack: 0.35,
                 release: 1.2,
                 curve: 'smooth',

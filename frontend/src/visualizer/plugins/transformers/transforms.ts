@@ -6,7 +6,7 @@
  * since stacking two of them reads as noise rather than as order.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON, GLSL_HISTORY } from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
 
 const SYMMETRY_FRAGMENT = `#version 300 es
@@ -542,14 +542,17 @@ uniform float uPhase;
 uniform float uAmount;
 /** Frames of history the quality ladder permits, normalized against the full-quality depth. */
 uniform float uDepth;
+uniform float uDecay;
 uniform float uDelta;
 ${GLSL_COMMON}
+${GLSL_HISTORY}
 
 void main() {
     vec4 present = texture(uSource, vUv);
-    // The history texture is this plugin's own previous output, so each frame it holds one more
-    // generation of the past. Depth bounds how much of it survives, which is what the ladder reduces.
-    float retain = pow(clamp(0.55 + uDepth * 0.42, 0.0, 0.985), max(uDelta, 0.0) * 60.0);
+    // The history texture holds one more generation of the past each frame. Attenuation and the
+    // bound come from the shared helper; what stays here is the ladder's permitted depth, which
+    // reduces how much of the past survives at lower quality rather than how fast it decays.
+    float retain = clamp(0.55 + uDepth * 0.42, 0.0, 1.0);
 
     vec2 tap = vUv;
     float mix_weight = uAmount;
@@ -559,9 +562,9 @@ void main() {
     } else if (uMode < 1.5) {                // multi-tap delay
         // Three taps at diminishing offsets read three different depths of the same history.
         vec3 taps = vec3(
-            luminance(texture(uHistory, vUv + vec2(0.012, 0.0)).rgb),
-            luminance(texture(uHistory, vUv + vec2(-0.008, 0.006)).rgb),
-            luminance(texture(uHistory, vUv + vec2(0.004, -0.010)).rgb)
+            luminance(history(uHistory, vUv + vec2(0.012, 0.0), uDecay, uDelta).rgb),
+            luminance(history(uHistory, vUv + vec2(-0.008, 0.006), uDecay, uDelta).rgb),
+            luminance(history(uHistory, vUv + vec2(0.004, -0.010), uDecay, uDelta).rgb)
         );
         float delayed = dot(taps, vec3(0.5, 0.32, 0.18));
         fragColor = vec4(mix(present.rgb, present.rgb + vec3(delayed) * retain, uAmount), present.a);
@@ -583,7 +586,7 @@ void main() {
         // The past reflected against the present, which is what makes the two readable as separate.
         tap = vec2(1.0 - vUv.x, vUv.y);
     } else if (uMode < 7.5) {                // temporal difference
-        vec3 past = texture(uHistory, vUv).rgb;
+        vec3 past = history(uHistory, vUv, uDecay, uDelta).rgb;
         fragColor = vec4(mix(present.rgb, abs(present.rgb - past * retain) * 2.0, uAmount), present.a);
         return;
     } else {                                 // frozen fragments
@@ -592,7 +595,7 @@ void main() {
         mix_weight = hash(cell + floor(uTime * 0.25)) < uAmount * 0.5 ? 1.0 : 0.0;
     }
 
-    vec3 past = texture(uHistory, clamp(tap, 0.0, 1.0)).rgb * retain;
+    vec3 past = history(uHistory, tap, uDecay, uDelta).rgb * retain;
     fragColor = vec4(mix(present.rgb, max(present.rgb, past), mix_weight), present.a);
 }`;
 
@@ -615,9 +618,9 @@ export function createTemporalTransform(
         capabilities: ['feedback', 'temporal'],
         fragment: TEMPORAL_FRAGMENT,
         historyDriven: true,
-        uniforms: { uMode: TEMPORAL_MODES.indexOf(mode) },
+        uniforms: { uMode: TEMPORAL_MODES.indexOf(mode), uDecay: 0.06 },
         // `depth` is the ladder's to set, not a parameter: `historyDriven` supplies it.
-        parameters: { amount: 0.55 },
+        parameters: { amount: 0.55, decay: 0.06 },
         bindings: [{
             // How much of the past is quoted. Midrange rather than a transient measure, so the effect
             // develops over a phrase instead of flickering on every hit.
@@ -627,6 +630,17 @@ export function createTemporalTransform(
             outputRange: [0.2, 0.9],
             attack: 0.2,
             release: 0.7,
+            curve: 'smooth',
+        }, {
+            // How long the past lasts, as the fraction surviving one second. Separate from how much
+            // of it is quoted: a short echo quoted heavily and a long one quoted faintly are
+            // different effects, and one parameter could only reach the diagonal between them.
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'decay',
+            outputRange: [0.005, 0.3],
+            attack: 0.4,
+            release: 1.3,
             curve: 'smooth',
         }],
         character: character({

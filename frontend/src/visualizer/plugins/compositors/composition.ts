@@ -5,7 +5,7 @@
  * scene take its colour from the album palette without any plugin knowing where the palette came from.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON, GLSL_HISTORY } from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
 
 const LAYER_MIXER_FRAGMENT = `#version 300 es
@@ -102,12 +102,13 @@ uniform float uAmount;
 uniform float uDecay;
 uniform float uDelta;
 ${GLSL_COMMON}
+${GLSL_HISTORY}
 
 void main() {
     vec4 incoming = texture(uSource, vUv);
-    // Per-frame decay corrected to the frame this is, so trails last the same wall-clock time
-    // whatever rate the display runs at.
-    vec4 history = texture(uHistory, vUv) * pow(uDecay, max(uDelta, 0.0) * 60.0);
+    // uDecay is the fraction surviving one second, so a trail is a duration whatever rate the
+    // display runs at, and the read is bounded. See GLSL_HISTORY and ADR-0012.
+    vec4 previous = history(uHistory, vUv, uDecay, uDelta);
     float weight = uAmount;
 
     if (uMode < 0.5) {                       // continuous
@@ -127,7 +128,7 @@ void main() {
         weight = uAmount * smoothstep(0.5, 1.0, luminance(incoming.rgb));
     }
 
-    fragColor = history + incoming * weight;
+    fragColor = previous + incoming * weight;
 }`;
 
 const PALETTE_MAPPER_FRAGMENT = `#version 300 es
@@ -514,13 +515,15 @@ export function createFeedbackInjector(
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['feedback'],
         fragment: FEEDBACK_INJECTOR_FRAGMENT,
-        uniforms: { uMode: FEEDBACK_INJECTOR_MODES.indexOf(mode), uAmount: 0.6, uDecay: 0.93 },
-        parameters: { amount: 0.6, decay: 0.93 },
+        uniforms: { uMode: FEEDBACK_INJECTOR_MODES.indexOf(mode), uAmount: 0.6, uDecay: 0.12 },
+        parameters: { amount: 0.6, decay: 0.12 },
         bindings: [{
             feature: 'lowMid',
             role: 'deformation',
+            // Per second now, not per frame at sixty. The old [0.88, 0.98] was a survival of
+            // 0.0005 to 0.30 over a second once the exponent was applied.
             parameter: 'decay',
-            outputRange: [0.88, 0.98],
+            outputRange: [0.02, 0.35],
             attack: 0.3,
             release: 1,
             curve: 'smooth',

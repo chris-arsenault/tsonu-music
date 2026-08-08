@@ -204,6 +204,35 @@ function curve(value: number): number {
 }
 
 /**
+ * Ceiling on any value read through a historical edge.
+ *
+ * The kernel owns the combine for its own accumulation, so survival and injection are complements
+ * there and a static image provably converges to itself. Once a plugin can close a loop the kernel
+ * does not own that combine and cannot promise a fixed point — a loop through an additive mixer
+ * converges to a multiple of its input rather than to it. See ADR-0012.
+ *
+ * Attenuation is what stops a loop growing without bound; this is what stops a divergent one
+ * arriving at infinity, and then at `NaN` on the first subtraction, which blanks the frame entirely.
+ * A blank frame is the worst failure available here and the hardest to read backwards, so the
+ * ceiling exists for the case where the attenuation contract has been satisfied and the loop still
+ * runs hot. Well above anything a composed scene reaches, so it never shapes an image that is
+ * behaving.
+ */
+export const HISTORY_CEILING = 8;
+
+/**
+ * Fraction of a historical read surviving `deltaSeconds`, from a per-second decay.
+ *
+ * Every plugin closing a loop needs this, and each of the three that existed wrote its own —
+ * `pow(uDecay, delta * 60.0)`, which makes the parameter a per-frame-at-sixty figure and reads as a
+ * magic constant at every call site. Expressed per second it is the same quantity `frameSurvival`
+ * uses for the kernel's own accumulation, so a trail's length is a duration in both places.
+ */
+export function historyAttenuation(decayPerSecond: number, deltaSeconds: number): number {
+    return frameSurvival(decayPerSecond, deltaSeconds);
+}
+
+/**
  * Fraction of the accumulation surviving one frame.
  *
  * Expressed per second and raised to the frame's own delta, so trails last the same wall-clock time
