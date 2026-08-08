@@ -9,6 +9,7 @@
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
 import { compileGraph, type CompiledGraph } from './graph';
 import {
+    DERIVED_JOIN,
     displacesHistory,
     grammarViolations,
     REDUCED_GRAMMAR,
@@ -18,9 +19,16 @@ import {
 import { isMotionSource } from './fields';
 import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
-import { createRng } from './random';
+import { createRng, type Rng } from './random';
 import { assembleScene, type SchedulerContext, type VisualTheme } from './scheduler';
-import { isImagePortType, wireScene, type AssetResource, type WiredScene } from './wiring';
+import {
+    isBranchJoiner,
+    isImagePortType,
+    unabsorbedOutputs,
+    wireScene,
+    type AssetResource,
+    type WiredScene,
+} from './wiring';
 
 export interface BuiltScene {
     entropy: string;
@@ -227,6 +235,18 @@ function buildSceneAttempt(
         };
     }
 
+    // Joined before the prune, not after, so the prune judges the graph the scene will actually have.
+    // Run the other way round it evaluated a wiring with several unjoined terminals in it, and
+    // contribution is defined by what reaches one — so a plugin feeding a branch that was about to be
+    // absorbed could be read as contributing to nothing and dropped, taking the field count with it.
+    plugins = withJoiningCompositors(
+        plugins,
+        wired,
+        schedulerContext,
+        createRng(`${entropy}:join`),
+    );
+    wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
+
     // Category counts alone are not enough: an optional field can be selected without anything ever
     // reading it. Keep only plugins that contribute to a terminal colour layer, then re-check the
     // grammar so an allegedly full scene cannot spend passes on disconnected decoration.
@@ -291,6 +311,69 @@ function buildSceneAttempt(
 }
 
 /**
+ * Adds one branch-joining compositor per unabsorbed colour output beyond the first.
+ *
+ * Joining N branches into one takes N-1 two-input mixers, and nothing was doing that arithmetic: the
+ * grammar drew a compositor count from a range and whatever did not fit was left for the layer stack
+ * to sum. The count is derived here instead, from what the wiring actually left over.
+ *
+ * The joiners are drawn from the catalog by the same interaction weight the scheduler uses, so a
+ * scene's joins are as characterful as the rest of its choices rather than always the same mixer. A
+ * scene with nothing eligible is left as it was, and `structuralViolations` rejects it — which is the
+ * honest outcome for a catalog that cannot join what the grammar asked it to draw.
+ */
+function withJoiningCompositors(
+    plugins: readonly VisualPluginDefinition[],
+    wired: WiredScene,
+    context: SchedulerContext,
+    rng: Rng,
+): VisualPluginDefinition[] {
+    const needed = unabsorbedOutputs(wired).length - 1;
+    if (needed <= 0) {
+        return [...plugins];
+    }
+
+    const eligible = context.available.filter((definition) =>
+        isBranchJoiner(definition)
+        && !(context.theme.excludedPlugins ?? []).includes(definition.id));
+
+    if (eligible.length === 0) {
+        return [...plugins];
+    }
+
+    // Bounded so a pathological candidate cannot turn into a scene of mixers. A candidate needing
+    // more joins than this is left unconverged and rejected by `structuralViolations`, and another of
+    // the thirty-two is tried — which is the right shape: assembly settles on scenes it can actually
+    // join rather than paying a pass per leftover branch.
+    const limit = Math.min(needed, MAXIMUM_DERIVED_JOINS);
+
+    const added: VisualPluginDefinition[] = [];
+    for (let index = 0; index < limit; index += 1) {
+        // Weighted rather than uniform, and drawn fresh each time, so a scene needing three joins can
+        // use three different operators. Repeats are allowed: two mixers of one mode joining different
+        // pairs of branches is a legitimate composition, not a duplicate.
+        const drawn = rng.weighted(eligible, (definition) => definition.activationRules.activationWeight)
+            ?? eligible[0];
+
+        added.push({
+            ...drawn,
+            capabilities: [...drawn.capabilities, DERIVED_JOIN],
+        });
+    }
+
+    return [...plugins, ...added];
+}
+
+/**
+ * How many joins the builder will add before giving up on a candidate.
+ *
+ * Six two-input mixers converge seven branches, which is above the widest scene the grammars produce.
+ * A candidate past that is not a scene needing help; it is a draw that scattered, and rejecting it
+ * costs one of thirty-two attempts.
+ */
+const MAXIMUM_DERIVED_JOINS = 6;
+
+/**
  * Structural checks the grammar can only make once the scene is wired.
  *
  * Category counts describe what a scene contains; these describe how it is joined. A compositor
@@ -340,6 +423,21 @@ export function structuralViolations(
         violations.push({
             kind: 'too-many-feedback',
             detail: `${loops.length} loops exceed ${grammar.maximumFeedbackLoops}`,
+        });
+    }
+
+    // One image at the composite.
+    //
+    // Every colour output nothing reads becomes a layer, and the layer stack sums them — so each one
+    // past the first is material that reached the canvas without passing through a transform, a
+    // mixer, or the scene's loop. Measured before this check existed: a median of three, and the
+    // waveform sources unabsorbed about three hundred times in four hundred scenes, which is a
+    // spectrum drawn flat across a picture it never interacts with.
+    const terminals = unabsorbedOutputs(scene).length;
+    if (terminals > 1) {
+        violations.push({
+            kind: 'too-many-terminals',
+            detail: `${terminals} colour outputs reach the canvas unjoined`,
         });
     }
 

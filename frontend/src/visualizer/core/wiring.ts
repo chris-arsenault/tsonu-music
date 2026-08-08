@@ -10,7 +10,7 @@
  */
 
 import { portsCompatible, type GraphNode, type RenderGraphEdge } from './graph';
-import { SPATIAL_FEEDBACK } from './grammar';
+import { isDerivedJoin, SPATIAL_FEEDBACK } from './grammar';
 import { divergentCycles } from './loop-gain';
 import { isImagePortType, type PluginCategory, type PluginPort, type VisualPluginDefinition } from './plugin';
 import type { Rng } from './random';
@@ -218,10 +218,16 @@ export function wireScene(
      */
     rng?: Rng,
 ): WiredScene {
+    // Derived joins sort after every category, not with the compositors they otherwise resemble.
+    // Placed by category they ran before the post-processing stages, and each of those takes one
+    // branch and emits one — so three of them consuming three different producers split the image
+    // back into three terminals immediately after it had been joined into one. A join has to be able
+    // to reach whatever the scene finished with.
+    const chainIndex = (definition: VisualPluginDefinition) =>
+        (isDerivedJoin(definition) ? CHAIN_ORDER.length : CHAIN_ORDER.indexOf(definition.category));
+
     const ordered = orderByDependency(
-        [...plugins].sort(
-            (left, right) => CHAIN_ORDER.indexOf(left.category) - CHAIN_ORDER.indexOf(right.category),
-        ),
+        [...plugins].sort((left, right) => chainIndex(left) - chainIndex(right)),
         assets,
     );
 
@@ -240,6 +246,13 @@ export function wireScene(
         // `source` and `overlay` resolve to the same newest texture and the mixer becomes a no-op.
         const usedProducerResources = new Map<PluginPort['type'], Set<string>>();
         let inputsWired = 0;
+
+        // A join exists to absorb branches, so every one of its inputs reaches for something unread —
+        // including the first, which for every other node takes the newest producer to continue the
+        // chain it is part of. Without this a derived mixer could take two outputs that were already
+        // consumed, produce a third terminal, and leave the count exactly where it was: the joins were
+        // added and the scene still arrived at the composite in pieces.
+        const joining = isDerivedJoin(node.definition);
 
         for (const port of node.definition.inputs) {
             // A port nominating a historical read gets one, ahead of any upstream producer. ADR-0013
@@ -268,7 +281,12 @@ export function wireScene(
             // The first input continues whatever chain this node is part of; the rest reach for a
             // branch nothing has read, which is what folds separate generators into one image instead
             // of leaving each to be summed in at the end.
-            const source = findProducer(producers, port, excluded, inputsWired > 0 ? unconsumed : undefined);
+            const source = findProducer(
+                producers,
+                port,
+                excluded,
+                joining || inputsWired > 0 ? unconsumed : undefined,
+            );
 
             if (source) {
                 edges.push({ from: source, to: { instanceId: node.instanceId, port: port.name } });
@@ -333,6 +351,47 @@ export function wireScene(
     }
 
     return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };
+}
+
+/**
+ * Colour outputs nothing in the graph reads.
+ *
+ * Each of these becomes its own layer, and the kernel composite sums the layers onto one another. A
+ * producer that ends up here has reached the canvas without passing through a single transform in the
+ * scene — measured, only 38 of 400 scenes converged to one terminal, and the waveform sources were
+ * unabsorbed roughly three hundred times across that sample. That is a spectrum drawn flat over the
+ * picture, unwarped and unaffected by any loop, which is exactly what it looked like.
+ *
+ * The layer stack is section 11's and is not the problem; what it receives is. A scene that means to
+ * compose should arrive at the composite as one image.
+ */
+export function unabsorbedOutputs(scene: WiredScene): { instanceId: string; port: string }[] {
+    const consumed = new Set(
+        scene.edges
+            .filter((edge) => !edge.feedback)
+            .map((edge) => `${edge.from.instanceId}.${edge.from.port}`),
+    );
+
+    return scene.nodes.flatMap((node) => node.definition.outputs
+        .filter((port) =>
+            port.type === 'color-texture'
+            && !port.internal
+            && !consumed.has(`${node.instanceId}.${port.name}`))
+        .map((port) => ({ instanceId: node.instanceId, port: port.name })));
+}
+
+/**
+ * A compositor able to join two colour branches into one.
+ *
+ * Found by shape rather than by id, so a mixer added later is eligible without this knowing its name.
+ */
+export function isBranchJoiner(definition: VisualPluginDefinition): boolean {
+    const colourInputs = definition.inputs.filter((port) => port.type === 'color-texture');
+
+    return definition.category === 'compositor'
+        && colourInputs.length >= 2
+        && colourInputs.every((port) => port.required)
+        && definition.outputs.some((port) => port.type === 'color-texture');
 }
 
 function findAsset(

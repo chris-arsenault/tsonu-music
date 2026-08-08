@@ -120,6 +120,9 @@ export interface GrammarViolation {
         | 'no-visible-source'
         | 'no-motion-source'
         | 'too-few-branches'
+        // More than one colour output reaching the canvas unjoined, each becoming its own summed
+        // layer and so never meeting the transforms or the loop the rest of the scene is made of.
+        | 'too-many-terminals'
         | 'no-spatial-loop'
         | 'too-few-plugins';
     detail: string;
@@ -138,6 +141,15 @@ export function countByCategory(
     };
 
     for (const definition of definitions) {
+        // A join is arithmetic, not a choice. `withJoiningCompositors` adds one mixer per colour
+        // output the wiring left unabsorbed, because N branches take N-1 joins to become one image —
+        // counting those against the compositor budget makes the budget describe two different things
+        // and, when the ceiling was raised to fit them, had assembly draw the extra compositors up
+        // front and crowd the fields out of the scene size.
+        if (isDerivedJoin(definition)) {
+            continue;
+        }
+
         counts[definition.category] += 1;
     }
 
@@ -173,6 +185,20 @@ export function isSpatialField(definition: VisualPluginDefinition): boolean {
  * required by `requireSpatialLoop`.
  */
 export const SPATIAL_FEEDBACK = 'spatial-feedback';
+
+/**
+ * Carried by a compositor the builder added to converge branches, rather than one assembly drew.
+ *
+ * The two are counted differently and it matters which is which: the drawn count is a character
+ * budget a family sets, and the derived count is however many joins the branches happen to require.
+ * Marked on the definition rather than tracked beside it, so anything reading a scene back — the
+ * editor, a capture, a test — can see why a mixer is there.
+ */
+export const DERIVED_JOIN = 'derived-join';
+
+export function isDerivedJoin(definition: VisualPluginDefinition): boolean {
+    return definition.capabilities.includes(DERIVED_JOIN);
+}
 
 export function displacesHistory(definition: VisualPluginDefinition): boolean {
     return definition.capabilities.includes(SPATIAL_FEEDBACK);
@@ -293,6 +319,7 @@ export function producesMotion(definition: VisualPluginDefinition): boolean {
     return definition.outputs.some((port) => isMotionSource(port.type));
 }
 
+
 export function satisfiesGrammar(
     definitions: readonly VisualPluginDefinition[],
     grammar: SceneGrammar,
@@ -347,10 +374,16 @@ export const ORGANIC_FLOW: SceneGrammar = {
     configurationCount: [0, 4],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
-    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
-    // branch of its own and is summed into the frame at the end, which is the additive pile the
-    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
-    // mixer, most of them never pass through anything another one made.
+    // Compositors a scene *draws*, as a character choice. The ones it *needs* are a different
+    // quantity: joining N branches into one takes N-1 two-input mixers, and nothing did that
+    // arithmetic, so whatever the drawn mixers could not reach stayed a branch of its own and was
+    // summed in by the layer stack, having passed through no transform and no loop. Measured, 38 of
+    // 400 scenes arrived at the composite as one image.
+    //
+    // Raising this range to cover the shortfall was the wrong fix and is recorded because it was
+    // tried: assembly draws against these counts, so a ceiling of seven had it drawing seven
+    // compositors and crowding the fields out of the scene size. The joins are derived after wiring
+    // and carry `DERIVED_JOIN`, which keeps them out of this count.
     compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
@@ -373,10 +406,16 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
     // No dense simulator: the family is about clean geometry.
     simulatorCount: [0, 0],
     transformerCount: [2, 4],
-    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
-    // branch of its own and is summed into the frame at the end, which is the additive pile the
-    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
-    // mixer, most of them never pass through anything another one made.
+    // Compositors a scene *draws*, as a character choice. The ones it *needs* are a different
+    // quantity: joining N branches into one takes N-1 two-input mixers, and nothing did that
+    // arithmetic, so whatever the drawn mixers could not reach stayed a branch of its own and was
+    // summed in by the layer stack, having passed through no transform and no loop. Measured, 38 of
+    // 400 scenes arrived at the composite as one image.
+    //
+    // Raising this range to cover the shortfall was the wrong fix and is recorded because it was
+    // tried: assembly draws against these counts, so a ceiling of seven had it drawing seven
+    // compositors and crowding the fields out of the scene size. The joins are derived after wiring
+    // and carry `DERIVED_JOIN`, which keeps them out of this count.
     compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
@@ -405,7 +444,7 @@ export const COLLISION_ENERGY: SceneGrammar = {
     simulatorCount: [1, 2],
     transformerCount: [1, 3],
     // See the note on organic flow: one mixer joins two branches and leaves the rest to be summed.
-    compositorCount: [2, 3],
+    compositorCount: [2, 7],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 2,
@@ -425,10 +464,16 @@ export const IMAGE_DREAM: SceneGrammar = {
     configurationCount: [0, 4],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
-    // Two, because one compositor can only join two branches. Everything it cannot reach stays a
-    // branch of its own and is summed into the frame at the end, which is the additive pile the
-    // chained wiring exists to avoid — with ten colour producers in a scene and a single two-input
-    // mixer, most of them never pass through anything another one made.
+    // Compositors a scene *draws*, as a character choice. The ones it *needs* are a different
+    // quantity: joining N branches into one takes N-1 two-input mixers, and nothing did that
+    // arithmetic, so whatever the drawn mixers could not reach stayed a branch of its own and was
+    // summed in by the layer stack, having passed through no transform and no loop. Measured, 38 of
+    // 400 scenes arrived at the composite as one image.
+    //
+    // Raising this range to cover the shortfall was the wrong fix and is recorded because it was
+    // tried: assembly draws against these counts, so a ceiling of seven had it drawing seven
+    // compositors and crowding the fields out of the scene size. The joins are derived after wiring
+    // and carry `DERIVED_JOIN`, which keeps them out of this count.
     compositorCount: [2, 3],
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,

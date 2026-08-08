@@ -462,6 +462,11 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         }
     }
 
+    // A repair guaranteeing a field *consumer* stood here briefly and is recorded because it did not
+    // work: the failing candidates already contain one, and wiring still leaves the field unread. The
+    // gap is in wiring rather than in selection, and guessing further at it would have been guessing.
+    // See VISUALIZER-BACKLOG.md.
+
     // A scene requiring a visible source that has none is unusable, so try once to add one.
     if (grammar.requireVisibleSource && !chosen.some(isVisibleSource)) {
         const visible = eligible.filter((definition) =>

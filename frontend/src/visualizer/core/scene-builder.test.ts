@@ -303,8 +303,20 @@ describe('structural predicates', () => {
     const colour = (id: string, category: PluginCategory = 'source') =>
         definition(id, category, [{ name: 'color', type: 'color-texture' }]);
 
+    /**
+     * A stage that consumes a branch and emits one, which is what a post-processing stage is.
+     *
+     * The fixture used to declare no inputs, so it did not actually transform anything — it sat beside
+     * its supposed input as a second unread terminal. Harmless while nothing counted terminals, and
+     * wrong once something did.
+     */
+    const stage = (id: string, category: PluginCategory = 'postprocess') =>
+        definition(id, category, [{ name: 'color', type: 'color-texture' }], {
+            inputs: [{ name: 'source', type: 'color-texture', required: true }],
+        });
+
     test('a post-processing stage transforms a branch rather than being one', () => {
-        const scene = wireScene([colour('a'), colour('post', 'postprocess')]);
+        const scene = wireScene([colour('a'), stage('post')]);
 
         expect(materialBranchCount(scene)).toBe(1);
     });
@@ -314,7 +326,7 @@ describe('structural predicates', () => {
     });
 
     test('a scene below the branch minimum is rejected', () => {
-        const scene = wireScene([colour('a'), colour('post', 'postprocess')]);
+        const scene = wireScene([colour('a'), stage('post')]);
 
         expect(structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind))
             .toContain('too-few-branches');
@@ -324,7 +336,7 @@ describe('structural predicates', () => {
     test('a scene with no loop at all is rejected on the count and on the motion', () => {
         // Both, and they are different complaints: one says the scene has no memory beyond the
         // kernel's, the other that whatever memory it has is never displaced. See ADR-0012.
-        const scene = wireScene([colour('a'), colour('b'), colour('c'), colour('post', 'postprocess')]);
+        const scene = wireScene([colour('a'), colour('b'), colour('c'), stage('post')]);
         const kinds = structuralViolations(scene, ORGANIC_FLOW).map((entry) => entry.kind);
 
         expect(kinds).toContain('too-few-feedback');
