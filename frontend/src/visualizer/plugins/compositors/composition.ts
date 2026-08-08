@@ -55,8 +55,7 @@ void main() {
     vec3 result;
 
     if (uMode < 0.5) {                       // normal
-        // Alpha is coverage and weight is intensity, so the mask comes from the unweighted sample.
-        result = mix(base, over, overSample.a);
+        result = over;
     } else if (uMode < 1.5) {                // add
         result = base + over;
     } else if (uMode < 2.5) {                // screen
@@ -73,7 +72,22 @@ void main() {
         result = mix(base, over, smoothstep(0.2, 0.8, luminance(over)));
     }
 
-    fragColor = vec4(result, max(baseSample.a, overSample.a));
+    // Every mode acts only where the overlay has material.
+    //
+    // Only the normal mode consulted the overlay's alpha; the other seven combined across the frame,
+    // and for the darkening ones that is annihilation rather than composition. A signal trace is a
+    // thin bright line on black, so min(base, over) is black everywhere the line is not — one
+    // darken mixer joining a trace erased the entire chain above it, which is a picture that
+    // reads as a thin line on a black background whatever was composed upstream.
+    //
+    // Coverage comes from alpha where a producer writes one and from the presence of any colour where
+    // it does not, so a plugin that emits a full frame at zero alpha is not read as absent. A truly
+    // black pixel of a dense layer is indistinguishable from an empty one and is treated as empty:
+    // alpha is the signal that tells them apart, and the fallback exists for producers that do not
+    // provide it.
+    float coverage = max(overSample.a, step(1e-4, max(over.r, max(over.g, over.b))));
+
+    fragColor = vec4(mix(base, result, coverage), max(baseSample.a, overSample.a));
 }`;
 
 const MASK_ROUTER_FRAGMENT = `#version 300 es
@@ -158,7 +172,13 @@ void main() {
         weight = uAmount * smoothstep(0.5, 1.0, luminance(incoming.rgb));
     }
 
-    fragColor = previous + incoming * weight;
+    // Composited, not summed. Each mode above already computes a spatial weight — an onset gate, an
+    // edge detector, a luminance mask — and every one of them is a statement about where new material
+    // belongs, which is exactly a coverage term. Added, those weights made the frame climb wherever
+    // they were nonzero for long enough; used as coverage they place material instead, and the output
+    // never exceeds the brighter of the trail and the source. See the feedback flow transform for why
+    // the operator rather than its coefficient was the thing to change.
+    fragColor = mix(previous, incoming, clamp(weight, 0.0, 1.0));
 }`;
 
 const PALETTE_MAPPER_FRAGMENT = `#version 300 es
@@ -680,7 +700,9 @@ export function createFeedbackInjector(
             // Per second now, not per frame at sixty. The old [0.88, 0.98] was a survival of
             // 0.0005 to 0.30 over a second once the exponent was applied.
             parameter: 'decay',
-            outputRange: [0.02, 0.35],
+            // Raised with the combine. A ceiling of 0.35 per second was a trail of under a second,
+            // set when a longer one meant a brighter frame; compositing removes that coupling.
+            outputRange: [0.15, 0.9],
             attack: 0.3,
             release: 1,
             curve: 'smooth',

@@ -137,22 +137,42 @@ void main() {
     vec4 previous = history(uHistory, sampleUv, uDecay, uDelta);
     vec4 incoming = texture(uSource, vUv);
 
-    // Injection is its own parameter, not the complement of survival (ADR-0013).
+    // New material is drawn *over* the trail, not added to it.
     //
-    // It was incoming times one-minus-survival, which makes the two coefficients sum to one — and the
-    // weights of a convex blend sum to one however many frames it runs for, so the steady state held
-    // exactly one copy of the source, warped into a smear and no further. That is a motion blur, and
-    // it is what this family produced while being the part of the catalog most obviously meant to
-    // make tunnels: nine modes computing MilkDrop's zoom, rotation and translation from audio, each
-    // applied to material that could never build up.
+    // Two combines came before this one and both were wrong in the same place — the choice of
+    // operator, which neither of them examined.
     //
-    // Free of survival, a cycle here settles at incoming / (1 - perFrameSurvival) copies laid along
-    // the warp's path. Bounded by the geometric series and by the grade's roll-off, which is the
-    // only stage that compresses now — the wash ADR-0007 recorded came from a screen blend, which
-    // has no fixed point in a different way: it drives every channel toward one independently, so
-    // the brightest saturates first and the rest follow as a colour cast. This is a weighted sum,
-    // and it converges wherever uDecay is below one.
-    fragColor = previous + incoming * uInject;
+    // The first was convex: incoming times one-minus-survival, so the two coefficients summed to one.
+    // The weights of a convex blend sum to one however many frames it runs, so the steady state held
+    // exactly one copy of the source, warped into a smear and no further. A motion blur, from the
+    // part of the catalog most obviously meant to make tunnels.
+    //
+    // The second freed the coefficient and kept the sum, which converges to
+    // incoming / (1 - perFrameSurvival) — at a survival of 0.4 per second and an injection of 0.5,
+    // thirty-three copies. The grade can pull down about eight, so the frame went white. Measured on
+    // the render harness: scenes either saturated or had memory too short to compound, and the band
+    // between them is narrow, which is why so few looked like anything.
+    //
+    // The bound was then going to be a tuned ceiling on that steady state. It did not need to be: a
+    // sum is only one operator, and it is the one operator here that is expansive. This composites
+    // instead, so the output never exceeds the brighter of the two inputs — which means the trail can
+    // last as long as uDecay says without the picture climbing anywhere at all. Memory length and
+    // brightness stop being the same knob.
+    //
+    // Where new material lands the result is that material, so the loop has a fixed point rather than
+    // a ramp. Where none lands the result is the decayed previous frame, sampled from a warped
+    // coordinate, which is exactly the transport this family exists to produce.
+    //
+    // The particle trail injector and the temporal transform already close their loops this way,
+    // with max and with mix. They were the two that could safely hold a long trail, and nothing in
+    // the code said so.
+    float coverage = clamp(
+        max(incoming.a, max(incoming.r, max(incoming.g, incoming.b))) * uInject,
+        0.0,
+        1.0
+    );
+
+    fragColor = mix(previous, incoming, coverage);
 }`;
 
 /**
@@ -252,7 +272,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         activationRules: { activationWeight: 1.5, minimumDuration: 12, prefersWith: ['PaletteMapper'] },
         // `decay` is the fraction of a trail surviving one second. It was 0.94 per frame at sixty,
         // which is 0.024 over a second.
-        parameters: { strength: 0.02, decay: 0.024, inject: 0.3, rotation: 0.15 },
+        parameters: { strength: 0.02, decay: 0.5, inject: 0.5, rotation: 0.15 },
         defaultBindings: [
             {
                 // Bass drives large-scale expansion, per the section 20 mapping table.
@@ -265,24 +285,31 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 curve: 'smooth',
             },
             {
-                // Trail length. Static, every scene smeared by exactly the same amount whatever the
-                // music did, which is most of why the accumulation read as a fixed haze.
+                // Trail length, as the fraction surviving one second. The ceiling was 0.4 — a time
+                // constant of about a second — set while the combine was a sum, where a longer trail
+                // meant a brighter frame and eventually a white one. Compositing decouples the two,
+                // so this can reach the several seconds a compounding warp needs: 0.9 per second is a
+                // time constant near ten, which is where a two percent per-frame displacement turns
+                // into a tunnel rather than a smudge.
                 feature: 'rms',
                 role: 'intensity',
                 parameter: 'decay',
-                outputRange: [0.002, 0.4],
+                outputRange: [0.15, 0.9],
                 attack: 0.25,
                 release: 0.9,
                 curve: 'smooth',
             },
             {
-                // How hard the present enters the loop, free of how long the past survives. The two
-                // were one number, and tying them is what kept this family producing a smear instead
-                // of the tunnel its nine modes were written for.
+                // How hard new material writes over the trail, as a coverage multiplier rather than
+                // an amplitude. At one, anything the source draws replaces the trail where it lands;
+                // at a third, it tints what is already there and lets the trail keep travelling
+                // through it. Independent of how long the trail lasts, which is what uDecay says —
+                // the two were one number, and tying them is what kept this family producing a smear
+                // instead of the tunnel its nine modes were written for.
                 feature: 'rms',
                 role: 'intensity',
                 parameter: 'inject',
-                outputRange: [0.12, 0.5],
+                outputRange: [0.25, 0.9],
                 attack: 0.12,
                 release: 0.5,
                 curve: 'smooth',
@@ -345,8 +372,8 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                     const uniforms = {
                         uMode: feedbackModeIndex(mode),
                         uStrength: 0.02,
-                        uDecay: 0.024,
-                        uInject: 0.3,
+                        uDecay: 0.5,
+                        uInject: 0.5,
                         uRotation: 0.15,
                         uDrift: drift,
                     };
