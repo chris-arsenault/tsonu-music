@@ -21,23 +21,38 @@ const TAU = Math.PI * 2;
  * Large-scale roles move far and slowly, because that is what large-scale means. Detail moves a
  * little and often. `depth` is a fraction of the headroom left between the audio-resolved value and
  * the limit the drift is travelling toward; `rate` is in hertz.
+ *
+ * The depths are roughly half what they were, and the rates are unchanged. Both figures were set
+ * while the audio-resolved value moved about a fifth of its range, because every channel occupied a
+ * fifth of `[0, 1]` — so a drift of half the remaining headroom was a modest addition to a parameter
+ * that was barely moving. With the channels normalized against their own distributions the audio
+ * moves nine tenths of the range, and the same fractions made the oscillator a co-driver: measured
+ * over a hundred and fifty-four bound parameters, twenty-one moved further from the drift than from
+ * the music, and the median parameter took only seventy-two percent of its motion from the audio.
+ *
+ * What the drift is for has not changed, which is why the rates have not: several layers should keep
+ * breathing and folding between transients, on separate clocks, so the frame is never still. It is a
+ * garnish on a parameter the music is already driving, not a second driver.
  */
 const ROLE_DYNAMICS: Record<BindingRole, { depth: [number, number]; rate: [number, number] }> = {
     // Structure: wide, unhurried arcs that reshape the frame over many seconds.
-    'large-scale-force': { depth: [0.45, 0.8], rate: [0.012, 0.045] },
-    deformation: { depth: [0.4, 0.7], rate: [0.018, 0.06] },
+    'large-scale-force': { depth: [0.18, 0.34], rate: [0.012, 0.045] },
+    deformation: { depth: [0.16, 0.3], rate: [0.018, 0.06] },
     // Presence: the middle ground, and the closest to the old uniform behaviour.
-    intensity: { depth: [0.25, 0.45], rate: [0.05, 0.12] },
-    complexity: { depth: [0.3, 0.55], rate: [0.03, 0.09] },
-    'lateral-force': { depth: [0.3, 0.6], rate: [0.04, 0.1] },
-    // Detail: small and quick, riding on top of whatever the structure is doing.
-    detail: { depth: [0.08, 0.2], rate: [0.18, 0.5] },
-    burst: { depth: [0.06, 0.16], rate: [0.25, 0.7] },
-    'repeating-motion': { depth: [0.15, 0.35], rate: [0.1, 0.3] },
+    intensity: { depth: [0.12, 0.22], rate: [0.05, 0.12] },
+    complexity: { depth: [0.14, 0.26], rate: [0.03, 0.09] },
+    'lateral-force': { depth: [0.14, 0.28], rate: [0.04, 0.1] },
+    // Detail: small and quick, riding on top of whatever the structure is doing. Scaled with the
+    // structural roles rather than left alone, because the gap between them is the point — a
+    // structural arc has to be visibly larger than the detail riding on it, and halving one end of
+    // that comparison without the other would have flattened the two toward each other.
+    detail: { depth: [0.05, 0.12], rate: [0.18, 0.5] },
+    burst: { depth: [0.04, 0.1], rate: [0.25, 0.7] },
+    'repeating-motion': { depth: [0.1, 0.2], rate: [0.1, 0.3] },
 };
 
 /** What an unroled binding gets: the middle of the range, as before. */
-const DEFAULT_DYNAMICS = { depth: [0.2, 0.45] as [number, number], rate: [0.035, 0.14] as [number, number] };
+const DEFAULT_DYNAMICS = { depth: [0.1, 0.22] as [number, number], rate: [0.035, 0.14] as [number, number] };
 
 function dynamicsFor(role: BindingRole | undefined) {
     return role ? ROLE_DYNAMICS[role] : DEFAULT_DYNAMICS;

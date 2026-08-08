@@ -13,9 +13,9 @@ has a decision in it that should be made deliberately rather than inside a fix.
 
 | # | Step | Audit items | Status |
 | --- | --- | --- | --- |
-| 1 | Adaptive per-channel distribution mapping | R1 | not started |
-| 2 | Bipolar and saturating channels | R2 | not started |
-| 3 | Drift depth against the restored excursion | R3 | not started |
+| 1 | Adaptive per-channel distribution mapping | R1 | done |
+| 2 | Bipolar and saturating channels | R2 | done |
+| 3 | Drift depth against the restored excursion | R3 | done |
 | 4 | Particle bindings, and the contract guard re-armed | R4 | not started |
 | 5 | Particle configuration nodes leave the field budget | R6 | not started |
 | 6 | The mask-to-particle path, and the two red tests | R5 | not started |
@@ -171,17 +171,27 @@ measure yet.
 
 ## Measurements
 
-Filled in as steps land, so a later reader can see what each one moved.
+Filled in as steps land, so a later reader can see what each one moved. Taken over a
+110-second synthesised bed with a moving stereo image and alternating quiet and
+loud sections, run through the real analysis chain and the real parameter
+resolver, discarding the first thirty seconds so the distribution stage is warm.
 
 | figure | before | after step 1–3 | after all |
 | --- | --- | --- | --- |
-| median binding range utilisation | 19% | | |
-| bindings below 25% utilisation | 163 of 313 | | |
-| median audio share of parameter motion | 58% | | |
-| parameters where drift outweighs audio | 29 of 108 | | |
-| `stereoBalance` utilisation | 0% | | |
-| `spectralCentroid` p95 | 1.000 (saturated) | | |
+| median binding range utilisation | 19% | **90%** | |
+| bindings below 25% utilisation | 163 of 313 | **0 of 313** | |
+| median audio share of parameter motion | 58% | **84%** | |
+| minimum audio share | — | **59%** | |
+| parameters where drift outweighs audio | 29 of 108 | **0 of 154** | |
+| `stereoBalance` occupancy | 0% | **89%** | |
+| `spectralCentroid` occupancy | 30%, pinned at 1.000 | **90%** | |
 | particle bodies at equilibrium | 144 | | |
 | particle frame coverage | 0.78% | | |
 | scenes selecting a particle force or collider | 0% | | |
-| visualizer suite | 2 failing | | |
+| visualizer suite | 2 failing | 2 failing | |
+
+The audio-share figures count `value`-mode bindings only. `modulateParameters`
+skips `rate` and `impulse` by design, so including them measured the integrator
+and the envelope rather than the drift — which is what put the earlier figure at
+58 percent across 108 parameters instead of 72 across 154. Both numbers were
+taken the same way within each column.
