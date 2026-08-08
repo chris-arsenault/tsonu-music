@@ -7,6 +7,7 @@
  */
 
 import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import type { ParameterBinding } from '../../core/bindings';
 import { resourceIdFor } from '../../core/graph';
 import type {
     FieldSample,
@@ -247,7 +248,7 @@ export function createParticleEmitter(mode: EmitterMode = 'point'): VisualPlugin
             colorG: 1,
             colorB: 1,
         },
-        defaultBindings: [],
+        defaultBindings: emitterBindings(mode),
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
@@ -307,7 +308,7 @@ export function createParticleForceField(mode: ForceMode = 'vortex'): VisualPlug
             prefersWith: ['ParticleSimulator'],
         },
         parameters: forceParameters(mode),
-        defaultBindings: [],
+        defaultBindings: forceBindings(mode),
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
@@ -390,7 +391,7 @@ export function createParticleCollider(mode: ColliderMode = 'frame'): VisualPlug
             prefersWith: ['ParticleSimulator'],
         },
         parameters: colliderParameters(mode),
-        defaultBindings: [],
+        defaultBindings: colliderBindings(mode),
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
@@ -462,11 +463,36 @@ export function createParticleSimulator(): VisualPluginDefinition {
             prefersWith: ['ParticleRenderer', 'ParticleEmitter'],
         },
         parameters: {
-            particleCount: 512,
-            drag: 0,
+            // Population, not capacity. Equilibrium is emission rate times lifetime, so this is the
+            // ceiling that decides whether the layer covers the frame: at the previous 512 against an
+            // emitter running at 24 a second for six seconds, the field settled at 144 bodies — 0.78
+            // percent of a 1600 by 900 frame, which is a scatter rather than a layer.
+            particleCount: 700,
+            drag: 0.2,
             collisionIterations: 4,
         },
-        defaultBindings: [],
+        defaultBindings: [
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'particleCount',
+                outputRange: [240, 1200],
+                attack: 0.6,
+                release: 2.5,
+                curve: 'smooth',
+            },
+            {
+                // Velocity damping. Low, the field keeps its momentum and streams; high, it settles
+                // into whatever the forces hold it against.
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'drag',
+                outputRange: [0, 1.1],
+                attack: 0.3,
+                release: 1.1,
+                curve: 'smooth',
+            },
+        ],
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
@@ -583,7 +609,18 @@ export function createParticleRenderer(
             brightness: 1,
             debug: 0,
         },
-        defaultBindings: [],
+        defaultBindings: [{
+            // The transient envelope rather than a level: a particle field is sparse, fast material
+            // and the accumulation admits only a few percent of it per frame, so what makes a body
+            // read at all is arriving bright on the hit that threw it.
+            feature: 'transient',
+            role: 'detail',
+            parameter: 'brightness',
+            outputRange: [0.55, 1.9],
+            attack: 0.03,
+            release: 0.35,
+            curve: 'sqrt',
+        }],
         deactivationPolicy: 'fade',
 
         create(context): VisualPluginInstance {
@@ -698,9 +735,11 @@ export function createParticleRenderer(
                             output: render.outputs.color,
                             blend: 'none',
                             clear: true,
+                            // No static `uBrightness`: the resolved parameter carries it, and a
+                            // pass-level default for a bound parameter is the shape that let two
+                            // simulators integrate a fixed sixtieth of a second per frame.
                             uniforms: {
                                 uWorldSize: worldSize,
-                                uBrightness: 1,
                             },
                         },
                     ];
@@ -764,7 +803,26 @@ export function createParticleTrailInjector(): VisualPluginDefinition {
         fragment: TRAIL_FRAGMENT,
         uniforms: { uDecay: 0.9, uAmount: 1 },
         parameters: { decay: 0.9, amount: 1 },
-        bindings: [],
+        bindings: [
+            {
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'decay',
+                outputRange: [0.86, 0.985],
+                attack: 0.35,
+                release: 1.2,
+                curve: 'smooth',
+            },
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'amount',
+                outputRange: [0.5, 1],
+                attack: 0.12,
+                release: 0.55,
+                curve: 'smooth',
+            },
+        ],
         character: character({ persistence: 0.9, visualDensity: 0.6, dominance: 'supporting' }),
         feedbackPort: 'history',
         clear: false,
@@ -794,6 +852,174 @@ function semanticInstance(update: VisualPluginInstance['update']): VisualPluginI
             // No retained state.
         },
     };
+}
+
+/**
+ * What the music does to an emitter.
+ *
+ * Every particle plugin shipped with `defaultBindings: []`, so a scene's particle nodes ran at their
+ * declaration defaults for its whole life: a jet of twenty-four bodies a second leaving the centre of
+ * the screen at a fixed hundred and sixty pixels a second, pointing right, on every track. The
+ * subsystem appeared in about a fifth of assembled scenes and was the same picture in all of them.
+ *
+ * Rate is the one that decides whether this is a layer or a scatter, so it takes an event channel;
+ * the rest shape what a body is and where it goes.
+ */
+function emitterBindings(mode: EmitterMode): ParameterBinding[] {
+    return [
+        {
+            feature: 'spectralFlux',
+            role: 'burst',
+            parameter: 'rate',
+            outputRange: [12, 240],
+            attack: 0.05,
+            release: 0.9,
+            curve: 'sqrt',
+        },
+        {
+            feature: 'bass',
+            role: 'large-scale-force',
+            parameter: 'speed',
+            outputRange: [70, 430],
+            attack: 0.1,
+            release: 0.5,
+            curve: 'smooth',
+        },
+        {
+            feature: 'mid',
+            role: 'deformation',
+            parameter: 'spread',
+            outputRange: [8, 150],
+            attack: 0.25,
+            release: 0.8,
+            curve: 'smooth',
+        },
+        {
+            feature: 'rms',
+            role: 'intensity',
+            parameter: 'radius',
+            outputRange: [3, 9],
+            attack: 0.15,
+            release: 0.6,
+            curve: 'smooth',
+        },
+        {
+            feature: 'treble',
+            role: 'detail',
+            parameter: 'radiusJitter',
+            outputRange: [0.05, 0.6],
+            attack: 0.1,
+            release: 0.5,
+            curve: 'linear',
+        },
+        {
+            // Degrees per second, integrated: the jet *turns* at a speed the stereo image sets, so a
+            // wide mix sweeps and a centred one holds. A value binding could only aim it, and aiming
+            // a jet from a channel that sits near its middle is a jet that does not move.
+            feature: 'stereoBalance',
+            role: 'lateral-force',
+            mode: 'rate',
+            parameter: 'direction',
+            outputRange: [-120, 120],
+            attack: 0.3,
+            release: 0.9,
+            curve: 'linear',
+            wrap: 360,
+        },
+        {
+            // A point emitter has almost none of this by definition; the others are a shape whose
+            // size is worth moving.
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'emissionRadius',
+            outputRange: mode === 'point' ? [0, 26] : [20, 190],
+            attack: 0.4,
+            release: 1.2,
+            curve: 'smooth',
+        },
+    ];
+}
+
+/** What the music does to a force. Ranges are taken from the mode's own default magnitude. */
+function forceBindings(mode: ForceMode): ParameterBinding[] {
+    const strength = forceParameters(mode).strength;
+
+    const bindings: ParameterBinding[] = [{
+        feature: 'bass',
+        role: 'large-scale-force',
+        parameter: 'strength',
+        outputRange: [strength * 0.25, strength * 1.7],
+        attack: 0.08,
+        release: 0.45,
+        curve: 'smooth',
+    }];
+
+    if (mode === 'attract' || mode === 'repel' || mode === 'vortex') {
+        bindings.push({
+            // How far the well reaches. Static, it is a fixed region of the frame that behaves
+            // differently from the rest of it for the whole of a track.
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'radius',
+            outputRange: [90, 340],
+            attack: 0.5,
+            release: 1.4,
+            curve: 'smooth',
+        });
+    }
+
+    if (mode === 'vortex') {
+        bindings.push({
+            // Crosses zero, so the spiral breathes out as well as in rather than only tightening.
+            feature: 'mid',
+            role: 'deformation',
+            parameter: 'inwardStrength',
+            outputRange: [-140, 320],
+            attack: 0.3,
+            release: 1,
+            curve: 'smooth',
+        });
+    }
+
+    if (mode === 'wind') {
+        bindings.push({
+            feature: 'stereoBalance',
+            role: 'lateral-force',
+            mode: 'rate',
+            parameter: 'direction',
+            outputRange: [-60, 60],
+            attack: 0.4,
+            release: 1.2,
+            curve: 'linear',
+            wrap: 360,
+        });
+    }
+
+    return bindings;
+}
+
+/**
+ * What the music does to a collider.
+ *
+ * Mostly nothing, deliberately. A wall is a wall, and its elasticity and friction are what a surface
+ * *is* rather than what it does — moving them each frame changes the material under a body mid-bounce.
+ * A circular obstacle is the exception: its size is a shape in the frame, and a breathing one is
+ * something the eye can follow.
+ */
+function colliderBindings(mode: ColliderMode): ParameterBinding[] {
+    if (mode !== 'circle') {
+        return [];
+    }
+
+    return [{
+        feature: 'subBass',
+        role: 'large-scale-force',
+        parameter: 'radius',
+        outputRange: [40, 190],
+        attack: 0.2,
+        release: 0.8,
+        curve: 'smooth',
+    }];
 }
 
 function forceParameters(mode: ForceMode): Record<string, number> {

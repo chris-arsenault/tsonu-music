@@ -4,8 +4,11 @@ import { createImpactBus } from '../../core/impact';
 import type { FrameContext } from '../../core/plugin';
 import {
     createParticleEmitter,
+    createParticleForceField,
     createParticleRenderer,
     createParticleSimulator,
+    EMITTER_MODES,
+    FORCE_MODES,
     type ParticleState,
 } from './particles';
 
@@ -83,7 +86,11 @@ describe('particle graph contract', () => {
         instance.update(frame({
             deltaSeconds: 1 / 60,
             inputs: { emitters: 'emitter.value' },
-            parameters: { ...(definition.parameters ?? {}) },
+            // Drag pinned off: this test is about the emitter's configuration arriving on a body,
+            // and the default drag damps the velocity by a fifth of a percent over the frame's
+            // substeps, which would make an exact check about emission fail for a reason about
+            // integration.
+            parameters: { ...(definition.parameters ?? {}), drag: 0 },
             readValue: <T>(resource: string | undefined) =>
                 (resource === 'emitter.value' ? emitter : undefined) as T | undefined,
             publishValue: (_resource, value) => { state = value as ParticleState; },
@@ -92,11 +99,49 @@ describe('particle graph contract', () => {
         expect(state?.activeCount).toBeGreaterThan(0);
         expect(state?.world.radii[0]).toBe(6);
         expect(state?.world.velocities[0]).toBeCloseTo(120);
-        expect(definition.parameters).toEqual({
-            particleCount: 512,
-            drag: 0,
-            collisionIterations: 4,
-        });
+        expect(Object.keys(definition.parameters ?? {}).sort())
+            .toEqual(['collisionIterations', 'drag', 'particleCount']);
+    });
+
+    test('every particle plugin follows the music', () => {
+        // The subsystem shipped with `defaultBindings: []` on all twenty of its definitions, so a
+        // scene's particle nodes ran at their declaration defaults for its whole life: a jet of
+        // twenty-four bodies a second from the centre of the screen, pointing right, on every track.
+        // The scheduler distributes what a plugin declares, so declaring nothing is inert by
+        // construction and no amount of scene assembly can rescue it.
+        const bound = (definition: { defaultBindings?: readonly unknown[] }) =>
+            (definition.defaultBindings ?? []).length;
+
+        expect(bound(createParticleSimulator())).toBeGreaterThan(0);
+        expect(bound(createParticleRenderer('discs'))).toBeGreaterThan(0);
+        for (const mode of EMITTER_MODES) {
+            expect(bound(createParticleEmitter(mode)), mode).toBeGreaterThan(0);
+        }
+        for (const mode of FORCE_MODES) {
+            expect(bound(createParticleForceField(mode)), mode).toBeGreaterThan(0);
+        }
+    });
+
+    test('a field settles at a population that covers the frame', () => {
+        // Equilibrium is emission rate times lifetime, capped by the simulator's count. At the
+        // previous defaults — twenty-four a second for six seconds against a cap of 512 — the field
+        // settled at 144 bodies, which is 0.78 percent of a 1600 by 900 frame: a scatter, not a
+        // layer, and the reason scene saturation fell when the rewrite landed.
+        const emitter = createParticleEmitter('point');
+        const rate = emitter.defaultBindings?.find((entry) => entry.parameter === 'rate');
+        const radius = emitter.defaultBindings?.find((entry) => entry.parameter === 'radius');
+        const count = createParticleSimulator().defaultBindings
+            ?.find((entry) => entry.parameter === 'particleCount');
+
+        const lifetime = emitter.parameters?.lifetime ?? 0;
+        const midpoint = (binding: { outputRange: [number, number] } | undefined) =>
+            binding ? (binding.outputRange[0] + binding.outputRange[1]) / 2 : 0;
+
+        const population = Math.min(midpoint(rate) * lifetime, midpoint(count));
+        const coverage = population * Math.PI * midpoint(radius) ** 2 / (1600 * 900);
+
+        expect(population).toBeGreaterThan(500);
+        expect(coverage).toBeGreaterThan(0.03);
     });
 
     test('the renderer exposes matching mask and color outputs', () => {

@@ -48,6 +48,14 @@ const CPU_SIDE_PARAMETERS: Record<string, string> = {
     'SDFShapeSource:spin': 'integrated phase velocity, folded into uPhase by defineShaderPlugin',
 };
 
+/**
+ * Plugins whose parameters are read by the CPU simulation rather than by a shader.
+ *
+ * These four publish authored data — an emitter configuration, a force, a collider — into the
+ * simulator's world; none of them registers a shader at all. A per-parameter allowlist here would be
+ * fifty entries restating the same fact, which is why this is by family. `ParticleRenderer` is
+ * deliberately absent: it does draw, and its `brightness` reaches GL as a uniform like any other.
+ */
 const CPU_VALUE_FAMILIES = new Set([
     'ParticleSimulator',
     'ParticleEmitter',
@@ -329,15 +337,36 @@ describe('parameters are driven', () => {
         'MaskEffectStencil:edgeOnly': 'a switch, not a continuous value',
         'AlbumArtPalette:saturationFloor': 'a floor on extraction, not a visual parameter',
         'ImpactCascadeSimulator:brightness': 'the cascade drives its own energy',
+
+        // A body's material. Elasticity, friction, and mass are what a body *is*, and moving them
+        // per frame changes the material under it mid-bounce rather than changing what it does.
+        'ParticleEmitter:mass': 'a body property, fixed at emission',
+        'ParticleEmitter:elasticity': 'a body property, fixed at emission',
+        'ParticleEmitter:friction': 'a body property, fixed at emission',
+        'ParticleCollider:elasticity': 'a surface property; a wall is a wall',
+        'ParticleCollider:friction': 'a surface property; a wall is a wall',
+
+        // Positions are in world pixels, so any bound range would be a different fraction of the
+        // frame at every render size. Worth revisiting if these become normalised coordinates.
+        'ParticleEmitter:originX': 'world pixels, so a bound range would not survive a resize',
+        'ParticleEmitter:originY': 'world pixels, so a bound range would not survive a resize',
+        'ParticleForceField:x': 'world pixels, so a bound range would not survive a resize',
+        'ParticleForceField:y': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:x': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:y': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:x1': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:y1': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:x2': 'world pixels, so a bound range would not survive a resize',
+        'ParticleCollider:y2': 'world pixels, so a bound range would not survive a resize',
+
+        'ParticleEmitter:lifetime': 'copied onto a body at emission; moving it makes the field depth wander for no visible reason',
+        'ParticleEmitter:colorR': 'particles emit luminance and take the scene scheme at the composite, as every other source does',
+        'ParticleEmitter:colorG': 'particles emit luminance and take the scene scheme at the composite, as every other source does',
+        'ParticleEmitter:colorB': 'particles emit luminance and take the scene scheme at the composite, as every other source does',
+        'ParticleCollider:containInside': 'a switch, not a continuous value',
+        'ParticleRenderer:debug': 'a switch the Lab sets, not a visual parameter',
+        'ParticleSimulator:collisionIterations': 'solver convergence, not appearance',
     };
-    const STATIC_FAMILIES = new Set([
-        'ParticleSimulator',
-        'ParticleEmitter',
-        'ParticleForceField',
-        'ParticleCollider',
-        'ParticleRenderer',
-        'ParticleTrailInjector',
-    ]);
 
     test('every parameter is bound to a feature or listed as deliberately static', () => {
         const inert: string[] = [];
@@ -347,9 +376,7 @@ describe('parameters are driven', () => {
             const family = definition.id.split(':')[0];
 
             for (const parameter of Object.keys(definition.parameters ?? {})) {
-                if (bound.has(parameter)
-                    || STATIC_FAMILIES.has(family)
-                    || STATIC_PARAMETERS[`${family}:${parameter}`]) {
+                if (bound.has(parameter) || STATIC_PARAMETERS[`${family}:${parameter}`]) {
                     continue;
                 }
 
