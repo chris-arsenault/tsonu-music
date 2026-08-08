@@ -225,6 +225,94 @@ void main() {
     fragColor = vec4(colour * fill, fill);
 }`;
 
+/**
+ * A colour ramp indexed by luminance, needing no artwork.
+ *
+ * `PaletteMapper` is the catalog's only palette-mapping stage, and its `palette` input could be
+ * satisfied by exactly one plugin: `AlbumArtPalette`, which requires the album-art asset. On a track
+ * with no artwork the mapper was unreachable — measured across three hundred builds, selected zero
+ * times — and since every procedural and SDF source writes `vec4(vec3(value), value)`, all colour in
+ * such a scene came from the kernel's per-branch ramp. That is the monochrome report.
+ *
+ * A cosine ramp rather than an interpolation between stops: three channels offset around one cycle
+ * stays smooth everywhere and never passes through the grey midpoint two interpolated hues produce.
+ */
+const PROCEDURAL_PALETTE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uSeed;
+uniform float uPhase;
+/** Where on the colour circle the ramp begins. */
+uniform float uHue;
+/** How far around the circle it travels between the dark end and the bright one. */
+uniform float uSpread;
+/** How much darker the low end is. Without it the ramp is a hue wheel at constant brightness. */
+uniform float uDepth;
+
+void main() {
+    // The strip is indexed by the source's luminance, so x is dark at nought and bright at one and
+    // the ramp has to carry that or it destroys the structure it is colouring.
+    float t = vUv.x;
+    vec3 phase = vec3(0.0, 0.33, 0.67) + uHue + uPhase * 0.15;
+    vec3 colour = 0.5 + 0.5 * cos(6.2831853 * (t * uSpread + phase));
+
+    fragColor = vec4(colour * mix(1.0 - uDepth, 1.0, t), 1.0);
+}`;
+
+export function createProceduralPalette(): VisualPluginDefinition {
+    return defineShaderPlugin({
+        id: 'ProceduralPalette',
+        category: 'source',
+        inputs: [],
+        outputs: [{ name: 'palette', type: 'palette' }],
+        capabilities: ['palette', 'procedural'],
+        fragment: PROCEDURAL_PALETTE_FRAGMENT,
+        uniforms: { uHue: 0.1, uSpread: 0.55, uDepth: 0.8 },
+        parameters: { hue: 0.1, spread: 0.55, depth: 0.8 },
+        bindings: [
+            {
+                // Where the scheme sits on the circle. Brightness is where the ear expects colour to
+                // move, which is what the section 20 table puts on complexity.
+                feature: 'spectralCentroid',
+                role: 'complexity',
+                parameter: 'hue',
+                outputRange: [0, 1],
+                attack: 0.5,
+                release: 1.6,
+                curve: 'linear',
+            },
+            {
+                // How many hues the ramp crosses: narrow is a duotone, wide is a spectrum.
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'spread',
+                outputRange: [0.25, 1.1],
+                attack: 0.6,
+                release: 2,
+                curve: 'smooth',
+            },
+            {
+                feature: 'rms',
+                role: 'intensity',
+                parameter: 'depth',
+                outputRange: [0.9, 0.5],
+                attack: 0.3,
+                release: 1.1,
+                curve: 'smooth',
+            },
+        ],
+        // Contributes no visible material of its own, exactly as the album-art palette does.
+        character: character({ visualDensity: 0, motionEnergy: 0, brightness: 0.5, dominance: 'supporting' }),
+        activationWeight: 3,
+        // Pulls the mapper in behind it, and is pulled in by one. Without the pairing a palette
+        // producer and its only consumer had to be drawn independently from a catalog of two hundred.
+        prefersWith: ['PaletteMapper'],
+    });
+}
+
 export const PROCEDURAL_TEXTURE_MODES = [
     'stripes', 'gradient', 'value-noise', 'curl-noise', 'cellular', 'checker', 'rings', 'angular',
 ] as const;

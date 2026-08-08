@@ -25,6 +25,7 @@ import {
 } from './fields/mask-fields';
 import {
     createParametricCurveSource,
+    createProceduralPalette,
     createProceduralTextureSource,
     createSdfShapeSource,
     PARAMETRIC_CURVE_MODES,
@@ -123,6 +124,7 @@ export function assetDefinitions(): VisualPluginDefinition[] {
 /** Procedural and spectrum sources (spec section 19.1, 19.2). */
 export function sourceDefinitions(): VisualPluginDefinition[] {
     return [
+        createProceduralPalette(),
         ...PROCEDURAL_TEXTURE_MODES.map(createProceduralTextureSource),
         ...PARAMETRIC_CURVE_MODES.map(createParametricCurveSource),
         ...SDF_SHAPE_MODES.map(createSdfShapeSource),

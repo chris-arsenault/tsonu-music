@@ -403,6 +403,39 @@ describe('scene assembly across the full catalog', () => {
         }
     });
 
+    test('a palette-mapped scene is reachable with no album artwork', () => {
+        // `PaletteMapper` is the catalog's only palette-mapping stage, and its `palette` input could
+        // be satisfied by exactly one plugin, which requires the album-art asset. On any track
+        // without artwork it was unreachable — selected zero times across three hundred builds — and
+        // every procedural source writes greyscale, so all colour came from the kernel's per-branch
+        // ramp. That is the monochrome report.
+        const seeds = Array.from({ length: 24 }, (_, index) => `palette-${index}`);
+        const mapped = seeds.filter((seed) =>
+            THEMES.some((theme) => {
+                const result = buildScene(seed, theme, { ...base, assets: [] }, profileFor(0));
+                return result.ok
+                    && result.scene.plugins.some((entry) => entry.id === 'PaletteMapper');
+            }));
+
+        expect(mapped.length).toBeGreaterThan(0);
+    });
+
+    test('a palette producer and its only consumer are drawn together or not at all', () => {
+        // The mapper cannot be selected without a producer, since the input is required. The reverse
+        // is what the pairing buys: a producer with no mapper is an orphan the prune pass removes,
+        // which costs a build attempt.
+        for (const theme of THEMES) {
+            for (const seed of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']) {
+                const result = buildScene(seed, theme, { ...base, assets: [] }, profileFor(0));
+                if (!result.ok) continue;
+
+                const ids = result.scene.plugins.map((entry) => entry.id);
+                expect(ids.includes('ProceduralPalette'), `${theme.id}/${seed}`)
+                    .toBe(ids.includes('PaletteMapper'));
+            }
+        }
+    });
+
     test('the scheduler never activates two dominant generators', () => {
         for (const theme of THEMES) {
             for (const seed of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6']) {

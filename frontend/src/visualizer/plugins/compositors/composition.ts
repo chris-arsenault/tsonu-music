@@ -577,6 +577,12 @@ export function createPaletteMapper(): VisualPluginDefinition {
         }],
         character: character({ visualDensity: 0, brightness: 0.6, dominance: 'supporting' }),
         activationWeight: 2.5,
+        // Named so the pairing works in both directions: a palette producer makes this far more
+        // likely, and this makes a producer far more likely. Its `palette` input is required, so
+        // without a producer already chosen it is not selectable at all — and until `ProceduralPalette`
+        // existed the only producer needed album artwork, which left the catalog's one palette-mapping
+        // stage unreachable on any track without it.
+        prefersWith: ['ProceduralPalette', 'AlbumArtPalette'],
     });
 }
 

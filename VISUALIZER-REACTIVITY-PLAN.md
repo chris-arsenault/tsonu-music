@@ -19,7 +19,7 @@ has a decision in it that should be made deliberately rather than inside a fix.
 | 4 | Particle bindings, and the contract guard re-armed | R4 | done |
 | 5 | Particle configuration nodes leave the field budget | R6 | done |
 | 6 | The mask-to-particle path, and the two red tests | R5 | done |
-| 7 | A palette reachable without album artwork | R8 (part) | not started |
+| 7 | A palette reachable without album artwork | R8 (part) | done |
 | 8 | **[hold]** Accumulation transform | R9 | design first |
 | 9 | **[hold]** `DomainWarpTransform` driver typing | R7 | design first |
 | 10 | **[hold]** Scene selection fitness | R8 | design first |
@@ -189,8 +189,9 @@ resolver, discarding the first thirty seconds so the distribution stage is warm.
 | particle frame coverage | 0.78% | **5.7%** | |
 | scenes selecting a particle force | 0% | **28.7%** | |
 | scenes selecting a particle collider | 0% | **27.3%** | |
-| nodes with no bindings at all | 16.1% | **8.1%** | |
-| visualizer suite | 2 failing | **green, 1068 passing** | |
+| nodes with no bindings at all | 16.1% | **7.4%** | |
+| scenes reaching `PaletteMapper` with no artwork | 0% | **36.3%** | |
+| visualizer suite | 2 failing | **green, 1070 passing** | |
 
 The particle and node-binding rows land in steps 4 and 5 rather than 1 to 3, but
 share the column since no step between them moved either figure. What remains
