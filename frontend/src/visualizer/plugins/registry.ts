@@ -9,6 +9,7 @@ import { createPluginRegistry, type PluginRegistry, type VisualPluginDefinition 
 import type { GraphNode, RenderGraphEdge } from '../core/graph';
 import { createSignalTraceSource, SIGNAL_TRACE_MODES } from './sources/signal-trace';
 import { createFeedbackFlowTransform, FEEDBACK_FLOW_MODES } from './transformers/feedback-flow';
+import { createFieldFeedbackTransform } from './transformers/field-feedback';
 import { createToneMapper } from './postprocess/tone-mapper';
 import {
     createAlbumArtDisplacement,
@@ -169,6 +170,8 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
         ...SHOCKWAVE_MODES.map(createShockwaveTransform),
         // Spec section 24 secondary scope, and the first consumer of the ladder's history depth.
         ...TEMPORAL_MODES.map(createTemporalTransform),
+        // The drag, which the kernel used to own. See ADR-0012.
+        createFieldFeedbackTransform(),
     ];
 }
 

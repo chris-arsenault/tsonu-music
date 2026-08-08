@@ -122,15 +122,33 @@ function redirectLoops(
             .filter((output) => !output.internal && portsCompatible(output.type, port.type))
             .map((output) => ({ instanceId: node.instanceId, port: output.name })));
 
-        const picked = rng.weighted(candidates, (candidate) => {
-            if (candidate.instanceId === sink.instanceId) {
-                return 3;
-            }
-            if (terminal && candidate.instanceId === terminal.instanceId) {
-                return 4;
-            }
-            return 1;
-        });
+        // Grouped before it is drawn, because the three kinds are not equally numerous and drawing
+        // over the flat list lets the largest group decide the proportions. A scene has one of
+        // itself and one terminal against however many other colour producers it happens to hold,
+        // so weighting candidates individually made "somewhere else" the usual answer at a rate
+        // nobody chose — measured, 174 of 300 against 56 self-closing.
+        const own = candidates.filter((candidate) => candidate.instanceId === sink.instanceId);
+        const last = candidates.filter((candidate) =>
+            terminal !== undefined
+            && candidate.instanceId === terminal.instanceId
+            && candidate.instanceId !== sink.instanceId);
+        const rest = candidates.filter((candidate) =>
+            !own.includes(candidate) && !last.includes(candidate));
+
+        const groups: { members: typeof candidates; weight: number }[] = [
+            // A branch leaving a trail: what these plugins were written for.
+            { members: own, weight: 3 },
+            // The whole composed image folding back into itself: where a tunnel comes from.
+            { members: last, weight: 3 },
+            // Everything else, which is the variety rather than the default.
+            { members: rest, weight: 2 },
+        ];
+
+        const group = rng.weighted(
+            groups.filter((entry) => entry.members.length > 0),
+            (entry) => entry.weight,
+        );
+        const picked = group && rng.pick(group.members);
 
         if (picked) {
             edge.from = picked;
