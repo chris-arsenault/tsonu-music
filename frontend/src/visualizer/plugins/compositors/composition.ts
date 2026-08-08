@@ -17,33 +17,51 @@ uniform sampler2D uSource;
 uniform sampler2D uOverlay;
 uniform vec2 uResolution;
 uniform float uMode;
-uniform float uMix;
+/**
+ * How much of each operand reaches the combine (ADR-0013).
+ *
+ * These were one convex knob — mix(base, result, uMix) — which is why a mixer could not be the lossy
+ * element of an accumulating loop: whatever it gave the overlay it took from the base, so the two
+ * coefficients summed to one and the loop's steady state held exactly one copy of its source. Free of
+ * each other, a loop closed through the source operand at 0.96 settles at twenty-five copies laid
+ * along whatever path the cycle warps them through, and the overlay is free to arrive at full
+ * strength rather than at the base's expense.
+ */
+uniform float uSourceWeight;
+uniform float uOverlayWeight;
 ${GLSL_COMMON}
 
 void main() {
-    vec4 base = texture(uSource, vUv);
-    vec4 over = texture(uOverlay, vUv);
+    vec4 baseSample = texture(uSource, vUv);
+    vec4 overSample = texture(uOverlay, vUv);
+
+    // Weighted before the combine rather than after it, so each mode's own arithmetic is what scales:
+    // add sums two attenuated operands, multiply multiplies them, lighten compares them. Applied to
+    // the result instead, every mode would collapse to the same linear fade.
+    vec3 base = baseSample.rgb * uSourceWeight;
+    vec3 over = overSample.rgb * uOverlayWeight;
     vec3 result;
 
     if (uMode < 0.5) {                       // normal
-        result = mix(base.rgb, over.rgb, over.a);
+        // Alpha is coverage and weight is intensity, so the mask comes from the unweighted sample.
+        result = mix(base, over, overSample.a);
     } else if (uMode < 1.5) {                // add
-        result = base.rgb + over.rgb;
+        result = base + over;
     } else if (uMode < 2.5) {                // screen
-        result = 1.0 - (1.0 - base.rgb) * (1.0 - over.rgb);
+        result = 1.0 - (1.0 - base) * (1.0 - over);
     } else if (uMode < 3.5) {                // multiply
-        result = base.rgb * over.rgb;
+        result = base * over;
     } else if (uMode < 4.5) {                // difference
-        result = abs(base.rgb - over.rgb);
+        result = abs(base - over);
     } else if (uMode < 5.5) {                // lighten
-        result = max(base.rgb, over.rgb);
+        result = max(base, over);
     } else if (uMode < 6.5) {                // darken
-        result = min(base.rgb, over.rgb);
+        result = min(base, over);
     } else {                                 // contrast blend
-        result = mix(base.rgb, over.rgb, smoothstep(0.2, 0.8, luminance(over.rgb)));
+        result = mix(base, over, smoothstep(0.2, 0.8, luminance(over)));
     }
 
-    fragColor = vec4(mix(base.rgb, result, uMix), max(base.a, over.a));
+    fragColor = vec4(result, max(baseSample.a, overSample.a));
 }`;
 
 const MASK_ROUTER_FRAGMENT = `#version 300 es
@@ -509,21 +527,51 @@ export function createLayerMixer(
         id: `LayerMixer:${mode}`,
         category: 'compositor',
         inputs: [
-            { name: 'source', type: 'color-texture', required: true },
-            { name: 'overlay', type: 'color-texture', required: true },
+            // The operand a loop is meant to close through, and the one carrying its gain. Under one,
+            // so a cycle passing through here converges — see `core/loop-gain.ts`.
+            {
+                name: 'source',
+                type: 'color-texture',
+                required: true,
+                gainParameter: 'sourceWeight',
+            },
+            // Fresh material joining what the base already holds. Free to exceed one, because a cycle
+            // closed through this port is rejected rather than tuned around.
+            {
+                name: 'overlay',
+                type: 'color-texture',
+                required: true,
+                gainParameter: 'overlayWeight',
+            },
         ],
         outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['layer-mixing'],
+        capabilities: ['layer-mixing', 'blend'],
         fragment: LAYER_MIXER_FRAGMENT,
-        uniforms: { uMode: LAYER_MIXER_MODES.indexOf(mode), uMix: 1 },
-        parameters: { mix: 1 },
+        uniforms: {
+            uMode: LAYER_MIXER_MODES.indexOf(mode),
+            uSourceWeight: 0.94,
+            uOverlayWeight: 1,
+        },
+        parameters: { sourceWeight: 0.94, overlayWeight: 1 },
         bindings: [{
-            // How far the blend is taken. A mixer pinned at full mix is a fixed composite however
-            // much its two branches move.
+            // How long what is already in the base survives being combined with. This is the whole
+            // trail: at 0.96 a cycle through this port settles at twenty-five copies of its source,
+            // at 0.55 at barely two. Bound low enough that the music decides how far the image
+            // remembers rather than a constant deciding it once.
+            feature: 'lowMid',
+            role: 'deformation',
+            parameter: 'sourceWeight',
+            outputRange: [0.55, 0.96],
+            attack: 0.35,
+            release: 1.4,
+            curve: 'smooth',
+        }, {
+            // How hard new material arrives. A mixer pinned at full is a fixed composite however much
+            // its two branches move.
             feature: 'rms',
             role: 'intensity',
-            parameter: 'mix',
-            outputRange: [0.45, 1],
+            parameter: 'overlayWeight',
+            outputRange: [0.45, 1.15],
             attack: 0.15,
             release: 0.6,
             curve: 'smooth',

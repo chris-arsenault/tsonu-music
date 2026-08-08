@@ -25,7 +25,15 @@ export interface SimpleShaderPlugin {
     id: string;
     category: PluginCategory;
     /** Input port name to the sampler uniform it binds to. */
-    inputs: { name: string; type: PortType; required: boolean; sampler?: string; multiple?: boolean }[];
+    inputs: {
+        name: string;
+        type: PortType;
+        required: boolean;
+        sampler?: string;
+        multiple?: boolean;
+        /** Parameter scaling this input's contribution, for the loop-gain check (ADR-0013). */
+        gainParameter?: string;
+    }[];
     outputs: { name: string; type: PortType }[];
     capabilities: string[];
     requiredAssets?: string[];
@@ -100,6 +108,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             type: input.type,
             required: input.required,
             multiple: input.multiple,
+            gainParameter: input.gainParameter,
         })),
         outputs: spec.outputs.map((output): PluginPort => ({
             name: output.name,

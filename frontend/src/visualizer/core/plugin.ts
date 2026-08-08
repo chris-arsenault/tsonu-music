@@ -73,6 +73,18 @@ export interface PluginPort {
      * a scene that looked like it had a working simulation was showing a picture of its index.
      */
     internal?: boolean;
+    /**
+     * Parameter scaling how much of this input reaches the output (ADR-0013).
+     *
+     * The quantity that decides whether a cycle through this port converges. `attenuatesHistory` asked
+     * whether a plugin carried the `feedback` capability, which is a string and not a bound; the
+     * condition that actually governs divergence is that the product of these around a cycle stays
+     * below one.
+     *
+     * Absent means one: the input passes through undiminished, which is correct for a warp resampling
+     * its source and is exactly why a warp alone cannot be the lossy element in a loop.
+     */
+    gainParameter?: string;
 }
 
 export interface PluginCost {
