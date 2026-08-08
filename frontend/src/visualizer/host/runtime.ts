@@ -11,7 +11,6 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { CompiledGraph, CompiledNode } from '../core/graph';
 import { composeLayers, type Crossfade, type VisualLayer } from '../core/layers';
-import { selectKernelInputs } from '../core/kernel-inputs';
 import {
     isPluginDisabled,
     simulationDelta,
@@ -50,8 +49,6 @@ import {
     GRADE_SHADER_ID,
     METER_SHADER,
     METER_SHADER_ID,
-    MOTION_SUM_SHADER,
-    MOTION_SUM_SHADER_ID,
     PERSISTENCE_SHADER,
     PERSISTENCE_SHADER_ID,
 } from './composite-shaders';
@@ -61,7 +58,6 @@ import {
  * plugin. Named so `releaseUnused` can be told to keep them across scene changes.
  */
 const COMPOSITE_KEY = 'kernel:composite';
-const MOTION_KEY = 'kernel:motion';
 const ACCUMULATE_KEYS = ['kernel:accumulate#0', 'kernel:accumulate#1'] as const;
 
 /** Whichever accumulation slot currently holds the presented image, as an inspectable name. */
@@ -75,11 +71,13 @@ const METER_SIZE = 1;
 /** Seconds for metered exposure to travel most of the way to a new scene's level. */
 const METER_ADAPT_SECONDS = 0.9;
 
-/** Kernel stages the diagnostics overlay can present directly, in the order they run. */
-export const KERNEL_STAGES: readonly string[] = [COMPOSITE_KEY, MOTION_KEY, ACCUMULATE_KEY];
-
-/** The motion field is a force, not an image; it needs no pixel detail. */
-const MOTION_SCALE = 0.5;
+/**
+ * Kernel stages the diagnostics overlay can present directly, in the order they run.
+ *
+ * `kernel:motion` was one of these. It is gone with the bus that produced it: a scene's displacement
+ * now lives on the edges of the graph, where the inspector can already reach it by resource.
+ */
+export const KERNEL_STAGES: readonly string[] = [COMPOSITE_KEY, ACCUMULATE_KEY];
 
 export interface ActiveInstance {
     instanceId: string;
@@ -100,8 +98,6 @@ export interface RuntimeFrame {
     renderWidth: number;
     renderHeight: number;
     layers: readonly VisualLayer[];
-    /** Explicit Motion sum membership. Undefined uses every motion-compatible graph resource. */
-    motionInputs?: readonly ResourceId[];
     crossfades?: readonly Crossfade[];
     /** Set on the frame a seek or track change lands, to drop stale impacts alongside audio events. */
     clearTransients?: boolean;
@@ -177,7 +173,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
     let accumulationSlot: 0 | 1 = 0;
     let meterSlot: 0 | 1 = 0;
 
-    device.registerShader(MOTION_SUM_SHADER);
     device.registerShader(PERSISTENCE_SHADER);
     device.registerShader(GRADE_SHADER);
     device.registerShader(METER_SHADER);
@@ -360,7 +355,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
             // The kernel's own targets outlive any scene, so they are declared live alongside the
             // plan's. Without this a scene change would delete the accumulation and every trail in it.
-            const kernelKeys = new Set<string>([COMPOSITE_KEY, MOTION_KEY, ...ACCUMULATE_KEYS]);
+            const kernelKeys = new Set<string>([COMPOSITE_KEY, ...ACCUMULATE_KEYS]);
             device.releaseUnused(new Set([...liveKeys(plan), ...kernelKeys]));
             for (const target of plan.targets) {
                 device.acquireTarget(target.key, target.width, target.height);
@@ -543,7 +538,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 }
 
                 composite(device, plan, frame, presentShaderId, stats);
-                const hasMotion = sumMotion(device, graph, plan, stats, frame.motionInputs);
 
                 // A frozen clock advances nothing, so the accumulation holds exactly rather than
                 // screening the same frame into itself and brightening while paused.
@@ -560,7 +554,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                         plan,
                         frame,
                         deltaSeconds,
-                        { write, read: accumulationSlot, hasMotion },
+                        { write, read: accumulationSlot },
                         stats,
                     );
 
@@ -575,7 +569,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 // by comparing the two ends and inferring the middle. That is how the accumulation
                 // went unexamined while it was removing eight ninths of the particle layer's spatial
                 // detail. Presented ungraded, so what is shown is what the stage holds.
-                if (inspected === COMPOSITE_KEY || inspected === MOTION_KEY) {
+                if (inspected === COMPOSITE_KEY) {
                     presentKernelStage(device, inspected, plan, presentShaderId, stats);
                 } else if (inspected === ACCUMULATE_KEY) {
                     presentKernelStage(device, ACCUMULATE_KEYS[accumulationSlot], plan, presentShaderId, stats);
@@ -603,7 +597,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             device.invalidate();
             // The kernel's shaders and its accumulation went with the context, so both are rebuilt
             // here rather than leaving the composite stage pointing at programs that no longer exist.
-            device.registerShader(MOTION_SUM_SHADER);
             device.registerShader(PERSISTENCE_SHADER);
             device.registerShader(GRADE_SHADER);
             device.registerShader(METER_SHADER);
@@ -746,67 +739,11 @@ function composite(
     });
 }
 
-/**
- * Sums every field the scene produced into one motion field.
- *
- * Contributions add rather than overwrite, so two fields compound into a single coherent drag instead
- * of one winning. This is what makes several layers contribute to one sense of flow, and it is why
- * fields no longer have to be consumed by a particle system to be worth generating.
- *
- * Returns false when the scene produced no field at all, which leaves the drag out of the
- * accumulation entirely rather than gathering through a stale texture.
- */
-function sumMotion(
-    device: Device,
-    graph: CompiledGraph,
-    plan: RenderPlan,
-    stats: RuntimeStats,
-    selected: readonly ResourceId[] | undefined,
-): boolean {
-    const sources = selectKernelInputs(
-        graph.resources.filter((resource) => isMotionSource(resource.type)),
-        selected,
-    );
-    const width = Math.max(1, Math.round(plan.width * MOTION_SCALE));
-    const height = Math.max(1, Math.round(plan.height * MOTION_SCALE));
-    const target = device.acquireTarget(MOTION_KEY, width, height);
-
-    if (sources.length === 0) {
-        return false;
-    }
-
-    const program = device.useProgram(MOTION_SUM_SHADER_ID);
-    if (!program) {
-        stats.skippedPasses += 1;
-        return false;
-    }
-
-    // Softened by the square root of the contributor count rather than divided by it. Dividing meant
-    // a scene with two fields was dragged half as far as one with a single field, which read as the
-    // richer scenes being the slowest; the root keeps the sum bounded without cancelling it.
-    const weight = 1 / Math.sqrt(sources.length);
-    let drawn = 0;
-
-    for (const resource of sources) {
-        const key = plan.writeKeys[resource.id];
-        if (!key) {
-            continue;
-        }
-
-        const size = plan.sizes[resource.id] ?? { width, height };
-        const source = device.acquireTarget(key, size.width, size.height);
-
-        device.beginPass(target, drawn === 0 ? 'none' : 'add', drawn === 0);
-        device.bindTexture(program, 'uSource', source.texture, 0);
-        device.setUniforms(program, { uResolution: [width, height], uWeight: weight });
-        device.drawFullscreen();
-
-        drawn += 1;
-        stats.passesExecuted += 1;
-    }
-
-    return drawn > 0;
-}
+// `sumMotion` stood here. It summed every motion-typed resource in the graph into one kernel-owned
+// field, weighted by one over the root of the contributor count, and the accumulation was gathered
+// through the result. Retired with the drag it fed (ADR-0012): a kernel pass that silently consumes
+// every field a scene happens to contain is a second mechanism for what the graph now does
+// explicitly, and where a field reaches the picture is worth being able to see.
 
 /**
  * Drags the accumulation through the motion field, decays it, and screens the new composite on top.
@@ -819,7 +756,7 @@ function advanceAccumulation(
     plan: RenderPlan,
     frame: RuntimeFrame,
     deltaSeconds: number,
-    slots: { write: 0 | 1; read: 0 | 1; hasMotion: boolean },
+    slots: { write: 0 | 1; read: 0 | 1 },
     stats: RuntimeStats,
 ): void {
     const program = device.useProgram(PERSISTENCE_SHADER_ID);
@@ -831,18 +768,12 @@ function advanceAccumulation(
     const write = device.acquireTarget(ACCUMULATE_KEYS[slots.write], plan.width, plan.height);
     const read = device.acquireTarget(ACCUMULATE_KEYS[slots.read], plan.width, plan.height);
     const compositeTarget = device.acquireTarget(COMPOSITE_KEY, plan.width, plan.height);
-    const motion = device.acquireTarget(
-        MOTION_KEY,
-        Math.max(1, Math.round(plan.width * MOTION_SCALE)),
-        Math.max(1, Math.round(plan.height * MOTION_SCALE)),
-    );
 
     const survival = frameSurvival(frame.persistence.survivalPerSecond, deltaSeconds);
 
     device.beginPass(write, 'none', true);
     device.bindTexture(program, 'uComposite', compositeTarget.texture, 0);
     device.bindTexture(program, 'uHistory', read.texture, 1);
-    device.bindTexture(program, 'uMotion', motion.texture, 2);
     device.setUniforms(program, {
         uResolution: [plan.width, plan.height],
         uSurvival: survival,
@@ -850,9 +781,7 @@ function advanceAccumulation(
         // instead of seeping in at a fiftieth of its brightness.
         uInjection: injectionFor(survival, frame.persistence.transientPunch),
         uBlackFloor: blackFloorFor(deltaSeconds),
-        uMotionScale: frame.persistence.motionScale,
         uDelta: Math.max(0, deltaSeconds),
-        uHasMotion: slots.hasMotion,
     });
     device.drawFullscreen();
     stats.passesExecuted += 1;

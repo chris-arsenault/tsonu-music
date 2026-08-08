@@ -372,12 +372,12 @@ describe('the kernel tail', () => {
 
     test('a persistence value can be pinned and released independently', () => {
         let scene = setPersistencePin(base, 'survivalPerSecond', 0.9);
-        scene = setPersistencePin(scene, 'motionScale', 0.1);
+        scene = setPersistencePin(scene, 'transientPunch', 0.1);
 
-        expect(scene.kernel?.persistence).toEqual({ survivalPerSecond: 0.9, motionScale: 0.1 });
+        expect(scene.kernel?.persistence).toEqual({ survivalPerSecond: 0.9, transientPunch: 0.1 });
 
         scene = setPersistencePin(scene, 'survivalPerSecond', undefined);
-        expect(scene.kernel?.persistence).toEqual({ motionScale: 0.1 });
+        expect(scene.kernel?.persistence).toEqual({ transientPunch: 0.1 });
     });
 
     test('releasing the last pin removes the section rather than leaving an empty one', () => {
@@ -389,20 +389,22 @@ describe('the kernel tail', () => {
     });
 
     test('a zero pin is a pin', () => {
-        expect(setPersistencePin(base, 'motionScale', 0).kernel?.persistence)
-            .toEqual({ motionScale: 0 });
+        expect(setPersistencePin(base, 'transientPunch', 0).kernel?.persistence)
+            .toEqual({ transientPunch: 0 });
     });
 
     test('kernel input membership distinguishes explicit empty from automatic', () => {
+        // Composite is the only stage with pinnable membership left. The motion sum it used to share
+        // this with no longer exists: a scene's displacement is an edge in the graph, and pinning
+        // that means moving the edge. See ADR-0012.
         let scene = setKernelInputs(base, 'composite', ['src#1', 'src#1', 'src#0']);
-        scene = setKernelInputs(scene, 'motion', []);
-
         expect(scene.kernel?.compositeInputs).toEqual(['src#1', 'src#0']);
-        expect(scene.kernel?.motionInputs).toEqual([]);
+
+        scene = setKernelInputs(scene, 'composite', []);
+        expect(scene.kernel?.compositeInputs).toEqual([]);
 
         scene = setKernelInputs(scene, 'composite', undefined);
         expect(scene.kernel?.compositeInputs).toBeUndefined();
-        expect(scene.kernel?.motionInputs).toEqual([]);
     });
 
     test('a layer override is set and cleared by the layer it names', () => {

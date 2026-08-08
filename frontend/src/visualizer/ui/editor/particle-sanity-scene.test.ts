@@ -14,10 +14,8 @@ describe('particle sanity scene', () => {
             .toEqual({ brightness: 1, debug: 1 });
         expect(document.nodes.filter((node) => node.pluginId.startsWith('ParticleCollider:')))
             .toHaveLength(2);
-        expect(document.kernel?.motionInputs).toEqual([]);
         expect(document.kernel?.persistence).toEqual({
             survivalPerSecond: 0,
-            motionScale: 0,
             transientPunch: 0,
         });
     });

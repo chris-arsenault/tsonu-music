@@ -40,8 +40,6 @@ export function isMotionSource(type: PortType): boolean {
 export interface PersistenceSettings {
     /** Fraction of the accumulated image still present one second later. */
     survivalPerSecond: number;
-    /** UV displacement per second applied to the accumulation, per unit of field magnitude. */
-    motionScale: number;
     /**
      * How hard the newest frame punches through the accumulation, 0 to 1, from the transient
      * envelope.
@@ -65,8 +63,6 @@ export interface PersistenceInput {
      * until now, consumed by nothing.
      */
     layerWeights: readonly number[];
-    /** Large-scale force, per the section 20 mapping table. Drives how far the image is dragged. */
-    bass: number;
     /** Overall intensity, which lengthens trails as a track opens up. */
     rms: number;
     /** The transient envelope: how recently something struck. Drives the pulse. */
@@ -91,15 +87,6 @@ const SURVIVAL_FLOOR = 0.02;
 const SURVIVAL_CEILING = 0.25;
 
 /**
- * Displacement bounds in UV per second, per unit of field magnitude.
- *
- * Raised from a ceiling of 0.34: several field modes are far weaker than unit magnitude — the curl
- * mode differences an fbm over a hundredth of a unit — so the effective drag sat well under the
- * nominal figure and the large-scale motion read as sluggish.
- */
-const MOTION_FLOOR = 0.05;
-const MOTION_CEILING = 0.85;
-
 /**
  * How much of the new frame a full-strength transient lets through.
  *
@@ -131,34 +118,23 @@ export function persistenceSettings(input: PersistenceInput): PersistenceSetting
     const survival = SURVIVAL_FLOOR
         + (SURVIVAL_CEILING - SURVIVAL_FLOOR) * curve(persistence + clamp01(input.rms) * 0.12);
 
-    const motion = MOTION_FLOOR
-        + (MOTION_CEILING - MOTION_FLOOR) * curve(clamp01(input.bass) * 0.75 + persistence * 0.25);
-
     // Squared, so ordinary playing barely lifts the injection and a real hit lifts it a lot. A linear
     // response here just raises the floor and takes the trails away.
     const strike = clamp01(input.transient);
     const punch = strike * strike * TRANSIENT_PUNCH;
 
     if (input.reducedMotion) {
-        // Low energy rather than slow: the image still accumulates, but it is not dragged far and it
-        // does not punch.
+        // Low energy rather than slow: the image still accumulates, and it does not punch.
         return {
             // No clamp: SURVIVAL_CEILING is 0.25, so a minimum against 0.35 could never bind. It was
             // left behind when the ceiling came down from 0.8 and read as a safeguard that was doing
             // nothing. Removing it changes no value this function can produce.
             survivalPerSecond: survival,
-            motionScale: MOTION_FLOOR * 0.5,
             transientPunch: 0,
         };
     }
 
-    return {
-        survivalPerSecond: survival,
-        // A hit shoves the image as well as brightening it, so the flow lurches with the music
-        // rather than drifting past it.
-        motionScale: motion * (1 + strike * 0.8),
-        transientPunch: punch,
-    };
+    return { survivalPerSecond: survival, transientPunch: punch };
 }
 
 /**
@@ -192,7 +168,6 @@ export function applyPersistenceOverrides(
 
     return {
         survivalPerSecond: clamp01(pin(overrides.survivalPerSecond, settings.survivalPerSecond)),
-        motionScale: Math.max(0, pin(overrides.motionScale, settings.motionScale)),
         transientPunch: clamp01(pin(overrides.transientPunch, settings.transientPunch)),
     };
 }
@@ -331,21 +306,6 @@ export function advanceAccumulationSlot(current: 0 | 1, advancing: boolean): 0 |
     return current === 0 ? 1 : 0;
 }
 
-/**
- * Where the accumulation is read from, given the motion field at this point.
- *
- * The image is dragged *against* the field so material appears to travel along it: sampling from
- * behind moves what is there forward. Scaled by delta for the same reason survival is.
- */
-export function gatherOffset(
-    field: readonly [number, number],
-    motionScale: number,
-    deltaSeconds: number,
-): [number, number] {
-    if (!(deltaSeconds > 0)) {
-        return [0, 0];
-    }
-
-    const step = motionScale * deltaSeconds;
-    return [-field[0] * step, -field[1] * step];
-}
+// `gatherOffset` stood here, giving the accumulation's read position from the summed motion field.
+// It went with the drag (ADR-0012). `FieldFeedbackTransform` computes the same offset in GLSL, in
+// the graph, where a plugin doing something else entirely could sit instead.

@@ -6,7 +6,6 @@ import {
     COMPOSITE_NODE,
     GRADE_NODE,
     isPinned,
-    MOTION_NODE,
     PALETTE_NODE,
 } from './editor-view';
 import { emptyAuthoredScene, resolveAuthoredScene, type AuthoredScene } from './authored-scene';
@@ -243,59 +242,37 @@ describe('the implicit buses', () => {
             .toEqual(['mix#0']);
     });
 
-    test('a field reaches the motion sum whether or not anything reads it', () => {
-        // This is the whole point of the motion bus, and it is invisible in the graph.
+    test('a field no longer reaches the kernel behind the graph', () => {
+        // Three tests stood here covering the motion sum: that a field reached it whether or not
+        // anything read the field, that membership could be pinned, and that a scene without one
+        // said so. The stage is gone with the bus (ADR-0012), and what replaces it is the point —
+        // a field reaches the picture by being wired to something that reads it, which the canvas
+        // already draws. Nothing arrives at the kernel that the graph does not show.
         const built = view(scene({
             nodes: [
                 { id: 'src#0', pluginId: 'src', position: { x: 0, y: 0 } },
                 { id: 'fld#0', pluginId: 'fld', position: { x: 0, y: 200 } },
             ],
         }));
-        const motion = built.edges.filter((edge) => edge.kind === 'motion');
-
-        expect(motion).toHaveLength(1);
-        expect(motion[0].from.node).toBe('fld#0');
-        expect(motion[0].to.node).toBe(MOTION_NODE);
-    });
-
-    test('explicit motion membership can select none while retaining available fields', () => {
-        const built = view(scene({
-            nodes: [
-                { id: 'fld#0', pluginId: 'fld', position: { x: 0, y: 0 } },
-                { id: 'fld#1', pluginId: 'fld', position: { x: 0, y: 200 } },
-            ],
-            kernel: { motionInputs: [] },
-        }));
-        const motion = built.nodes.find((node) => node.id === MOTION_NODE);
 
         expect(built.edges.filter((edge) => edge.kind === 'motion')).toEqual([]);
-        expect(motion?.inputs).toEqual([]);
-        expect(motion?.availableInputs?.map((port) => port.name))
-            .toEqual(['fld#0.flow', 'fld#1.flow']);
-    });
-
-    test('a scene with no field says so rather than showing an empty stage', () => {
-        const motionNode = view(twoBranches).nodes.find((node) => node.id === MOTION_NODE);
-
-        expect(motionNode?.subtitle).toContain('not dragged');
-        expect(motionNode?.outputs[0].connected).toBe(false);
+        expect(built.nodes.some((node) => node.id === 'kernel:motion')).toBe(false);
     });
 });
 
 describe('the kernel tail', () => {
-    test('the six stages are present and chained in the order they run', () => {
+    test('the five stages are present and chained in the order they run', () => {
         const built = view(scene());
         const ids = built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id);
 
         expect(ids).toEqual([
-            PALETTE_NODE, COMPOSITE_NODE, MOTION_NODE, ACCUMULATE_NODE, GRADE_NODE, CANVAS_NODE,
+            PALETTE_NODE, COMPOSITE_NODE, ACCUMULATE_NODE, GRADE_NODE, CANVAS_NODE,
         ]);
 
         const chain = built.edges.filter((edge) => edge.kind === 'kernel');
         expect(chain.map((edge) => `${edge.from.node}->${edge.to.node}`)).toEqual([
             `${PALETTE_NODE}->${COMPOSITE_NODE}`,
             `${COMPOSITE_NODE}->${ACCUMULATE_NODE}`,
-            `${MOTION_NODE}->${ACCUMULATE_NODE}`,
             `${ACCUMULATE_NODE}->${GRADE_NODE}`,
             `${GRADE_NODE}->${CANVAS_NODE}`,
         ]);
@@ -315,7 +292,7 @@ describe('the kernel tail', () => {
             .find((node) => node.id === ACCUMULATE_NODE)!.parameters;
 
         expect(rows.map((row) => row.name))
-            .toEqual(['survivalPerSecond', 'motionScale', 'transientPunch']);
+            .toEqual(['survivalPerSecond', 'transientPunch']);
         // Decided per frame from the theme, the layer stack and three audio channels. Showing zero
         // would be a worse lie than showing nothing.
         expect(rows.every((row) => !isPinned(row))).toBe(true);
@@ -370,7 +347,6 @@ describe('the kernel tail', () => {
         expect(built.nodes.filter((node) => node.kind === 'kernel').map((node) => node.id)).toEqual([
             PALETTE_NODE,
             COMPOSITE_NODE,
-            MOTION_NODE,
             ACCUMULATE_NODE,
             GRADE_NODE,
             CANVAS_NODE,
@@ -398,7 +374,6 @@ describe('inspection targets', () => {
         const inspect = (id: string) => built.nodes.find((node) => node.id === id)?.inspect;
 
         expect(inspect(COMPOSITE_NODE)).toBe(COMPOSITE_NODE);
-        expect(inspect(MOTION_NODE)).toBe(MOTION_NODE);
         expect(inspect(ACCUMULATE_NODE)).toBe(ACCUMULATE_NODE);
         // The graded image is the canvas, so there is nothing separate to show.
         expect(inspect(GRADE_NODE)).toBeUndefined();

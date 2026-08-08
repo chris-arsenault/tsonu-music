@@ -6,7 +6,6 @@ import {
     blackFloorFor,
     DEFAULT_THEME_PERSISTENCE,
     frameSurvival,
-    gatherOffset,
     injectionFor,
     isMotionSource,
     persistenceSettings,
@@ -16,7 +15,6 @@ import {
 describe('pinned persistence', () => {
     const computed: PersistenceSettings = {
         survivalPerSecond: 0.2,
-        motionScale: 0.4,
         transientPunch: 0.3,
     };
 
@@ -25,34 +23,31 @@ describe('pinned persistence', () => {
         expect(applyPersistenceOverrides(computed, {})).toEqual(computed);
     });
 
-    test('pinning one value leaves the other two following the audio', () => {
-        // Three separate questions. Holding the trail still to look at it should not also stop the
-        // drag, or what is being looked at is a different scene.
+    test('pinning one value leaves the other following the audio', () => {
+        // Separate questions. Holding the trail still to look at it should not also stop the pulse,
+        // or what is being looked at is a different scene.
         const pinned = applyPersistenceOverrides(computed, { survivalPerSecond: 0.9 });
 
         expect(pinned.survivalPerSecond).toBe(0.9);
-        expect(pinned.motionScale).toBe(computed.motionScale);
         expect(pinned.transientPunch).toBe(computed.transientPunch);
     });
 
     test('zero is a pin, not an absence', () => {
         const pinned = applyPersistenceOverrides(computed, {
             survivalPerSecond: 0,
-            motionScale: 0,
             transientPunch: 0,
         });
 
-        expect(pinned).toEqual({ survivalPerSecond: 0, motionScale: 0, transientPunch: 0 });
+        expect(pinned).toEqual({ survivalPerSecond: 0, transientPunch: 0 });
     });
 
-    test('survival and punch are clamped to the unit interval, drag to non-negative', () => {
+    test('survival and punch are clamped to the unit interval', () => {
         const pinned = applyPersistenceOverrides(computed, {
             survivalPerSecond: 5,
-            motionScale: -2,
             transientPunch: -1,
         });
 
-        expect(pinned).toEqual({ survivalPerSecond: 1, motionScale: 0, transientPunch: 0 });
+        expect(pinned).toEqual({ survivalPerSecond: 1, transientPunch: 0 });
     });
 
     test('a non-finite pin is ignored rather than sent to the shader', () => {
@@ -60,11 +55,11 @@ describe('pinned persistence', () => {
         // hunted.
         const pinned = applyPersistenceOverrides(computed, {
             survivalPerSecond: Number.NaN,
-            motionScale: Number.POSITIVE_INFINITY,
+            transientPunch: Number.POSITIVE_INFINITY,
         });
 
         expect(pinned.survivalPerSecond).toBe(computed.survivalPerSecond);
-        expect(pinned.motionScale).toBe(computed.motionScale);
+        expect(pinned.transientPunch).toBe(computed.transientPunch);
     });
 });
 
@@ -89,7 +84,6 @@ describe('persistence settings', () => {
         persistenceSettings({
             themePersistence: DEFAULT_THEME_PERSISTENCE,
             layerWeights: [],
-            bass: 0.5,
             rms: 0.5,
             transient: 0,
             ...overrides,
@@ -105,10 +99,9 @@ describe('persistence settings', () => {
     test('no scene is ever completely static', () => {
         // The substance of the missing feedback floor: whatever the theme and the layers ask for,
         // something of the previous frame survives, so the image is never regenerated from nothing.
-        const barest = settings({ themePersistence: 0, layerWeights: [], bass: 0, rms: 0 });
+        const barest = settings({ themePersistence: 0, layerWeights: [], rms: 0 });
 
         expect(barest.survivalPerSecond).toBeGreaterThan(0);
-        expect(barest.motionScale).toBeGreaterThan(0);
     });
 
     test('a layer that means to persist is not averaged away by the stages beside it', () => {
@@ -118,28 +111,24 @@ describe('persistence settings', () => {
         expect(withTrails.survivalPerSecond).toBeGreaterThan(without.survivalPerSecond);
     });
 
-    test('bass drags the image further, per the section 20 mapping table', () => {
-        expect(settings({ bass: 1 }).motionScale)
-            .toBeGreaterThan(settings({ bass: 0 }).motionScale);
-    });
+    // A `bass drags the image further` test stood here. How far the image is dragged is no longer
+    // the kernel's to decide: it is `FieldFeedbackTransform.motionScale`, bound to large-scale force
+    // like any other plugin parameter. See ADR-0012.
 
-    test('reduced motion still accumulates but is barely dragged', () => {
-        const reduced = settings({ themePersistence: 0.9, bass: 1, reducedMotion: true });
-        const normal = settings({ themePersistence: 0.9, bass: 1 });
+    test('reduced motion still accumulates', () => {
+        const reduced = settings({ themePersistence: 0.9, reducedMotion: true });
 
-        expect(reduced.motionScale).toBeLessThan(normal.motionScale * 0.25);
         expect(reduced.survivalPerSecond).toBeGreaterThan(0);
+        expect(reduced.transientPunch).toBe(0);
     });
 
     test('settings stay inside sane bounds for any input', () => {
         for (const persistence of [0, 0.25, 0.5, 0.75, 1]) {
-            for (const bass of [0, 0.5, 1]) {
-                const result = settings({ themePersistence: persistence, bass, rms: bass });
+            for (const rms of [0, 0.5, 1]) {
+                const result = settings({ themePersistence: persistence, rms });
 
                 expect(result.survivalPerSecond).toBeGreaterThan(0);
                 expect(result.survivalPerSecond).toBeLessThan(1);
-                expect(result.motionScale).toBeGreaterThan(0);
-                expect(result.motionScale).toBeLessThan(1);
             }
         }
     });
@@ -155,7 +144,6 @@ describe('transients punch through the accumulation', () => {
     const settings = (transient: number) => persistenceSettings({
         themePersistence: 0.7,
         layerWeights: [],
-        bass: 0.5,
         rms: 0.5,
         transient,
     });
@@ -181,13 +169,9 @@ describe('transients punch through the accumulation', () => {
         expect(settings(0.5).transientPunch).toBeLessThan(settings(1).transientPunch * 0.3);
     });
 
-    test('a strike shoves the image as well as brightening it', () => {
-        expect(settings(1).motionScale).toBeGreaterThan(settings(0).motionScale * 1.5);
-    });
-
     test('reduced motion does not punch', () => {
         const reduced = persistenceSettings({
-            themePersistence: 0.7, layerWeights: [], bass: 0.5, rms: 0.5,
+            themePersistence: 0.7, layerWeights: [], rms: 0.5,
             transient: 1, reducedMotion: true,
         });
 
@@ -293,23 +277,9 @@ describe('accumulation slots', () => {
     });
 });
 
-describe('gather offset', () => {
-    test('the image is dragged along the field, not against it', () => {
-        // Sampling from behind is what moves material forward.
-        expect(gatherOffset([1, 0], 0.2, 1)).toEqual([-0.2, -0]);
-    });
-
-    test('displacement is a rate, so it is frame-rate independent', () => {
-        const [slow] = gatherOffset([1, 0], 0.2, 1 / 30);
-        const [fast] = gatherOffset([1, 0], 0.2, 1 / 60);
-
-        expect(slow).toBeCloseTo(fast * 2, 10);
-    });
-
-    test('a frozen clock does not drag', () => {
-        expect(gatherOffset([1, 1], 0.5, 0)).toEqual([0, 0]);
-    });
-});
+// A `gather offset` block stood here, covering the read position the accumulation was dragged to.
+// The kernel no longer drags anything (ADR-0012): `FieldFeedbackTransform` computes the same offset
+// in GLSL, in the graph, where a plugin doing something else could sit instead.
 
 /* -------------------------------------------------------------------------- */
 /* The recurrence                                                             */
@@ -361,6 +331,27 @@ function swirlField(x: number, y: number): [number, number] {
     return [-cy, cx];
 }
 
+/**
+ * Where a displaced loop reads its history from, mirroring `FieldFeedbackTransform`'s GLSL.
+ *
+ * This used to be `gatherOffset` in `core/persistence.ts`, because the kernel owned the drag. It
+ * does not (ADR-0012), so the arithmetic lives in the plugin and this is the reference the recurrence
+ * below is checked against. The claim being tested is unchanged and is the central one: a
+ * displacement applied to what it produced last frame, hundreds of frames running, is flow.
+ */
+function gatherOffset(
+    field: readonly [number, number],
+    drag: number,
+    deltaSeconds: number,
+): [number, number] {
+    if (!(deltaSeconds > 0)) {
+        return [0, 0];
+    }
+
+    const step = drag * deltaSeconds;
+    return [-field[0] * step, -field[1] * step];
+}
+
 interface RunResult {
     /** Mean absolute per-pixel change between successive frames. */
     deltas: number[];
@@ -372,6 +363,8 @@ function run(
     deltaSeconds: number,
     frames: number,
     composite = staticComposite(),
+    /** UV per second per unit of field, as `FieldFeedbackTransform.motionScale` supplies. */
+    drag = 0,
 ): RunResult {
     let grid = new Float32Array(SIDE * SIDE);
     const deltas: number[] = [];
@@ -384,7 +377,7 @@ function run(
 
         for (let y = 0; y < SIDE; y += 1) {
             for (let x = 0; x < SIDE; x += 1) {
-                const [dx, dy] = gatherOffset(swirlField(x, y), current.motionScale, deltaSeconds);
+                const [dx, dy] = gatherOffset(swirlField(x, y), drag, deltaSeconds);
                 // The offset is in UV; the grid is in texels.
                 const history = sample(grid, x + dx * SIDE, y + dy * SIDE);
                 next[y * SIDE + x] = accumulate(
@@ -412,9 +405,14 @@ describe('the composite recurrence produces motion', () => {
     // recurrence is what is under test, and it needs the drag to cover comparable ground per frame.
     const moving: PersistenceSettings = {
         survivalPerSecond: 0.4,
-        motionScale: 1.6,
         transientPunch: 0,
     };
+
+    /**
+     * A larger UV rate than a real scene uses, because this grid is twenty-four texels across: the
+     * recurrence is what is under test and it needs the drag to cover comparable ground per frame.
+     */
+    const MOVING_DRAG = 1.6;
 
     test('a moving source leaves a trail lagging behind it', () => {
         // The property that matters, and the one the leaky integrator actually provides. A screen
@@ -438,7 +436,7 @@ describe('the composite recurrence produces motion', () => {
             const next = new Float32Array(SIDE * SIDE);
             for (let y = 0; y < SIDE; y += 1) {
                 for (let x = 0; x < SIDE; x += 1) {
-                    const [dx, dy] = gatherOffset(swirlField(x, y), moving.motionScale, 1 / 60);
+                    const [dx, dy] = gatherOffset(swirlField(x, y), MOVING_DRAG, 1 / 60);
                     const history = sample(accumulation, x + dx * SIDE, y + dy * SIDE);
                     next[y * SIDE + x] = accumulate(history, composite[y * SIDE + x], survival, floor);
                 }
@@ -462,7 +460,9 @@ describe('the composite recurrence produces motion', () => {
         // Survival and injection are complements, so a genuinely unchanging input reaches a fixed
         // point equal to that input. This is the assertion the screen combine could never satisfy:
         // it had no fixed point, so a still image climbed to white and stayed there.
-        const { deltas, final } = run(moving, 1 / 60, 400);
+        // Under drag, which is the harder claim: converging with no displacement at all would be
+        // trivially true and would not describe any scene.
+        const { deltas, final } = run(moving, 1 / 60, 400, staticComposite(), MOVING_DRAG);
 
         expect(deltas[399]).toBeLessThan(deltas[20]);
         expect(Math.max(...final)).toBeLessThanOrEqual(1);
@@ -471,8 +471,8 @@ describe('the composite recurrence produces motion', () => {
     test('a stronger field carries material further from where it was drawn', () => {
         // Measured as spread rather than as frame-to-frame delta: a fast drag samples further from
         // the lit column each frame, so the temporal difference can fall even as the motion rises.
-        const spread = (motionScale: number) => {
-            const { final } = run({ ...moving, motionScale }, 1 / 60, 180);
+        const spread = (drag: number) => {
+            const { final } = run(moving, 1 / 60, 180, staticComposite(), drag);
             let lit = 0;
             for (let index = 0; index < final.length; index += 1) {
                 if (final[index] > 0.01) {
@@ -488,9 +488,9 @@ describe('the composite recurrence produces motion', () => {
     test('one second of playback looks the same at thirty frames as at sixty', () => {
         // A gentler drag than the default, so the comparison measures the per-second formulation
         // rather than how differently a coarse step samples a strong swirl.
-        const gentle: PersistenceSettings = { ...moving, motionScale: 0.5 };
-        const atSixty = run(gentle, 1 / 60, 60).final;
-        const atThirty = run(gentle, 1 / 30, 30).final;
+        const gentle = 0.5;
+        const atSixty = run(moving, 1 / 60, 60, staticComposite(), gentle).final;
+        const atThirty = run(moving, 1 / 30, 30, staticComposite(), gentle).final;
 
         let difference = 0;
         for (let index = 0; index < atSixty.length; index += 1) {
@@ -504,7 +504,7 @@ describe('the composite recurrence produces motion', () => {
 
     test('material spreads beyond where it was drawn', () => {
         // The stripe occupies one column. Anything lit outside it arrived by being dragged there.
-        const { final } = run(moving, 1 / 60, 180);
+        const { final } = run(moving, 1 / 60, 180, staticComposite(), MOVING_DRAG);
 
         let litAway = 0;
         for (let y = 0; y < SIDE; y += 1) {
@@ -521,7 +521,6 @@ describe('the composite recurrence produces motion', () => {
     test('with no accumulation the frame is exactly what was drawn', () => {
         const still: PersistenceSettings = {
             survivalPerSecond: 0,
-            motionScale: 0,
             transientPunch: 0,
         };
         const { final, deltas } = run(still, 1 / 60, 30);

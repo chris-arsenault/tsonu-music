@@ -224,15 +224,14 @@ describe('an authored document drives the frame', () => {
 
         const computed: PersistenceSettings = {
             survivalPerSecond: 0.05,
-            motionScale: 0.2,
-            transientPunch: 0,
+            transientPunch: 0.2,
         };
         const applied = applyPersistenceOverrides(computed, pinned.scene.kernel.persistence);
 
         expect(applied.survivalPerSecond).toBe(0.9);
         expect(frameSurvival(applied.survivalPerSecond, 1)).toBeCloseTo(0.9, 6);
-        // The drag was not pinned, so it still follows what the scene computed.
-        expect(applied.motionScale).toBe(0.2);
+        // The punch was not pinned, so it still follows what the scene computed.
+        expect(applied.transientPunch).toBe(0.2);
     });
 
     test('an edit to one node leaves every other node instance-identical', () => {

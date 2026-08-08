@@ -364,7 +364,6 @@ describe('the kernel tail', () => {
         expect(result.scene.kernel.persistence).toBeUndefined();
         expect(result.scene.kernel.layers).toBeUndefined();
         expect(result.scene.kernel.compositeInputs).toBeUndefined();
-        expect(result.scene.kernel.motionInputs).toBeUndefined();
     });
 
     test('grade parameters resolve over the kernel defaults rather than replacing them', () => {
@@ -396,7 +395,6 @@ describe('the kernel tail', () => {
         const result = resolveAuthoredScene(document({
             kernel: {
                 compositeInputs: ['src#0'],
-                motionInputs: [],
                 palette: { id: 'monochrome-noir', strength: 0 },
                 persistence: { survivalPerSecond: 0.9 },
                 layers: { 'src#0': { opacity: 0 } },
@@ -406,7 +404,6 @@ describe('the kernel tail', () => {
         expect(result.ok).toBe(true);
         if (!result.ok) return;
         expect(result.scene.kernel.compositeInputs).toEqual(['src#0']);
-        expect(result.scene.kernel.motionInputs).toEqual([]);
         expect(result.scene.kernel.palette).toEqual({ id: 'monochrome-noir', strength: 0 });
         expect(result.scene.kernel.persistence).toEqual({ survivalPerSecond: 0.9 });
         expect(result.scene.kernel.layers).toEqual({ 'src#0': { opacity: 0 } });

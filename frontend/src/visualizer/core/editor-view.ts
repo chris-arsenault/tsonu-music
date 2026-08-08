@@ -23,14 +23,12 @@ import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from './composite-grade';
 import type { CompiledGraph } from './graph';
 import { layersForGraph } from './layers';
 import { selectKernelInputs } from './kernel-inputs';
-import { isMotionSource } from './persistence';
 import type { PluginCategory, PluginRegistry, PortType } from './plugin';
 import type { ResourceId } from './passes';
 
 /** The kernel's own stages, in the order they run. Ids match the runtime's target keys. */
 export const PALETTE_NODE = 'kernel:palette';
 export const COMPOSITE_NODE = 'kernel:composite';
-export const MOTION_NODE = 'kernel:motion';
 export const ACCUMULATE_NODE = 'kernel:accumulate';
 export const GRADE_NODE = 'kernel:grade';
 export const CANVAS_NODE = 'kernel:canvas';
@@ -418,9 +416,7 @@ function appendKernelTail(
     const column = (index: number) => rightmost + KERNEL_COLUMN_GAP * (index + 1);
 
     const availableLayers = graph ? layersForGraph(graph) : [];
-    const availableMotion = graph?.resources.filter((resource) => isMotionSource(resource.type)) ?? [];
     const layers = selectKernelInputs(availableLayers, document.kernel?.compositeInputs);
-    const motion = selectKernelInputs(availableMotion, document.kernel?.motionInputs);
     const kernel = document.kernel;
 
     nodes.push({
@@ -468,33 +464,10 @@ function appendKernelTail(
         problems: [],
     });
 
-    nodes.push({
-        id: MOTION_NODE,
-        kind: 'kernel',
-        title: 'Motion sum',
-        subtitle: graph
-            ? motion.length === 0
-                ? 'no field — the image is not dragged'
-                : `${motion.length} field${motion.length === 1 ? '' : 's'}`
-            : 'field unresolved',
-        position: { x: column(0), y: KERNEL_ROW_GAP },
-        inputs: motion.map((resource) => ({
-            name: resource.id,
-            type: resource.type,
-            required: false,
-            connected: true,
-        })),
-        availableInputs: availableMotion.map((resource) => ({
-            name: resource.id,
-            type: resource.type,
-            required: false,
-            connected: motion.some((selected) => selected.id === resource.id),
-        })),
-        outputs: [{ name: 'motion', required: false, connected: motion.length > 0 }],
-        parameters: [],
-        inspect: MOTION_NODE,
-        problems: [],
-    });
+    // A `Motion sum` kernel node stood here, listing every motion-typed resource the graph produced.
+    // The kernel neither sums a motion field nor drags anything through one (ADR-0012), so drawing a
+    // stage for it would be drawing something that does not run. Where a field reaches the picture is
+    // now an ordinary edge to an ordinary node, which the canvas already shows.
 
     nodes.push({
         id: ACCUMULATE_NODE,
@@ -502,14 +475,10 @@ function appendKernelTail(
         title: 'Accumulate',
         subtitle: 'survival, drag, punch',
         position: { x: column(1), y: 0 },
-        inputs: [
-            { name: 'composite', required: true, connected: true },
-            { name: 'motion', required: false, connected: motion.length > 0 },
-        ],
+        inputs: [{ name: 'composite', required: true, connected: true }],
         outputs: [{ name: 'accumulation', required: false, connected: true }],
         parameters: [
             pinnedRow('survivalPerSecond', kernel?.persistence?.survivalPerSecond),
-            pinnedRow('motionScale', kernel?.persistence?.motionScale),
             pinnedRow('transientPunch', kernel?.persistence?.transientPunch),
         ],
         inspect: ACCUMULATE_NODE,
@@ -564,15 +533,6 @@ function appendKernelTail(
             });
         }
 
-        for (const resource of motion) {
-            edges.push({
-                id: `motion:${resource.id}`,
-                kind: 'motion',
-                from: { node: resource.producedBy, port: resource.port },
-                to: { node: MOTION_NODE, port: resource.id },
-                type: resource.type,
-            });
-        }
     }
 
     edges.push(
@@ -588,12 +548,6 @@ function appendKernelTail(
             kind: 'kernel',
             from: { node: COMPOSITE_NODE, port: 'composite' },
             to: { node: ACCUMULATE_NODE, port: 'composite' },
-        },
-        {
-            id: 'kernel:motion-accumulate',
-            kind: 'kernel',
-            from: { node: MOTION_NODE, port: 'motion' },
-            to: { node: ACCUMULATE_NODE, port: 'motion' },
         },
         {
             id: 'kernel:accumulate-grade',

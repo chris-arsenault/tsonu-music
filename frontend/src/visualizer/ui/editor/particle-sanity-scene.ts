@@ -114,12 +114,10 @@ export function particleSanityScene(): AuthoredScene {
         present: { node: RENDERER, port: 'color' },
         kernel: {
             compositeInputs: [`${RENDERER}.color`],
-            motionInputs: [],
             grade: { bindings: [] },
             palette: { id: 'monochrome-noir', strength: 0 },
             persistence: {
                 survivalPerSecond: 0,
-                motionScale: 0,
                 transientPunch: 0,
             },
         },

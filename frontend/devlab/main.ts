@@ -180,7 +180,6 @@ function render(readout: KernelReadout): void {
         ['analysis', readout.analysisPath],
         ['theme', scene?.themeId ?? '—'],
         ['persistence', scene ? `${scene.survivalPerSecond.toFixed(3)}/s` : '—'],
-        ['drag', scene ? `${scene.motionScale.toFixed(3)} uv/s` : '—'],
         ['layers', String(scene?.layerCount ?? 0)],
         ['branches', String(scene?.materialBranchCount ?? 0)],
         ['passes', String(readout.render?.passesExecuted ?? 0)],

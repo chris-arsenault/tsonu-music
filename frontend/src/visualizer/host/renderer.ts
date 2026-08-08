@@ -260,7 +260,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     /** Last frame's composite settings, for the diagnostics overlay. */
     let lastPersistence: PersistenceSettings = {
         survivalPerSecond: 0,
-        motionScale: 0,
         transientPunch: 0,
     };
 
@@ -283,7 +282,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let gradeBindings: readonly ParameterBinding[] = COMPOSITE_BINDINGS;
     let persistenceOverrides: PersistenceOverrides | undefined;
     let layerOverrides: Record<string, LayerOverride> | undefined;
-    let motionInputs: readonly string[] | undefined;
 
     function colourStrength(theme: typeof scene.theme): number {
         return paletteOverride?.strength ?? theme.colorPolicy?.strength ?? 0.75;
@@ -504,7 +502,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         result: ReturnType<typeof buildFromEntropy>,
         preserveInstances = true,
         seeds: Readonly<Record<string, number>> = {},
-        kernelInputs?: Pick<ResolvedKernel, 'compositeInputs' | 'motionInputs'>,
+        kernelInputs?: Pick<ResolvedKernel, 'compositeInputs'>,
     ): boolean => {
         if (!result.ok) {
             // A failed rebuild is not a reason to stop rendering what already works.
@@ -582,7 +580,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         // opacity in a single frame.
         const departingLayers = layers;
         layers = selectKernelInputs(layersForGraph(scene.graph), kernelInputs?.compositeInputs);
-        motionInputs = kernelInputs?.motionInputs;
         crossfades = crossfadesBetween(departingLayers, layers);
         runtime.setGraph(scene.graph, instances);
 
@@ -726,7 +723,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         scene.theme.targetCharacter?.persistence ?? DEFAULT_THEME_PERSISTENCE,
                     layerWeights: composeLayers(composedLayers).feedbackContributors
                         .map((contributor) => contributor.weight),
-                    bass: frame.features.continuous.bass,
                     rms: frame.features.continuous.rms,
                     transient: frame.features.continuous.transient,
                     reducedMotion: frame.profile.reducedMotion,
@@ -740,7 +736,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     renderWidth: canvas.width,
                     renderHeight: canvas.height,
                     layers: composedLayers,
-                    motionInputs,
                     crossfades,
                     // Section 11 gives every layer a feedback participation weight and makes injection
                     // the compositor's duty. The weights were computed and consumed by nothing; this is
@@ -783,7 +778,6 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 paletteOverride = undefined;
                 persistenceOverrides = undefined;
                 layerOverrides = undefined;
-                motionInputs = undefined;
 
                 return applyBuild(buildFresh(profile), false);
             },

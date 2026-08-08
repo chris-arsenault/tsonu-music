@@ -25,7 +25,14 @@ import type { VisualPluginDefinition } from './plugin';
 
 /** Resolves a plugin id to its definition. Operations need port shapes, not the whole registry. */
 export type PluginLookup = (pluginId: string) => VisualPluginDefinition | undefined;
-export type KernelInputStage = 'composite' | 'motion';
+/**
+ * Kernel stages whose inputs a document may pin.
+ *
+ * `motion` was the other one. The kernel no longer sums a motion field or drags anything through it
+ * (ADR-0012), so there is no membership left to pin: a scene's displacement is an edge in the graph,
+ * and pinning that means moving the edge.
+ */
+export type KernelInputStage = 'composite';
 
 /**
  * A free id for another instance of this definition.
@@ -322,23 +329,17 @@ function updateKernel(
  */
 export function setKernelInputs(
     scene: AuthoredScene,
-    stage: KernelInputStage,
+    _stage: KernelInputStage,
     inputs: readonly string[] | undefined,
 ): AuthoredScene {
     return updateKernel(scene, (kernel) => {
         const unique = inputs === undefined ? undefined : [...new Set(inputs)];
         const next = { ...kernel };
 
-        if (stage === 'composite') {
-            if (unique === undefined) {
-                delete next.compositeInputs;
-            } else {
-                next.compositeInputs = unique;
-            }
-        } else if (unique === undefined) {
-            delete next.motionInputs;
+        if (unique === undefined) {
+            delete next.compositeInputs;
         } else {
-            next.motionInputs = unique;
+            next.compositeInputs = unique;
         }
 
         return next;

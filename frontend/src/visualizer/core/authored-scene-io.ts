@@ -87,7 +87,6 @@ function canonicalScene(scene: AuthoredScene): Record<string, unknown> {
 function canonicalKernel(kernel: AuthoredKernel): Record<string, unknown> {
     return omitUndefined({
         compositeInputs: kernel.compositeInputs !== undefined ? [...kernel.compositeInputs] : undefined,
-        motionInputs: kernel.motionInputs !== undefined ? [...kernel.motionInputs] : undefined,
         grade: kernel.grade && omitUndefined({
             parameters: kernel.grade.parameters && sortedNumbers(kernel.grade.parameters),
             bindings: kernel.grade.bindings?.map(canonicalBinding),
@@ -98,7 +97,6 @@ function canonicalKernel(kernel: AuthoredKernel): Record<string, unknown> {
         }),
         persistence: kernel.persistence && omitUndefined({
             survivalPerSecond: kernel.persistence.survivalPerSecond,
-            motionScale: kernel.persistence.motionScale,
             transientPunch: kernel.persistence.transientPunch,
         }),
         layers: kernel.layers && Object.fromEntries(
@@ -458,10 +456,6 @@ function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[
         kernel.compositeInputs = uniqueStrings(raw.compositeInputs);
     }
 
-    if (Array.isArray(raw.motionInputs)) {
-        kernel.motionInputs = uniqueStrings(raw.motionInputs);
-    }
-
     if (isRecord(raw.grade)) {
         const parameters = isRecord(raw.grade.parameters)
             ? finiteNumbers(raw.grade.parameters)
@@ -486,7 +480,7 @@ function validateKernel(raw: Record<string, unknown>, warnings: AuthoredProblem[
 
     if (isRecord(raw.persistence)) {
         kernel.persistence = finiteNumbers(raw.persistence, [
-            'survivalPerSecond', 'motionScale', 'transientPunch',
+            'survivalPerSecond', 'transientPunch',
         ]);
     }
 

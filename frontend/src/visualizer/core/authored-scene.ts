@@ -113,8 +113,6 @@ export interface AuthoredKernel {
      * deliberately gives the stage no inputs.
      */
     compositeInputs?: string[];
-    /** Explicit resource membership for Motion sum, with the same automatic/empty distinction. */
-    motionInputs?: string[];
     /** The grade's own parameters and what drives them, resolved exactly as a plugin's are. */
     grade?: {
         parameters?: Record<string, number>;
@@ -193,7 +191,6 @@ export interface ResolvedAuthoredScene {
 
 export interface ResolvedKernel {
     compositeInputs?: readonly string[];
-    motionInputs?: readonly string[];
     gradeParameters: Record<string, number>;
     gradeBindings: readonly ParameterBinding[];
     palette?: {
@@ -401,7 +398,6 @@ export function resolveKernel(kernel: AuthoredKernel | undefined): ResolvedKerne
         ...(kernel?.compositeInputs !== undefined
             ? { compositeInputs: [...kernel.compositeInputs] }
             : {}),
-        ...(kernel?.motionInputs !== undefined ? { motionInputs: [...kernel.motionInputs] } : {}),
         gradeParameters: { ...COMPOSITE_PARAMETERS, ...(kernel?.grade?.parameters ?? {}) },
         gradeBindings: kernel?.grade?.bindings ?? COMPOSITE_BINDINGS,
         ...(kernel?.palette ? { palette: { ...kernel.palette } } : {}),

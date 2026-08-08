@@ -17,7 +17,6 @@ import {
     COMPOSITE_NODE,
     GRADE_NODE,
     isPinned,
-    MOTION_NODE,
     PALETTE_NODE,
     type EditorNode,
     type EditorParameterRow,
@@ -193,9 +192,9 @@ function KernelControls({
         );
     }
 
-    const stage: KernelInputStage | undefined = node.id === COMPOSITE_NODE
-        ? 'composite'
-        : node.id === MOTION_NODE ? 'motion' : undefined;
+    // Composite is the only kernel stage with pinnable membership left; the motion sum it used to
+    // share this with no longer exists. See ADR-0012.
+    const stage: KernelInputStage | undefined = node.id === COMPOSITE_NODE ? 'composite' : undefined;
 
     if (!stage) {
         return null;

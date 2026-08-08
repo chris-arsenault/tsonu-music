@@ -102,8 +102,6 @@ export interface KernelReadout {
         activeModulatorCount: number;
         /** Fraction of the accumulated image surviving one second. */
         survivalPerSecond: number;
-        /** UV per second the accumulation is dragged through the scene's motion field. */
-        motionScale: number;
         /** Every live instance's resolved parameters, so the editor can show them moving. */
         parameters: Record<string, Record<string, number>>;
         /** The document in control, if one is. */
@@ -473,7 +471,6 @@ export function startKernel(options: KernelOptions): KernelHandle {
                         materialBranchCount: renderer.materialBranchCount(),
                         activeModulatorCount: renderer.activeModulatorCount(),
                         survivalPerSecond: renderer.persistence().survivalPerSecond,
-                        motionScale: renderer.persistence().motionScale,
                         parameters: renderer.liveParameters(),
                         authored: renderer.authoredScene(),
                         problems: renderer.sceneProblems(),

@@ -93,7 +93,6 @@ function full(): AuthoredScene {
         present: { node: 'trn#0', port: 'color' },
         kernel: {
             compositeInputs: ['trn#0'],
-            motionInputs: [],
             grade: { parameters: { exposure: 1.4 }, bindings: [{ ...binding, parameter: 'exposure' }] },
             palette: { id: 'monochrome-noir', strength: 0 },
             persistence: { survivalPerSecond: 0.8 },

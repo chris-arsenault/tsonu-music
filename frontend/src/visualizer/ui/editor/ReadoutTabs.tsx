@@ -83,7 +83,6 @@ export function PerformanceTab({
                     label="persistence"
                     value={`${(readout.scene?.survivalPerSecond ?? 0).toFixed(3)}/s`}
                 />
-                <Row label="drag" value={`${(readout.scene?.motionScale ?? 0).toFixed(3)} uv/s`} />
                 <Row label="mutation" value={readout.scene?.lastMutation ?? 'none'} />
                 <Row label="assets" value={String(readout.scene?.assets.length ?? 0)} />
             </Section>

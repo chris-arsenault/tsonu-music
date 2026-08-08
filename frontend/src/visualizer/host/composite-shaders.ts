@@ -9,37 +9,13 @@
 
 import { QUAD_VERTEX_SHADER } from './device';
 
-/** Sums one field into the scene's motion field. Drawn once per contributing field, additively. */
-export const MOTION_SUM_SHADER_ID = 'kernel-motion-sum';
-
-export const MOTION_SUM_SHADER = {
-    id: MOTION_SUM_SHADER_ID,
-    vertex: QUAD_VERTEX_SHADER,
-    fragment: `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform vec2 uResolution;
-/** Scales one contribution so a field with a large magnitude cannot dominate the sum outright. */
-uniform float uWeight;
-
-void main() {
-    // rg carries the vector for every motion source type. A collision field's b channel is boundary
-    // proximity, which is why only two channels are read here.
-    vec2 field = texture(uSource, vUv).xy;
-
-    // Fields are authored around unit magnitude but nothing enforces it, so a single wild contributor
-    // is bounded before it joins the sum rather than after.
-    float magnitude = length(field);
-    if (magnitude > 2.0) {
-        field *= 2.0 / magnitude;
-    }
-
-    fragColor = vec4(field * uWeight, 0.0, 1.0);
-}`,
-};
+// A `MOTION_SUM_SHADER` stood here, summing every motion-typed resource in the graph into one
+// kernel-owned field that the accumulation was then gathered through (ADR-0008). It is gone with the
+// drag it fed. Summing every field a scene happened to contain was, among other things, a way of
+// giving a field a consumer whether or not anything wired one — ADR-0008 said so, and recorded that
+// closing it properly belonged to a structural predicate requiring a scene's fields to reach one.
+// That predicate now exists, and a field reaches the picture by being wired to something that reads
+// it, in the graph, where it can be seen.
 
 /**
  * Advances the accumulation buffer one frame.
@@ -226,28 +202,25 @@ out vec4 fragColor;
 
 uniform sampler2D uComposite;
 uniform sampler2D uHistory;
-uniform sampler2D uMotion;
 uniform vec2 uResolution;
 /** Fraction of the accumulation surviving this frame, from frameSurvival(). */
 uniform float uSurvival;
-/** UV per second per unit of field magnitude, from persistenceSettings(). */
-uniform float uMotionScale;
 uniform float uDelta;
-/** Zero when the scene produced no motion field, which leaves the drag out entirely. */
-uniform float uHasMotion;
 /** Share of this frame's composite entering the accumulation, from injectionFor(). */
 uniform float uInjection;
 /** Subtracted each frame so an abandoned trail reaches true black, from BLACK_FLOOR. */
 uniform float uBlackFloor;
 
 void main() {
-    vec2 field = uHasMotion > 0.5 ? texture(uMotion, vUv).xy : vec2(0.0);
-
-    // gatherOffset(): read from behind along the field, so material travels forward along it.
-    vec2 offset = -field * uMotionScale * uDelta;
-    vec2 source = clamp(vUv + offset, 0.0, 1.0);
-
-    vec4 history = texture(uHistory, source);
+    // No displacement here any more (ADR-0012). This pass gathered the accumulation from a point
+    // offset along a summed field, which made translation the only thing that could ever happen to
+    // the accumulated image: one verb, fixed in the kernel, in a subsystem whose premise is that
+    // behaviour comes from composition. Displacement is a plugin now, and the position it occupies
+    // accepts a blur, a threshold, a colour operation, or a second mixer just as readily.
+    //
+    // What stays is the guarantee. Every scene has a memory whether or not the graph provides one,
+    // and this combine has a fixed point.
+    vec4 history = texture(uHistory, vUv);
     vec4 incoming = texture(uComposite, vUv);
 
     // accumulate(): a leaky integrator. Survival and injection sum to one, so a static image

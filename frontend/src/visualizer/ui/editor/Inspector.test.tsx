@@ -5,7 +5,6 @@ import {
     ACCUMULATE_NODE,
     COMPOSITE_NODE,
     GRADE_NODE,
-    MOTION_NODE,
     PALETTE_NODE,
     type EditorNode,
 } from '../../core/editor-view';
@@ -186,27 +185,9 @@ describe('inspector', () => {
         expect(html).toContain('>Use all</button>');
     });
 
-    test('the motion sum can add and remove compatible field inputs', () => {
-        const html = render(<Inspector
-            node={node({
-                id: MOTION_NODE,
-                kind: 'kernel',
-                title: 'Motion sum',
-                inputs: [{ name: 'flow#0.field', required: false, connected: true }],
-                availableInputs: [
-                    { name: 'flow#0.field', required: false, connected: true },
-                    { name: 'wave#0.motion', required: false, connected: false },
-                ],
-            })}
-            editable
-            {...handlers}
-        />);
-
-        expect(html).toContain('Add motion input');
-        expect(html).toContain('wave#0.motion');
-        expect(html).toContain('>Remove</button>');
-        expect(html).toContain('>Use all</button>');
-    });
+    // A test for the motion sum's membership editing stood here. That stage no longer exists
+    // (ADR-0012): where a field reaches the picture is an ordinary edge to an ordinary node, edited
+    // on the canvas like any other, so there is no kernel-side membership left to pin.
 
     test('a node with problems shows them before anything else', () => {
         const html = render(<Inspector
