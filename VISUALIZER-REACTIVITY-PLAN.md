@@ -20,7 +20,7 @@ has a decision in it that should be made deliberately rather than inside a fix.
 | 5 | Particle configuration nodes leave the field budget | R6 | done |
 | 6 | The mask-to-particle path, and the two red tests | R5 | done |
 | 7 | A palette reachable without album artwork | R8 (part) | done |
-| 8 | **[hold]** Accumulation transform | R9 | design first |
+| 8 | Historical edges — see [ADR-0012](./docs/adr/0012-visualizer-historical-edges.md) | R9 | designed |
 | 9 | **[hold]** `DomainWarpTransform` driver typing | R7 | design first |
 | 10 | **[hold]** Scene selection fitness | R8 | design first |
 
@@ -126,28 +126,61 @@ needs no asset makes the stage selectable everywhere.
 
 ## Held for design
 
-### Step 8 — Accumulation transform [R9]
+### Step 8 — Historical edges [R9] — designed, see ADR-0012
 
-The largest item, and the one that decides whether this reads as a Milkdrop-class
-visualizer. The accumulation currently admits one transform: translation along a
-motion field. Adding an audio-driven affine stage — zoom, rotation, centre,
-anisotropic scale — on top of the existing field warp is what turns a two percent
-musical excursion into visible motion, because it compounds frame over frame
-instead of being rebuilt.
+Designed in [ADR-0012](./docs/adr/0012-visualizer-historical-edges.md), which
+supersedes ADR-0008 and amends ADR-0007. The earlier framing here — an audio-driven
+affine block bolted to the accumulation — is withdrawn. It would have made
+displacement the only thing that can ever happen to the accumulated image, which is
+a fixed vocabulary in a subsystem whose premise is that behaviour comes from
+composition.
 
-Open questions to settle before writing it:
+Two corrections to what this document previously said. Survival at 0.184 per second
+is **0.972 per frame**, and MilkDrop presets typically decay 0.96 to 0.98 per frame,
+so decay was never the problem and does not need raising. And motion belongs to
+*nodes*, not layers: measured, 2.3 to 2.6 of about thirteen nodes per scene are
+layers, and the warp families with the most to publish sit mid-chain and never
+become one.
 
-- Where the affine parameters live. They are neither a plugin's nor the grade's;
-  `PersistenceSettings` is the closest existing home, and it is currently three
-  scalars derived from the theme and three audio channels rather than a bound
-  parameter block.
-- Whether survival rises with it, and how far. A warped feedback wants something
-  near 0.9 per second where the ceiling is 0.25, and that changes what every
-  existing scene looks like.
-- Whether the per-scene affine character is drawn from the theme, from the
-  entropy, or authored — the equivalent question to which preset is loaded.
-- How this interacts with `motionScale` and the summed motion field, which is a
-  second, per-pixel displacement of the same buffer.
+The decision, in one line: **any input may be satisfied by another node's previous
+frame**, the kernel keeps the accumulation buffer and its fixed point, and the
+kernel's drag moves into the graph.
+
+The execution layer already does all of this — `feedback` is an edge attribute,
+those edges are excluded from the topological order so they may close cycles,
+`previous` is recorded per edge for any resource, and ping-pong is derived
+generically. The narrowing is in `core/wiring.ts` alone, which matches port *names*
+and points the edge at the plugin's own output.
+
+| # | Sub-step | Where |
+| --- | --- | --- |
+| 8.1 | Historical candidacy derived from port type; wiring may close a loop to any compatible producer, not only a plugin's own output | `core/wiring.ts` |
+| 8.2 | Kernel decays and clamps every historically-read resource, so a loop is lossy by construction and a divergent one saturates rather than reaching `NaN` | `core/persistence.ts`, `host/runtime.ts` |
+| 8.3 | `minimumFeedbackLoops` becomes a count of historical edges, at least one terminating at a node that transforms space | `core/grammar.ts` |
+| 8.4 | `producesMotion` and `requireMotionSource` ask whether a field *reaches a consumer*, the predicate ADR-0008 deferred | `core/grammar.ts`, `core/scene-builder.ts` |
+| 8.5 | Retire the motion-field bus; remove the drag from `PERSISTENCE_SHADER`, keeping decay, black floor, and the integrator | `host/runtime.ts`, `host/composite-shaders.ts` |
+| 8.6 | A warp plugin whose `source` is historical, so displacement exists as a plugin before the kernel's is removed | `plugins/transformers/` |
+| 8.7 | Publish the discarded quantity from the families that already compute one — the table in the design notes below | catalog |
+| 8.8 | Editor: historical edges are drawn and togglable, since where a loop closes changes a composition more than which plugins are in it | `ui/editor/` |
+
+Order matters at two points. 8.6 lands before 8.5 so the picture never loses its
+drag between commits, and 8.2 lands before 8.1 so no loop can be closed before the
+bound on it exists.
+
+**What each family already computes and throws away**, for 8.7:
+
+| family | discarded quantity |
+| --- | --- |
+| `CoordinateWarpTransform` (9), `DomainWarpTransform` (6) | the per-pixel offset it applies once |
+| `FeedbackFlowTransform` (9) | zoom, rotate, translate, spiral, pinch — MilkDrop's `zoom/rot/dx/dy`, already audio-bound |
+| `SymmetryTransform` (8), `SDFShapeSource` (7) | `spin`, an integrated phase velocity |
+| `ProceduralTextureSource` (8) | stripes, rings, checker, and angular all scroll on `uTime` |
+| `SignalTraceSource` (9), `ParametricCurveSource` (8) | the tangent the trace sweeps along |
+| `SpectrumGeometrySource` (8) | the rise and fall of each band |
+| `WaveFieldSimulator`, `ReactionDiffusionSimulator` | propagation direction, chemical gradient |
+| `ShockwaveTransform` (4) | the expanding ring on a hit |
+| `ParticleRenderer` (4) | body velocities |
+| `AlbumArtSource`, `LayerMixer`, `MaskRouter` | nothing, honestly — static imagery, or a join |
 
 ### Step 9 — `DomainWarpTransform` driver typing [R7]
 

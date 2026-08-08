@@ -1,6 +1,6 @@
 # 0008 — Spatial fields sum into one motion field that drags the accumulation
 
-- Status: Accepted
+- Status: Superseded by [0012](./0012-visualizer-historical-edges.md)
 - Date: 2026-07-25
 
 ## Context
