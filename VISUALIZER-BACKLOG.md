@@ -70,10 +70,12 @@ the role goes quiet with it.
   force centres, and collider geometry are unbound: any range would be a different
   fraction of the frame at every render size. Worth revisiting if these become
   normalised coordinates.
-- **Seven severity-3 audit items** left in place with reasons, in
-  `VISUALIZER-REPAIR-PLAN.md`. The notable one is a `smoothstep` with inverted
-  edges — formally unspecified, correct on every mainstream driver, untestable
-  here.
+- **Three severity-3 audit items** left in place, in `VISUALIZER-REPAIR-PLAN.md`.
+  There were seven; four were reasons that did not survive being read back and are
+  now fixed, including the `smoothstep` with inverted edges, which was undefined
+  behaviour defended as working behaviour. The three remaining are an unused
+  uniform declaration, a stale uniform behind a gate, and three producer-side
+  channels — none of which changes a pixel.
 
 ## Resolved since the last revision
 

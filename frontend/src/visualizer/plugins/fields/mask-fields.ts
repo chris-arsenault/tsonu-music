@@ -74,6 +74,30 @@ void main() {
     fragColor = vec4(signedDistance, gradient, inside);
 }`;
 
+/**
+ * A ramp falling from one to zero as a signed distance crosses the boundary.
+ *
+ * Both call sites wrote smoothstep(edge, -edge, x), reversing the edges to invert the ramp. GLSL ES
+ * 3.00 leaves the result undefined when edge0 is not less than edge1, and the audit left it on the
+ * grounds that every mainstream driver does the intended thing and that changing it without hardware
+ * to test on would trade a working behaviour for a guess.
+ *
+ * That reasoning was wrong twice. Undefined behaviour is not a working behaviour, and this is not a
+ * guess: smoothstep's curve is symmetric about its midpoint, so 1 - smoothstep(-e, e, x) is exactly
+ * equal to smoothstep(e, -e, x) wherever the latter is defined. The same values, in the form the
+ * specification defines.
+ *
+ * The width is floored because edge0 == edge1 is undefined as well, and a softness or feather of zero
+ * is a reachable parameter value rather than a hypothetical one.
+ */
+const FALLING_RAMP = `
+float fallingRamp(float width, float x) {
+    float edge = max(width, 1e-4);
+
+    return 1.0 - smoothstep(-edge, edge, x);
+}
+`;
+
 const CONTAINMENT_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -83,11 +107,12 @@ uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uSoftness;
 uniform float uOutside;
+${FALLING_RAMP}
 
 void main() {
     float signedDistance = texture(uField, vUv).r;
     // Smoothed across the boundary, so a contained system fades rather than clipping.
-    float containment = smoothstep(uSoftness, -uSoftness, signedDistance);
+    float containment = fallingRamp(uSoftness, signedDistance);
     fragColor = vec4(vec3(uOutside > 0.5 ? 1.0 - containment : containment), 1.0);
 }`;
 
@@ -101,10 +126,11 @@ uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uFeather;
 uniform float uEdgeOnly;
+${FALLING_RAMP}
 
 void main() {
     float signedDistance = texture(uField, vUv).r;
-    float interior = smoothstep(uFeather, -uFeather, signedDistance);
+    float interior = fallingRamp(uFeather, signedDistance);
     // Edge-only routes the effect through a band around the boundary instead of the whole interior.
     float band = 1.0 - smoothstep(0.0, uFeather * 3.0, abs(signedDistance));
     float weight = uEdgeOnly > 0.5 ? band : interior;

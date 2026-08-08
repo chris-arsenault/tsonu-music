@@ -41,6 +41,7 @@ import type { DiagnosticsControls } from '../core/diagnostics';
 import { buildFirstViableScene, variedThemeOrder } from '../core/scene-builder';
 import { compileGraph } from '../core/graph';
 import { graphCycles } from '../core/loop-gain';
+import { planTargets } from '../core/render-plan';
 import { distributeReactivity } from '../core/audio-mapping';
 import { createRng, freshSceneEntropy, instanceSeed, type Rng } from '../core/random';
 import {
@@ -999,10 +1000,15 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
             },
 
             estimatedTextureBytes() {
-                // Half-float RGBA is eight bytes per pixel; a ping-ponged resource counts twice.
-                const perTarget = canvas.width * canvas.height * 8;
-                const pingPong = scene.graph.pingPong.length;
-                return (scene.graph.resources.length + pingPong) * perTarget;
+                // Half-float RGBA is eight bytes per pixel, summed over the targets the plan actually
+                // allocates. This charged every resource the full canvas, which overstates every
+                // field, mask and depth texture — `RESOURCE_SIZING` puts those at half resolution or
+                // smaller, so the figure ran high by roughly the share of a scene that is not colour.
+                // Asking the planner rather than re-deriving the sizing keeps one implementation of
+                // it; a ping-ponged resource contributes both its slots because the planner emits
+                // both. Reported at full quality, which is what a memory ceiling should be.
+                return planTargets(scene.graph, canvas.width, canvas.height, 1, 0, 1)
+                    .targets.reduce((total, target) => total + target.width * target.height * 8, 0);
             },
 
             themeId() {

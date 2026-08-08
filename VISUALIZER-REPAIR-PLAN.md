@@ -58,7 +58,58 @@ with a kick every half second and a hat every eighth, run through the real
 | `mid` | 0.0081 | 0.204 |
 | `lowMid` | 0.038 | 0.138 |
 
-## Severity-3 items left in place, with reasons
+## Severity-3 items, revisited 2026-08-08
+
+Four of these were reasons rather than justifications, and the difference was
+pointed out twice before it landed. Each is now either fixed or has a reason that
+survives being read back. Deferring an item is fine; recording the deferral in a
+file instead of saying it out loud is what made this a pattern.
+
+**Fixed — `smoothstep` with inverted edges in `mask-fields.ts`.** The reason given
+was that every mainstream driver implements the intended inversion and that
+changing it without hardware to test on would trade a working behaviour for a
+guess. Wrong twice. Undefined behaviour is not a working behaviour, and there was
+no guess available to make: `smoothstep`'s curve is symmetric about its midpoint,
+so `1 - smoothstep(-e, e, x)` is exactly equal to `smoothstep(e, -e, x)` wherever
+the latter is defined. Both call sites now share one `fallingRamp` helper, which
+also floors the width, since `edge0 == edge1` is undefined too and a softness of
+zero is reachable. A contract test rejects the reversed form.
+
+**Fixed — `totalImpactEnergy` and `packImpacts` have no non-test caller.** The
+reason given was that deleting a correct, tested helper is a different judgement
+from deleting a wrong one. It is, and that is an argument against deleting
+carelessly rather than for keeping something indefinitely. Both are gone, with
+their tests. Tests around code nothing calls are worse than the dead code alone,
+because they make it read as supported to whoever asks next what the impact bus
+does. Recoverable from git if a consumer appears.
+
+**Fixed — `estimatedTextureBytes` overstating half-resolution fields.** The reason
+given was that it is a diagnostics figure with no effect on rendering. True, and
+a memory readout that is wrong by the share of a scene that is not colour is worth
+less than no readout. It now sums the targets `planTargets` actually allocates, so
+there is one implementation of the sizing rather than an approximation beside it.
+
+**Fixed — `frameParity` advancing on frozen frames.** Recorded as resolved by
+step 9 and left in the open list.
+
+**Still open — `uResolution` declared and unused in 24 shader blocks.** Measured
+across nine files. Genuinely cosmetic: GLSL strips an unused uniform, and
+`setUniforms` no-ops on a location that does not exist. Removing the declarations
+is 24 edits for no change in any pixel, which is the one case here where the cost
+is real and the benefit is not.
+
+**Still open — `presentSingle` leaving stale ramp uniforms.** Gated out by
+`uChromatic: 0`, and that gate is what the diagnostics path depends on for a raw
+view. No pixel differs either way.
+
+**Still open — channels with no consumer**: `leftLevel`, `rightLevel`,
+`beatConfidence`, `sectionChange`. Three are the raw material `stereoBalance` and
+the beat path are derived from, so they are producer-side and cheap.
+`sectionChange` is declared on the event bus and never emitted — checked, and it is
+not in the bindable feature list, so no binding can be distributed onto a channel
+that is always empty. It is an unimplemented feature rather than a dead binding.
+
+## The original list, as written
 
 **`frameParity` advancing on frozen frames.** The exposure was a ping-pong
 producer being skipped while its consumers kept alternating slots at refresh

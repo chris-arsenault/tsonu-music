@@ -361,6 +361,31 @@ describe('every declared loop gain is a per-second survival', () => {
      *
      * What bounds the pipeline instead is the grade's roll-off, globally, once (ADR-0013).
      */
+    /**
+     * No shader reverses smoothstep's edges to invert a ramp.
+     *
+     * GLSL ES 3.00 leaves `smoothstep` undefined when edge0 is not less than edge1. Two call sites in
+     * `mask-fields.ts` did it, and the audit recorded them as acceptable because every mainstream
+     * driver implements the intended inversion and there was no hardware to test on. Undefined
+     * behaviour is not a working behaviour, and `1.0 - smoothstep(-e, e, x)` is exactly equal wherever
+     * the reversed form is defined, so there was never a trade to make.
+     *
+     * Matched on a negated first edge against a positive second, which is the shape both instances
+     * had and the only one detectable in source text — a reversal between two uniforms is not.
+     */
+    test('no shader reverses smoothstep\'s edges', () => {
+        const reversed = /smoothstep\s*\(\s*(-\s*)?(\w+)\s*,\s*(-\s*)?\2\s*,/;
+
+        for (const definition of CATALOG) {
+            for (const source of shaderSources(definition)) {
+                const match = source.fragment.match(reversed);
+                const inverted = match !== null && match[1] === undefined && match[3] !== undefined;
+
+                expect(inverted, `${definition.id}: ${match?.[0] ?? ''}`).toBe(false);
+            }
+        }
+    });
+
     test('no shader injects the complement of its own survival', () => {
         const complement = /\*\s*\(\s*1\.0\s*-\s*(survival|decay|uDecay|uSurvival)\s*\)/;
 

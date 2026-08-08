@@ -71,20 +71,11 @@ export function impactAge(impact: ImpactEvent, playbackTime: number): number {
     return (playbackTime - impact.playbackTime) / IMPACT_LIFETIME_SECONDS;
 }
 
-/** Total live energy, for consumers scaling a global response such as glow. */
-export function totalImpactEnergy(bus: ImpactBus, playbackTime: number): number {
-    let total = 0;
-
-    for (const impact of bus.active) {
-        const age = impactAge(impact, playbackTime);
-        if (age >= 0 && age <= 1) {
-            // Linear decay: an impact contributes most when fresh.
-            total += impact.energy * (1 - age);
-        }
-    }
-
-    return total;
-}
+// `totalImpactEnergy` stood here, summing live energy for a consumer scaling a global response such
+// as glow. Nothing outside its own tests ever called it. It was recorded as deliberate on the grounds
+// that deleting a correct, tested helper is a different judgement from deleting a wrong one — which is
+// a reason not to delete carelessly, not a reason to keep something indefinitely. Tests around dead
+// code are worse than dead code alone, because they make it read as live. In git if a consumer arrives.
 
 /** The strongest live impact, for consumers that respond to one rather than to all. */
 export function strongestImpact(bus: ImpactBus, playbackTime: number): ImpactEvent | undefined {
@@ -107,43 +98,11 @@ export function strongestImpact(bus: ImpactBus, playbackTime: number): ImpactEve
     return best;
 }
 
-/**
- * Packs impacts for a shader uniform: position, energy, radius per impact.
- *
- * Preallocated and reused so consuming impacts costs no per-frame allocation.
- */
-export function packImpacts(
-    bus: ImpactBus,
-    playbackTime: number,
-    into: Float32Array,
-    stride = 4,
-): number {
-    const capacity = Math.floor(into.length / stride);
-    let count = 0;
-
-    for (const impact of bus.active) {
-        if (count >= capacity) {
-            break;
-        }
-
-        const age = impactAge(impact, playbackTime);
-        if (age < 0 || age > 1) {
-            continue;
-        }
-
-        const offset = count * stride;
-        into[offset] = impact.position[0];
-        into[offset + 1] = impact.position[1];
-        into[offset + 2] = impact.energy * (1 - age);
-        into[offset + 3] = impact.radius;
-        count += 1;
-    }
-
-    // Zeroes the unused tail, so a shader reading the full array sees no stale impacts.
-    into.fill(0, count * stride);
-
-    return count;
-}
+// `packImpacts` stood here, filling a preallocated Float32Array with position, energy and radius per
+// live impact for a shader reading an array of them. Nothing outside its own tests called it either,
+// and no plugin declares such a uniform: `defineShaderPlugin`'s `impactDriven` path feeds the single
+// strongest impact through `uImpactCentre`, `uImpactRadius` and `uImpactEnergy`. Deleted for the same
+// reason, and recoverable from git if a plugin wanting many impacts at once is ever written.
 
 function isValidImpact(impact: ImpactEvent): boolean {
     return Number.isFinite(impact.position[0])

@@ -6,10 +6,8 @@ import {
     impactAge,
     IMPACT_LIFETIME_SECONDS,
     MAX_IMPACTS,
-    packImpacts,
     publishImpacts,
     strongestImpact,
-    totalImpactEnergy,
     type ImpactEvent,
 } from './impact';
 
@@ -119,29 +117,8 @@ describe('age and energy', () => {
         expect(impactAge(event, 100 + IMPACT_LIFETIME_SECONDS)).toBeCloseTo(1, 6);
     });
 
-    test('total energy decays as impacts age', () => {
-        const bus = publishImpacts(createImpactBus(), [impact({ energy: 4, playbackTime: 100 })]);
-
-        expect(totalImpactEnergy(bus, 100)).toBeCloseTo(4, 6);
-        expect(totalImpactEnergy(bus, 100 + IMPACT_LIFETIME_SECONDS / 2)).toBeCloseTo(2, 6);
-        expect(totalImpactEnergy(bus, 100 + IMPACT_LIFETIME_SECONDS)).toBeCloseTo(0, 6);
-    });
-
-    test('total energy sums live impacts and ignores expired ones', () => {
-        const bus = publishImpacts(createImpactBus(), [
-            impact({ energy: 2, playbackTime: 100 }),
-            impact({ energy: 3, playbackTime: 100 }),
-            impact({ energy: 10, playbackTime: 0 }),
-        ]);
-
-        expect(totalImpactEnergy(bus, 100)).toBeCloseTo(5, 6);
-    });
-
-    test('an empty bus has no energy and no strongest impact', () => {
-        const bus = createImpactBus();
-
-        expect(totalImpactEnergy(bus, 100)).toBe(0);
-        expect(strongestImpact(bus, 100)).toBeUndefined();
+    test('an empty bus has no strongest impact', () => {
+        expect(strongestImpact(createImpactBus(), 100)).toBeUndefined();
     });
 
     test('the strongest impact accounts for age, not just energy', () => {
@@ -156,55 +133,6 @@ describe('age and energy', () => {
     });
 });
 
-describe('shader packing', () => {
-    test('packs position, decayed energy, and radius', () => {
-        const bus = publishImpacts(createImpactBus(), [
-            impact({ position: [0.25, 0.75], energy: 2, radius: 0.3, playbackTime: 100 }),
-        ]);
-        const buffer = new Float32Array(8);
-
-        const count = packImpacts(bus, 100, buffer);
-
-        expect(count).toBe(1);
-        expect(buffer[0]).toBeCloseTo(0.25, 6);
-        expect(buffer[1]).toBeCloseTo(0.75, 6);
-        expect(buffer[2]).toBeCloseTo(2, 6);
-        expect(buffer[3]).toBeCloseTo(0.3, 6);
-    });
-
-    test('zeroes the unused tail so no stale impact is read', () => {
-        const bus = publishImpacts(createImpactBus(), [impact()]);
-        const buffer = new Float32Array(12).fill(9);
-
-        packImpacts(bus, 100, buffer);
-
-        expect([...buffer.slice(4)]).toEqual(new Array(8).fill(0));
-    });
-
-    test('respects the buffer capacity rather than overflowing', () => {
-        let bus = createImpactBus();
-        for (let index = 0; index < 10; index += 1) {
-            bus = publishImpacts(bus, [impact()]);
-        }
-
-        const buffer = new Float32Array(8);
-        expect(packImpacts(bus, 100, buffer)).toBe(2);
-    });
-
-    test('expired impacts are skipped during packing', () => {
-        const bus = publishImpacts(createImpactBus(), [
-            impact({ playbackTime: 0 }),
-            impact({ playbackTime: 100 }),
-        ]);
-        const buffer = new Float32Array(16);
-
-        expect(packImpacts(bus, 100, buffer)).toBe(1);
-    });
-
-    test('an empty bus packs nothing and clears the buffer', () => {
-        const buffer = new Float32Array(8).fill(5);
-
-        expect(packImpacts(createImpactBus(), 100, buffer)).toBe(0);
-        expect([...buffer]).toEqual(new Array(8).fill(0));
-    });
-});
+// A `shader packing` block of five tests stood here, covering `packImpacts`. Deleted with it: no
+// plugin declares an array-of-impacts uniform, and tests around code nothing calls make it read as
+// live to the next person deciding what the impact bus supports.
