@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <title>visualizer render harness</title>
+    </head>
+    <body>
+        <!--
+            The results land in this element as JSON, because the harness is read by a headless
+            browser dumping the DOM rather than by a person. `data-state` is what the reader waits
+            for: absent means still running, "done" or "failed" means the run finished.
+        -->
+        <pre id="results" data-state="running"></pre>
+        <script type="module" src="./main.ts"></script>
+    </body>
+</html>
