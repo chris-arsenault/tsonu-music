@@ -134,6 +134,9 @@ function edgeStyle(edge: EditorEdge): Edge {
         targetHandle: edge.to.port,
         // Only the document's own edges may be cut. The derived ones report why when tried.
         deletable: edge.kind === 'data' || edge.kind === 'feedback' || edge.kind === 'parameter',
+        // Carried through so an interaction can tell what it is holding. The kind was expressed
+        // only as a colour, which a click handler cannot read.
+        data: { kind: edge.kind },
     };
 
     switch (edge.kind) {
@@ -178,6 +181,14 @@ export interface GraphCanvasProps {
     onMove: (nodeId: string, position: { x: number; y: number }) => void;
     onConnect: (from: CanvasEndpoint, to: CanvasEndpoint) => void;
     onDisconnect: (edgeId: string) => void;
+    /**
+     * Turns an edge into one that reads the previous frame, or back.
+     *
+     * Any input may be satisfied by another node's previous frame (ADR-0012), and where a loop
+     * closes changes a composition more than which plugins are in it — so it has to be something a
+     * document can state, not only something wiring draws.
+     */
+    onToggleFeedback: (edgeId: string, feedback: boolean) => void;
     /** A link dropped on empty canvas, including which side of the new node must satisfy it. */
     onDropOnPane: (
         from: CanvasEndpoint,
@@ -197,6 +208,7 @@ export default function GraphCanvas({
     onMove,
     onConnect,
     onDisconnect,
+    onToggleFeedback,
     onDropOnPane,
     onAddAt,
     onReady,
@@ -319,6 +331,15 @@ export default function GraphCanvas({
             onConnect={commitConnection}
             onConnectEnd={onConnectEnd}
             onEdgesDelete={(deleted) => deleted.forEach((edge) => onDisconnect(edge.id))}
+            onEdgeDoubleClick={(_, edge) => {
+                // Only a data or feedback edge is the document's to change. A kernel or parameter
+                // edge is drawn to show a relationship the document does not own.
+                if (!editable || (edge.data?.kind !== 'data' && edge.data?.kind !== 'feedback')) {
+                    return;
+                }
+
+                onToggleFeedback(edge.id, edge.data.kind !== 'feedback');
+            }}
             isValidConnection={isValid}
             nodesConnectable={editable}
             nodesDraggable={editable}

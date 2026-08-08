@@ -36,6 +36,7 @@ import {
     removeNode,
     setBinding,
     setAssetBinding,
+    setFeedback,
     setLayerOverride,
     setMuted,
     setParameter,
@@ -414,6 +415,14 @@ export default function GraphEditorDock({
         edit(applyConnect(document_, view, from, to, lookup));
     }, [document_, view, edit, lookup]);
 
+    const onToggleFeedback = useCallback((edgeId: string, feedback: boolean) => {
+        if (!document_) {
+            return;
+        }
+
+        edit(setFeedback(document_, edgeId, feedback));
+    }, [document_, edit]);
+
     const onCanvasDisconnect = useCallback((edgeId: string) => {
         if (!document_ || !view) {
             return;
@@ -742,6 +751,7 @@ export default function GraphEditorDock({
                                         onMove={onMove}
                                         onConnect={onCanvasConnect}
                                         onDisconnect={onCanvasDisconnect}
+                                        onToggleFeedback={onToggleFeedback}
                                         onDropOnPane={(fixed, handleType, at) => {
                                             const node = view.nodes.find(
                                                 (candidate) => candidate.id === fixed.node,

@@ -249,6 +249,19 @@ describe('connections', () => {
         expect(scene.edges[0].feedback).toBe(true);
         expect(scene.edges[0].id).toContain(':feedback');
     });
+
+    test('an edge can be turned back into an ordinary one', () => {
+        // The editor toggles this on a double click, and where a loop closes changes a composition
+        // more than which plugins are in it — so it has to go both ways, and the id has to stop
+        // claiming a loop when there is not one. See ADR-0012.
+        const connected = connect(twoNodes(), from, to, lookup);
+        const looped = setFeedback(connected, connected.edges[0].id, true);
+        const restored = setFeedback(looped, looped.edges[0].id, false);
+
+        expect(restored.edges[0].feedback).toBeUndefined();
+        expect(restored.edges[0].id).not.toContain(':feedback');
+        expect(restored.edges[0].id).toBe(connected.edges[0].id);
+    });
 });
 
 describe('parameters and bindings', () => {
