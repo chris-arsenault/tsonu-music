@@ -31,7 +31,7 @@ export const GEOMETRIC_SIGNAL_THEME: VisualTheme = {
      * all twenty-four sampled scenes in this family ended up dragged.
      */
     excludedPlugins: [
-        'FieldFeedbackTransform',
+        'FieldAdvectTransform',
         'FlowFieldCompositor',
         ...DOMAIN_WARP_MODES.map((mode) => `DomainWarpTransform:${mode}`),
     ],

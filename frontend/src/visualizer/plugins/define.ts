@@ -209,9 +209,13 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
 
                     for (const input of spec.inputs) {
                         const sampler = input.sampler ?? defaultSampler(input.name);
-                        const resource = input.name === spec.feedbackPort
-                            ? render.previous[input.name] ?? render.inputs[input.name]
-                            : render.inputs[input.name];
+                        // A previous-frame resource is present exactly when wiring drew a back edge
+                        // into this port, so its presence is the whole condition (ADR-0013). This
+                        // read `input.name === spec.feedbackPort`, which was the last gate: the
+                        // compiler recorded `previous` for any historical edge, the render plan
+                        // allocated the second slot, and the plugin then ignored both unless the port
+                        // happened to carry the name it had declared.
+                        const resource = render.previous[input.name] ?? render.inputs[input.name];
 
                         if (resource) {
                             inputs[sampler] = resource;

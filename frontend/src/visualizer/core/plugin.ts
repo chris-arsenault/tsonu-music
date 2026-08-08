@@ -49,6 +49,20 @@ export function isValuePortType(type: PortType): boolean {
         || type === 'particle-state';
 }
 
+/**
+ * A port carrying a picture, which is the kind of loop that can run away visually.
+ *
+ * The distinction the loop-gain check turns on, and it is already in the port types. A simulator
+ * closing a loop on `reaction-diffusion-state` or `wave-field-state` is advancing its own state,
+ * bounded by its own dynamics — Gray-Scott stays inside nought to one because the reaction does, not
+ * because anything decays it — and no other plugin produces those types, so such a loop cannot be
+ * cross-wired anywhere else. A loop carrying a colour or mask texture is a picture fed back into a
+ * picture, and that is what diverges.
+ */
+export function isImagePortType(type: PortType): boolean {
+    return type === 'color-texture' || type === 'mask-texture';
+}
+
 export interface PluginPort {
     name: string;
     type: PortType;

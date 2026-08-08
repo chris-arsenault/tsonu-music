@@ -204,8 +204,15 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         category: 'transformer',
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
-            // Fed by a declared feedback edge from this plugin's own output.
-            { name: 'history', type: 'color-texture', required: false },
+            // Fed by a historical edge, and the lossy element of whatever cycle that edge closes:
+            // `decay` is the fraction of the trail surviving one second, so it is exactly the gain
+            // `core/loop-gain.ts` multiplies around the loop (ADR-0013).
+            {
+                name: 'history',
+                type: 'color-texture',
+                required: false,
+                gainParameter: 'decay',
+            },
             // Only the vector-field mode declares a field, so the other eight are not wired to one
             // they would ignore. Required, because without it this mode is a passthrough.
             ...(mode === 'vector-field'

@@ -17,7 +17,7 @@
  */
 
 import type { GraphNode, RenderGraphEdge } from './graph';
-import type { PluginPort, VisualPluginDefinition } from './plugin';
+import { isImagePortType, type PluginPort, type VisualPluginDefinition } from './plugin';
 
 /** A cycle in the graph, with the gain a signal accumulates going once around it. */
 export interface GraphCycle {
@@ -145,17 +145,42 @@ export function graphCycles(
 }
 
 /**
- * Cycles whose gain reaches one or more, which will grow without bound.
+ * Cycles carrying an image whose gain reaches one or more, which will grow without bound.
  *
  * The grade's roll-off means a divergent loop shows as a bright frame rather than as `NaN`, so this
  * is a correctness check rather than a crash guard. It is also the reason the four local bounds could
  * be removed: one structural condition, checked where scenes are assembled, replaces a rule that every
  * stage individually refuse to amplify.
+ *
+ * Images only. A simulator closing a loop on its own reaction-diffusion or wave-field state is
+ * advancing a system bounded by its own dynamics rather than by attenuation, and reporting those as
+ * divergent would refuse a loop anywhere in a scene that happens to contain one.
  */
 export function divergentCycles(
     nodes: readonly GraphNode[],
     edges: readonly RenderGraphEdge[],
     overrides: Readonly<Record<string, Record<string, number>>> = {},
 ): GraphCycle[] {
-    return graphCycles(nodes, edges, overrides).filter((cycle) => cycle.gain >= 1);
+    const byInstance = new Map(nodes.map((node) => [node.instanceId, node]));
+
+    const carriesImage = (cycle: GraphCycle): boolean => cycle.path.some((instanceId, index) => {
+        const next = cycle.path[index + 1];
+        if (next === undefined) {
+            return false;
+        }
+
+        return edges.some((edge) => {
+            if (edge.from.instanceId !== instanceId || edge.to.instanceId !== next) {
+                return false;
+            }
+
+            const sink = byInstance.get(edge.to.instanceId);
+            const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+
+            return port !== undefined && isImagePortType(port.type);
+        });
+    });
+
+    return graphCycles(nodes, edges, overrides)
+        .filter((cycle) => cycle.gain >= 1 && carriesImage(cycle));
 }

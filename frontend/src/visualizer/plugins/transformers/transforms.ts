@@ -894,7 +894,14 @@ export function createTemporalTransform(
         category: 'transformer',
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
-            { name: 'history', type: 'color-texture', required: false },
+            // `decay` is the fraction surviving one second, which is the gain of any cycle closing
+            // here (ADR-0013).
+            {
+                name: 'history',
+                type: 'color-texture',
+                required: false,
+                gainParameter: 'decay',
+            },
         ],
         outputs: [
             { name: 'color', type: 'color-texture' },

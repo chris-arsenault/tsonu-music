@@ -7,6 +7,7 @@
  */
 
 import { isMotionSource } from './fields';
+import { portGain } from './loop-gain';
 import { isValuePortType, type PluginCategory, type VisualPluginDefinition } from './plugin';
 
 export type CountRange = [number, number];
@@ -253,21 +254,18 @@ export function grammarViolations(
         });
     }
 
-    // Counted over plugins here and over edges in `structuralViolations`, deliberately. This is a
-    // necessary condition available before wiring, so assembly can reject a candidate set without
-    // paying to wire it; the edge count is the real one, and it is the only one that can see where a
-    // loop actually closed. A plugin able to close a loop that ends up not closing one fails there.
-    const closers = definitions.filter((definition) => declaresCapability(definition, 'feedback')).length;
-    if (closers > grammar.maximumFeedbackLoops) {
-        violations.push({
-            kind: 'too-many-feedback',
-            detail: `${closers} loop-closing plugins exceed ${grammar.maximumFeedbackLoops}`,
-        });
-    }
-    if (closers < grammar.minimumFeedbackLoops) {
+    // A pre-wiring count of plugins carrying the `feedback` capability stood here, as a cheap
+    // necessary condition for the edge count in `structuralViolations`. It stopped being necessary
+    // and stopped being true: under ADR-0013 every output persists and any image input may be the
+    // sink of a historical edge, so which plugins are present says nothing about whether a loop can
+    // be drawn. What a set has to contain is something lossy — a port declaring a gain below one —
+    // or every cycle wiring proposes will diverge and be refused.
+    const lossy = definitions.some((definition) => definition.inputs.some((port) =>
+        port.gainParameter !== undefined && portGain(definition, port) < 1));
+    if (grammar.minimumFeedbackLoops > 0 && !lossy) {
         violations.push({
             kind: 'too-few-feedback',
-            detail: `${closers} loop-closing plugins below ${grammar.minimumFeedbackLoops}`,
+            detail: 'no plugin can be the lossy element of a loop',
         });
     }
 

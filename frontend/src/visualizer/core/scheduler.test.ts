@@ -16,7 +16,7 @@ import {
     type SchedulerContext,
     type VisualTheme,
 } from './scheduler';
-import { GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } from './grammar';
+import { GEOMETRIC_SIGNAL, grammarViolations, ORGANIC_FLOW, satisfiesGrammar } from './grammar';
 import { createRng } from './random';
 import type { PluginCategory, SelectionCharacter, VisualPluginDefinition } from './plugin';
 
@@ -69,7 +69,15 @@ const CATALOG: VisualPluginDefinition[] = [
     plugin('field-b', 'field', { outputs: [{ name: 'flow', type: 'vector-field', required: false }] }),
     plugin('sim-a', 'simulator'),
     plugin('sim-b', 'simulator'),
-    plugin('transform-a', 'transformer', { capabilities: ['feedback'] }),
+    // Declares what it does to the image it reads. Under ADR-0013 a set is loop-capable when
+    // something in it is lossy, not when something in it carries a capability string.
+    plugin('transform-a', 'transformer', {
+        inputs: [
+            { name: 'source', type: 'color-texture', required: true },
+            { name: 'history', type: 'color-texture', required: false, gainParameter: 'decay' },
+        ],
+        parameters: { decay: 0.2 },
+    }),
     plugin('transform-b', 'transformer', { capabilities: ['symmetry'] }),
     plugin('transform-c', 'transformer'),
     plugin('compositor-a', 'compositor'),
@@ -343,14 +351,23 @@ describe('scene assembly', () => {
         }
     });
 
-    test('never exceeds the feedback limit', () => {
-        const feedbackCatalog = CATALOG.map((entry) => ({ ...entry, capabilities: ['feedback'] }));
+    test('a set with nothing lossy cannot satisfy a grammar that wants a loop', () => {
+        // The cap this test used to assert was on plugins carrying the `feedback` capability, which
+        // under ADR-0013 says nothing: every output persists and any image input may be a historical
+        // sink, so how many loops a scene has is a fact about its edges and is counted after wiring.
+        // What assembly can still decide before paying to wire is whether anything present could be
+        // the lossy element of a cycle at all.
+        const lossless = CATALOG.map((entry) => ({
+            ...entry,
+            inputs: entry.inputs.map((port) => ({ ...port, gainParameter: undefined })),
+        }));
 
-        for (const seed of ['f1', 'f2', 'f3']) {
-            const scene = assembleScene(seed, context({ available: feedbackCatalog }));
-            const feedback = scene.plugins.filter((entry) => entry.capabilities.includes('feedback'));
-            expect(feedback.length, seed).toBeLessThanOrEqual(ORGANIC_FLOW.maximumFeedbackLoops);
-        }
+        const violations = grammarViolations(
+            assembleScene('lossless', context({ available: lossless })).plugins,
+            ORGANIC_FLOW,
+        );
+
+        expect(violations.map((violation) => violation.kind)).toContain('too-few-feedback');
     });
 
     test('includes a visible source when the grammar requires one', () => {

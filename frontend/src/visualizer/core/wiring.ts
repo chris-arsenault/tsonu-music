@@ -10,7 +10,9 @@
  */
 
 import { portsCompatible, type GraphNode, type RenderGraphEdge } from './graph';
-import type { PluginCategory, PluginPort, VisualPluginDefinition } from './plugin';
+import { SPATIAL_FEEDBACK } from './grammar';
+import { divergentCycles } from './loop-gain';
+import { isImagePortType, type PluginCategory, type PluginPort, type VisualPluginDefinition } from './plugin';
 import type { Rng } from './random';
 
 /** Order plugins are chained in. Matches the scheduler's fill order. */
@@ -88,45 +90,82 @@ export function assetResourceId(assetId: string): string {
 }
 
 /**
- * Re-points each loop at a producer drawn from the whole scene (ADR-0012).
+ * Turns one forward image edge into a historical one, chosen so the cycle it makes converges.
  *
- * Every closing edge was pointed at the plugin's own output, so a loop could only ever be a branch
- * trailing itself. The compiler, the render plan, and the pass executor all accept a loop closed to
- * any resource; only this file insisted otherwise.
+ * This was `redirectLoops`, which re-pointed loops that a plugin had already declared by naming a
+ * port `history`, `feedback`, or `previous`. Under ADR-0013 no plugin declares a loop: every node
+ * output persists, any edge may read the previous frame, and where a scene remembers is a wiring
+ * decision like every other. What decides whether the decision is legal is the cycle's gain, so that
+ * is what is checked here rather than a capability string.
  *
- * Two configurations are favoured because they read as something. A plugin reading its own output is
- * a branch leaving a trail, which is what these plugins were written for. A plugin reading the
- * scene's terminal colour is the whole composed image folding back into itself, which is where a
- * tunnel comes from — and it is the configuration that makes a warp's small per-frame displacement
- * compound over hundreds of frames instead of being rebuilt. The rest are the variety.
+ * The sink is an image input somewhere in the chain and the source is a producer from anywhere in the
+ * scene, with two configurations favoured because they read as something. A node reading its own
+ * output is a branch leaving a trail. A node reading the scene's terminal colour is the whole
+ * composed image folding back into itself, which is where a tunnel comes from — the configuration
+ * that makes a warp's small per-frame displacement compound over hundreds of frames instead of being
+ * rebuilt from nothing. The rest are the variety.
+ *
+ * Grouped before it is drawn, because the three kinds are not equally numerous and drawing over the
+ * flat list lets the largest group decide the proportions: a scene has one of itself and one terminal
+ * against however many other colour producers it happens to hold, which made "somewhere else" the
+ * usual answer at a rate nobody chose — measured, 174 of 300 against 56 self-closing.
  */
-function redirectLoops(
+/**
+ * Image inputs a loop could close at, the ones that displace what they read first.
+ *
+ * Shuffled within each group rather than across both, because `requireSpatialLoop` asks for a loop
+ * that moves the image and not merely one that remembers it — a loop through a colour operation
+ * gives a scene a memory and no motion. Drawn flat, the displacing sinks are a minority of the image
+ * inputs in a scene and most candidates settled on one that only recolours, which the grammar then
+ * rejected after the whole scene had been assembled.
+ */
+function orderLoopSinks(
+    nodes: readonly GraphNode[],
+    rng: Rng,
+): { node: GraphNode; input: PluginPort }[] {
+    const sinks = nodes.flatMap((node) => node.definition.inputs
+        .filter((input) => isImagePortType(input.type))
+        .map((input) => ({ node, input })));
+
+    const displaces = (entry: { node: GraphNode }) =>
+        entry.node.definition.capabilities.includes(SPATIAL_FEEDBACK);
+
+    return [
+        ...rng.shuffle(sinks.filter(displaces)),
+        ...rng.shuffle(sinks.filter((entry) => !displaces(entry))),
+    ];
+}
+
+function closeLoop(
     edges: RenderGraphEdge[],
     nodes: readonly GraphNode[],
     rng: Rng,
 ): void {
     const terminal = resolvePresent(nodes);
 
-    for (const edge of edges) {
+    // Image loops a nominated port already closed are candidates to relocate, not fixtures. The
+    // nomination says where a previous frame is most useful *to that plugin*; where the scene
+    // remembers is a different question, and answering it with whichever loop-capable plugin
+    // selection happened to draw is what ADR-0013 removed. Exactly one survives either way, because
+    // the grammar budgets for one.
+    const isImageLoop = (edge: RenderGraphEdge): boolean => {
         if (!edge.feedback) {
-            continue;
+            return false;
         }
 
         const sink = nodes.find((node) => node.instanceId === edge.to.instanceId);
         const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
-        if (!sink || !port) {
-            continue;
-        }
 
+        return port !== undefined && isImagePortType(port.type) && !port.required;
+    };
+
+    const kept = edges.filter((edge) => !isImageLoop(edge));
+
+    for (const { node: sink, input } of orderLoopSinks(nodes, rng)) {
         const candidates = nodes.flatMap((node) => node.definition.outputs
-            .filter((output) => !output.internal && portsCompatible(output.type, port.type))
+            .filter((output) => !output.internal && portsCompatible(output.type, input.type))
             .map((output) => ({ instanceId: node.instanceId, port: output.name })));
 
-        // Grouped before it is drawn, because the three kinds are not equally numerous and drawing
-        // over the flat list lets the largest group decide the proportions. A scene has one of
-        // itself and one terminal against however many other colour producers it happens to hold,
-        // so weighting candidates individually made "somewhere else" the usual answer at a rate
-        // nobody chose — measured, 174 of 300 against 56 self-closing.
         const own = candidates.filter((candidate) => candidate.instanceId === sink.instanceId);
         const last = candidates.filter((candidate) =>
             terminal !== undefined
@@ -136,11 +175,8 @@ function redirectLoops(
             !own.includes(candidate) && !last.includes(candidate));
 
         const groups: { members: typeof candidates; weight: number }[] = [
-            // A branch leaving a trail: what these plugins were written for.
             { members: own, weight: 3 },
-            // The whole composed image folding back into itself: where a tunnel comes from.
             { members: last, weight: 3 },
-            // Everything else, which is the variety rather than the default.
             { members: rest, weight: 2 },
         ];
 
@@ -149,10 +185,27 @@ function redirectLoops(
             (entry) => entry.weight,
         );
         const picked = group && rng.pick(group.members);
-
-        if (picked) {
-            edge.from = picked;
+        if (!picked) {
+            continue;
         }
+
+        const to = { instanceId: sink.instanceId, port: input.name };
+        const proposed: RenderGraphEdge[] = [
+            ...kept.filter((edge) =>
+                !(edge.to.instanceId === to.instanceId && edge.to.port === to.port)),
+            { from: picked, to, feedback: true },
+        ];
+
+        // A cycle at unity gain grows without bound. The grade compresses, so it shows as a bright
+        // frame rather than as `NaN`, which is a worse thing to ship than a scene that composes
+        // differently — and the alternative candidates are right here.
+        if (divergentCycles(nodes, proposed).length > 0) {
+            continue;
+        }
+
+        edges.length = 0;
+        edges.push(...proposed);
+        return;
     }
 }
 
@@ -189,6 +242,28 @@ export function wireScene(
         let inputsWired = 0;
 
         for (const port of node.definition.inputs) {
+            // A port nominating a historical read gets one, ahead of any upstream producer. ADR-0013
+            // keeps `feedbackFrom` and the conventional names as a hint about where a previous frame
+            // is most useful to this plugin — not as permission for history to occur, which is now
+            // everywhere, but as the answer to which port a self-closing loop lands on.
+            //
+            // Images only. The particle emitters, forces and colliders each declare a `previous` port
+            // so they can chain, and every one after the first reads the list the one before it
+            // built. Preferring history there would break the chain into a row of nodes each reading
+            // its own last frame.
+            const nominated = isFeedbackPort(port)
+                && isImagePortType(port.type)
+                && ownOutputFor(node.definition, port);
+
+            if (nominated) {
+                edges.push({
+                    from: { instanceId: node.instanceId, port: nominated.name },
+                    to: { instanceId: node.instanceId, port: port.name },
+                    feedback: true,
+                });
+                continue;
+            }
+
             const excluded = usedProducerResources.get(port.type) ?? new Set<string>();
             // The first input continues whatever chain this node is part of; the rest reach for a
             // branch nothing has read, which is what folds separate generators into one image instead
@@ -246,32 +321,15 @@ export function wireScene(
             unconsumed.add(`${node.instanceId}.${port.name}`);
         }
 
-        // A feedback-capable transformer reads its own output even when an upstream source existed.
-        if (declaresFeedback(node.definition)) {
-            const historyPort = node.definition.inputs.find(isFeedbackPort);
-            const own = historyPort && ownOutputFor(node.definition, historyPort);
-            const alreadyWired = edges.some((edge) =>
-                edge.feedback && edge.to.instanceId === node.instanceId);
-
-            if (historyPort && own && !alreadyWired) {
-                // Replace any forward edge into the history port; it is meant to read the past.
-                const forward = edges.findIndex((edge) =>
-                    edge.to.instanceId === node.instanceId && edge.to.port === historyPort.name);
-                if (forward >= 0) {
-                    edges.splice(forward, 1);
-                }
-
-                edges.push({
-                    from: { instanceId: node.instanceId, port: own.name },
-                    to: { instanceId: node.instanceId, port: historyPort.name },
-                    feedback: true,
-                });
-            }
-        }
+        // A block stood here forcing every plugin carrying the `feedback` capability to read its own
+        // output, whether or not an upstream source existed. That was the mechanism that decided a
+        // scene's memory, and it decided it by capability string: which plugin was selected settled
+        // where the loop went and how it combined. Under ADR-0013 memory is a property of every
+        // output, so where a scene remembers is drawn below like any other wiring choice.
     }
 
     if (rng) {
-        redirectLoops(edges, nodes, rng);
+        closeLoop(edges, nodes, rng);
     }
 
     return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };
@@ -325,7 +383,9 @@ function satisfiedBy(
     definition: VisualPluginDefinition,
     port: PluginPort,
 ): boolean {
-    if (isFeedbackPort(port) && declaresFeedback(definition)) {
+    // A port nominating a historical read can always close on the output it names, so it never makes
+    // a plugin wait for a producer that may not exist.
+    if (isFeedbackPort(port) && ownOutputFor(definition, port) !== undefined) {
         return true;
     }
 
@@ -457,40 +517,15 @@ export function isFeedbackPort(port: PluginPort): boolean {
         || port.name === 'history' || port.name === 'feedback' || port.name === 'previous';
 }
 
-/**
- * A loop carrying an image, which is the kind that can run away visually.
- *
- * The distinction the attenuation contract turns on, and it is already in the port types. A
- * simulator closing a loop on `reaction-diffusion-state` or `wave-field-state` is advancing its own
- * state, bounded by its own dynamics — Gray-Scott stays inside nought to one because the reaction
- * does, not because anything decays it — and no other plugin produces those types, so such a loop
- * cannot be cross-wired anywhere else. A loop carrying a colour or mask texture is a picture being
- * fed back into a picture, and that is what diverges.
- */
-export function isImagePortType(type: PluginPort['type']): boolean {
-    return type === 'color-texture' || type === 'mask-texture';
-}
+// `isImagePortType` moved to `core/plugin.ts`, beside `isValuePortType`, when the loop-gain check
+// came to need it: it is a fact about a port type and both callers are outside this file.
+export { isImagePortType } from './plugin';
 
-/**
- * Whether a plugin may sit at the closing end of an image loop.
- *
- * The attenuation contract (ADR-0012). The kernel owns the combine for its own accumulation and can
- * promise that a static image converges to itself; it does not own a loop closed through the graph
- * and cannot. What it can require is that whatever closes one is lossy, which is not a restriction
- * so much as physics — a feedback path over an image that does not attenuate diverges whatever is
- * in it.
- *
- * This is a precondition on wiring, checkable and checked, rather than a hope about which plugins
- * selection happens to draw. ADR-0007 rejected the latter shape for persistence itself, and
- * persistence is still guaranteed by the kernel regardless of what the graph does.
- */
-export function attenuatesHistory(definition: VisualPluginDefinition): boolean {
-    return definition.capabilities.includes('feedback');
-}
-
-function declaresFeedback(definition: VisualPluginDefinition): boolean {
-    return attenuatesHistory(definition);
-}
+// `attenuatesHistory` stood here, asking whether a definition carried the `feedback` capability. It
+// was the attenuation contract of ADR-0012, and a capability string cannot express it: what keeps a
+// loop from diverging is the product of the gains around it, which is a number, belongs to the cycle
+// rather than to any one plugin, and can be checked. `divergentCycles` in `core/loop-gain.ts` is
+// what replaced it, and `closeLoop` above is the precondition on wiring it was asking for.
 
 /** The last colour output in the chain, which for a well-formed scene is the final stage. */
 function resolvePresent(nodes: readonly GraphNode[]): { instanceId: string; port: string } | undefined {

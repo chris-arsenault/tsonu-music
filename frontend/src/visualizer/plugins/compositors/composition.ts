@@ -29,6 +29,7 @@ uniform float uMode;
  */
 uniform float uSourceWeight;
 uniform float uOverlayWeight;
+uniform float uDelta;
 ${GLSL_COMMON}
 
 void main() {
@@ -38,7 +39,18 @@ void main() {
     // Weighted before the combine rather than after it, so each mode's own arithmetic is what scales:
     // add sums two attenuated operands, multiply multiplies them, lighten compares them. Applied to
     // the result instead, every mode would collapse to the same linear fade.
-    vec3 base = baseSample.rgb * uSourceWeight;
+    //
+    // The base weight is a fraction surviving one *second*, raised to the frame's own delta — the
+    // unit every decay in the catalog already uses, so a trail is a duration rather than a
+    // per-frame-at-sixty constant that smears differently on a 144 Hz display. It is also what makes
+    // the loop-gain check comparable across plugins: a bare 0.4 per frame and 0.4 per second differ
+    // by a factor of forty in how long the loop remembers, and the check would have called them the
+    // same number.
+    //
+    // The overlay weight is not a survival. It is how hard new material arrives, a plain multiplier,
+    // and raising it to a delta would make fresh content fade in at the frame rate.
+    float survival = uDelta > 0.0 ? pow(clamp(uSourceWeight, 0.0, 1.0), uDelta) : 1.0;
+    vec3 base = baseSample.rgb * survival;
     vec3 over = overSample.rgb * uOverlayWeight;
     vec3 result;
 
@@ -535,33 +547,31 @@ export function createLayerMixer(
                 required: true,
                 gainParameter: 'sourceWeight',
             },
-            // Fresh material joining what the base already holds. Free to exceed one, because a cycle
-            // closed through this port is rejected rather than tuned around.
-            {
-                name: 'overlay',
-                type: 'color-texture',
-                required: true,
-                gainParameter: 'overlayWeight',
-            },
+            // Fresh material joining what the base already holds. No gain parameter, because this is
+            // an injection rather than a survival: a cycle closed through here carries no loss and is
+            // refused, which is right — the overlay is where new material enters a blend, not where
+            // memory is carried through it.
+            { name: 'overlay', type: 'color-texture', required: true },
         ],
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['layer-mixing', 'blend'],
         fragment: LAYER_MIXER_FRAGMENT,
         uniforms: {
             uMode: LAYER_MIXER_MODES.indexOf(mode),
-            uSourceWeight: 0.94,
+            uSourceWeight: 0.2,
             uOverlayWeight: 1,
         },
-        parameters: { sourceWeight: 0.94, overlayWeight: 1 },
+        parameters: { sourceWeight: 0.2, overlayWeight: 1 },
         bindings: [{
-            // How long what is already in the base survives being combined with. This is the whole
-            // trail: at 0.96 a cycle through this port settles at twenty-five copies of its source,
-            // at 0.55 at barely two. Bound low enough that the music decides how far the image
-            // remembers rather than a constant deciding it once.
+            // How long what is already in the base survives, as the fraction left one second later.
+            // This is the whole trail: 0.05 is a third of a second and 0.7 is close to three, and at
+            // sixty frames a second the second of those keeps material alive for well over a hundred
+            // frames — which is what lets a per-frame displacement of a percent or two compound into
+            // something the eye reads as large.
             feature: 'lowMid',
             role: 'deformation',
             parameter: 'sourceWeight',
-            outputRange: [0.55, 0.96],
+            outputRange: [0.05, 0.7],
             attack: 0.35,
             release: 1.4,
             curve: 'smooth',
@@ -571,7 +581,7 @@ export function createLayerMixer(
             feature: 'rms',
             role: 'intensity',
             parameter: 'overlayWeight',
-            outputRange: [0.45, 1.15],
+            outputRange: [0.45, 0.98],
             attack: 0.15,
             release: 0.6,
             curve: 'smooth',
@@ -650,7 +660,14 @@ export function createFeedbackInjector(
         category: 'compositor',
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
-            { name: 'history', type: 'color-texture', required: false },
+            // `decay` is the fraction surviving one second, which is the gain of any cycle closing
+            // here (ADR-0013).
+            {
+                name: 'history',
+                type: 'color-texture',
+                required: false,
+                gainParameter: 'decay',
+            },
         ],
         outputs: [{ name: 'color', type: 'color-texture' }],
         capabilities: ['feedback'],

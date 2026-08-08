@@ -88,7 +88,12 @@ function renderWithAllInputs(definition: VisualPluginDefinition) {
     return instance.render({
         inputs: Object.fromEntries(definition.inputs.map((port) => [port.name, `in.${port.name}`])),
         outputs: Object.fromEntries(definition.outputs.map((port) => [port.name, `out.${port.name}`])),
-        previous: Object.fromEntries(definition.inputs.map((port) => [port.name, `prev.${port.name}`])),
+        // Empty, because the compiler records a previous-frame resource only for a port an edge was
+        // actually drawn into as historical. Offering one for every input made this fixture a graph
+        // where every edge is a back edge, which no scene is — and once ADR-0013 made a present
+        // `previous` entry the whole condition for reading it, that fixture started binding every
+        // sampler to a previous frame. The historical path has its own test below.
+        previous: {},
         renderWidth: 640,
         renderHeight: 360,
     });
@@ -449,7 +454,10 @@ describe('scene assembly across the full catalog', () => {
     });
 
     test('collision-energy scenes can include the impact simulator', () => {
-        const found = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8'].some((seed) => {
+        // Sixteen seeds, because eight is inside the noise: measured over a hundred, the simulator
+        // lands in 19 of them, so a run of eight misses about one time in five. It did after the loop
+        // wiring changed under ADR-0013, which is a different scene shape rather than a lost plugin.
+        const found = Array.from({ length: 16 }, (_, index) => `c${index}`).some((seed) => {
             const result = buildScene(seed, COLLISION_ENERGY_THEME, { ...base, assets: [] }, profileFor(0));
             return result.ok && result.scene.plugins.some((p) => p.id.startsWith('ImpactCascadeSimulator'));
         });
@@ -745,10 +753,25 @@ describe('temporal transform', () => {
         expect(depthAt(floor)).toBeGreaterThan(0);
     });
 
-    test('it reads its own past rather than the scene s', () => {
-        const passes = renderWithAllInputs(temporal('delayed-mirror'));
+    test('a port an edge was drawn into historically reads the previous frame', () => {
+        const definition = temporal('delayed-mirror');
+        const instance = definition.create(createContext().context);
+        instance.initialize();
+        instance.update(frame().frame);
+
+        // A present `previous` entry is the whole condition (ADR-0013): the compiler records one only
+        // for an edge wiring actually drew as historical, so the plugin no longer has to have
+        // declared which of its ports is allowed to be that edge's sink.
+        const passes = instance.render({
+            inputs: { source: 'in.source', history: 'in.history' },
+            outputs: { color: 'out.color' },
+            previous: { history: 'prev.history' },
+            renderWidth: 640,
+            renderHeight: 360,
+        });
 
         expect(passes[0].inputs?.uHistory).toBe('prev.history');
+        expect(passes[0].inputs?.uSource).toBe('in.source');
         expect(passes[0].clear).toBe(false);
     });
 

@@ -44,12 +44,20 @@ function plugin(
 }
 
 const colorIn: PluginPort = { name: 'source', type: 'color-texture', required: true };
-const historyIn: PluginPort = { name: 'history', type: 'color-texture', required: false };
+// Declares what it does to the history it reads. Under ADR-0013 that number, not a capability
+// string, is what makes a loop through this port legal: a cycle at unity gain grows without bound,
+// so a scene of plugins that all pass their input through undiminished gets no loop at all.
+const historyIn: PluginPort = {
+    name: 'history',
+    type: 'color-texture',
+    required: false,
+    gainParameter: 'historyWeight',
+};
 
 const source = plugin('src', 'source');
 const transform = plugin('trn', 'transformer', [colorIn]);
 const feedback = plugin('fbk', 'transformer', [colorIn, historyIn], undefined, {
-    capabilities: ['feedback'],
+    parameters: { historyWeight: 0.9 },
 });
 const post = plugin('post', 'postprocess', [colorIn]);
 

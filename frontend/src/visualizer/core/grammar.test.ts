@@ -60,7 +60,12 @@ const WELL_FORMED: VisualPluginDefinition[] = [
     plugin('src-b', 'source'),
     plugin('src-c', 'source'),
     plugin('fld', 'field', { outputs: [{ name: 'flow', type: 'vector-field', required: false }] }),
-    plugin('trn', 'transformer', { capabilities: ['feedback'] }),
+    // The lossy element a loop needs. ADR-0013: what makes a set loop-capable is a port declaring a
+    // gain below one, not a plugin carrying a capability string.
+    plugin('trn', 'transformer', {
+        inputs: [{ name: 'history', type: 'color-texture', required: false, gainParameter: 'decay' }],
+        parameters: { decay: 0.2 },
+    }),
     plugin('trn-b', 'transformer'),
     plugin('mix', 'compositor'),
     plugin('mix-b', 'compositor'),
@@ -138,16 +143,20 @@ describe('grammar checks', () => {
         }))).toBe(true);
     });
 
-    test('stacked feedback loops are rejected', () => {
-        const doubled = [
+    test('a set with nothing lossy cannot close a loop', () => {
+        // This asserted the opposite direction — that two feedback-capable plugins were one loop too
+        // many. Loops are counted over edges after wiring now (ADR-0013), because any image input can
+        // be a historical sink and the plugin list no longer implies how many loops a scene has. What
+        // the plugin list still decides is whether a converging loop is possible at all.
+        const lossless = [
             plugin('src', 'source'),
             plugin('fld', 'field'),
-            plugin('f1', 'transformer', { capabilities: ['feedback'] }),
-            plugin('f2', 'transformer', { capabilities: ['feedback'] }),
+            plugin('t1', 'transformer'),
+            plugin('t2', 'transformer'),
             plugin('post', 'postprocess'),
         ];
 
-        expect(grammarViolations(doubled, ORGANIC_FLOW).some((entry) => entry.kind === 'too-many-feedback')).toBe(true);
+        expect(grammarViolations(lossless, ORGANIC_FLOW).some((entry) => entry.kind === 'too-few-feedback')).toBe(true);
     });
 
     test('stacked symmetry transforms are rejected', () => {
@@ -185,10 +194,12 @@ describe('grammar checks', () => {
 
 describe('candidate filtering', () => {
     test('a candidate breaking a structural limit is rejected', () => {
-        const feedback = plugin('f2', 'transformer', { capabilities: ['feedback'] });
-        const current = [plugin('f1', 'transformer', { capabilities: ['feedback'] })];
+        // Symmetry rather than feedback: organic flow allows one symmetry transform, and the second
+        // is the candidate that breaks it. Feedback no longer caps by plugin count (ADR-0013).
+        const second = plugin('s2', 'transformer', { capabilities: ['symmetry'] });
+        const current = [plugin('s1', 'transformer', { capabilities: ['symmetry'] })];
 
-        expect(wouldViolate(current, feedback, ORGANIC_FLOW)).toBe(true);
+        expect(wouldViolate(current, second, ORGANIC_FLOW)).toBe(true);
     });
 
     test('a candidate that only leaves the scene under-filled is accepted', () => {

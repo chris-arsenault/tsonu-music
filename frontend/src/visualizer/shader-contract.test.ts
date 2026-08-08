@@ -13,7 +13,7 @@
 import { describe, expect, test } from 'vitest';
 import { allDefinitions } from './plugins/registry';
 import { GLSL_HISTORY } from './plugins/define';
-import { isFeedbackPort, isImagePortType } from './core/wiring';
+import { portGain } from './core/loop-gain';
 import { parameterUniformName } from './core/parameters';
 import type { VisualPluginDefinition } from './core/plugin';
 
@@ -292,54 +292,59 @@ describe('the kernel owns the frame timebase and geometry', () => {
 });
 
 /**
- * The attenuation contract (ADR-0012).
+ * The loop-gain contract (ADR-0013).
  *
- * Any edge may carry a previous frame, so a loop can be closed wherever wiring allows. The kernel
- * owns the combine for its own accumulation and can promise a fixed point; it does not own one
- * closed through the graph. What it requires instead is that whatever closes a loop is lossy and
- * bounded, and both live in one GLSL helper so no plugin has to be trusted to write them itself —
- * each of the three that closed loops before this existed wrote `pow(uDecay, delta * 60.0)`, burying
- * a per-frame-at-sixty assumption in a constant, and none of them clamped.
+ * Every node output persists and any image input may be the sink of a historical edge, so a loop can
+ * be closed wherever wiring allows and no stage promises non-expansion. What keeps a cycle bounded is
+ * that the product of the gains around it stays below one, which `core/loop-gain.ts` checks over the
+ * graph — but only if the numbers it multiplies mean the same thing.
+ *
+ * That is what these tests are for. A survival of 0.4 per frame and 0.4 per second differ by a factor
+ * of forty in how long the loop remembers, and a check comparing both against one would call them the
+ * same number and be right about stability while being useless about anything else. Per second is the
+ * unit, everywhere, raised to the frame's own delta — so a trail is a duration rather than a
+ * per-frame-at-sixty constant that smears differently on a 144 Hz display.
  */
-describe('a plugin that may close an image loop attenuates and bounds it', () => {
-    // Scoped by port type, not by capability. A simulator closing a loop on its own state type is
-    // advancing a simulation bounded by its own dynamics — Gray-Scott stays inside nought to one
-    // because the reaction does — and nothing else produces those types, so such a loop cannot be
-    // cross-wired anywhere. A loop carrying a colour or mask texture is a picture fed back into a
-    // picture, and that is the one that diverges.
-    const closers = CATALOG.filter((definition) =>
-        definition.capabilities.includes('feedback')
-        && definition.inputs.some((port) => isFeedbackPort(port) && isImagePortType(port.type)));
+describe('every declared loop gain is a per-second survival', () => {
+    const gained = CATALOG.flatMap((definition) => definition.inputs
+        .filter((port) => port.gainParameter !== undefined)
+        .map((port) => ({ definition, port })));
 
-    test('the catalog has some', () => {
-        expect(closers.length).toBeGreaterThan(0);
+    test('the catalog has some, or no scene can close a converging loop', () => {
+        expect(gained.length).toBeGreaterThan(0);
     });
 
-    test('each declares a per-second decay parameter', () => {
-        for (const definition of closers) {
-            expect(definition.parameters?.decay, `${definition.id} decay`).toBeTypeOf('number');
-            // Per second, not per frame. A per-frame figure looks like 0.94; over a second that is
-            // 0.024, so anything close to one here is the old units surviving the conversion.
-            expect(definition.parameters?.decay, `${definition.id} decay is per second`)
-                .toBeLessThan(0.85);
+    test('each names a parameter the plugin declares, and one that cannot reach one', () => {
+        for (const { definition, port } of gained) {
+            const name = port.gainParameter!;
+
+            expect(definition.parameters?.[name], `${definition.id}.${port.name} → ${name}`)
+                .toBeTypeOf('number');
+            // The ceiling, not the resting value: a loop at 0.6 that the bass drives to 1.04 is
+            // stable until the track does something, which is the worst way to be wrong.
+            expect(portGain(definition, port), `${definition.id}.${port.name} ceiling`)
+                .toBeLessThan(1);
         }
     });
 
-    test('each reads its history through the shared helper rather than sampling it raw', () => {
-        for (const definition of closers) {
+    test('each is raised to the frame delta in the shader that reads it', () => {
+        for (const { definition, port } of gained) {
+            const uniform = parameterUniformName(port.gainParameter!);
             const combined = shaderSources(definition)
                 .map((source) => source.fragment)
                 .join('\n');
 
-            expect(combined, `${definition.id} uses history()`).toMatch(/\bhistory\s*\(\s*uHistory/);
-            expect(
-                /texture\s*\(\s*uHistory/.test(combined),
-                `${definition.id} samples uHistory directly`,
-            ).toBe(false);
+            // Either through the shared helper, which does it once, or inline against uDelta. What
+            // is rejected is the third case: a bare multiply, which silently means per frame.
+            const viaHelper = new RegExp(`\\bhistory\\s*\\([^)]*${uniform}`).test(combined);
+            const inline = new RegExp(`pow\\s*\\([^;]*${uniform}[^;]*uDelta`).test(combined)
+                || new RegExp(`pow\\s*\\(\\s*clamp\\s*\\(\\s*${uniform}[^;]*\\)\\s*,\\s*uDelta`).test(combined);
+
+            expect(viaHelper || inline, `${definition.id} applies ${uniform} per second`).toBe(true);
         }
     });
 
-    test('the helper attenuates by delta and clamps', () => {
+    test('the shared helper attenuates by delta and clamps', () => {
         expect(GLSL_HISTORY).toMatch(/pow\s*\(\s*clamp\s*\(\s*decay/);
         expect(GLSL_HISTORY).toMatch(/clamp\s*\(\s*sampled/);
     });
