@@ -81,6 +81,16 @@ export interface ContinuousFeatures {
 
     leftLevel: number;
     rightLevel: number;
+
+    /**
+     * Where the image sits between the speakers: 0 hard left, 0.5 centred, 1 hard right.
+     *
+     * Carried centred rather than signed because every consumer reaches it through a binding, and a
+     * binding normalizes its input from `[0, 1]`. As a signed measure the whole leftward half read
+     * exactly zero, and since real mixes sit within a few hundredths of centre the rightward half
+     * read almost zero too — so all six bindings on the only feature in the `lateral-force` role sat
+     * at their output floor. A binding wanting a signed value asks for one in its `outputRange`.
+     */
     stereoBalance: number;
 }
 
@@ -181,7 +191,7 @@ export type FollowerName = 'rms' | 'peak' | 'flux' | 'bands' | 'spectrum';
  * - `beatPhase` — uniform over `[0, 1]` by construction already.
  * - `beatConfidence` — a confidence in a measurement, not a measurement.
  */
-export type OccupancyName = BandName | 'rms' | 'peak';
+export type OccupancyName = BandName | 'rms' | 'peak' | 'spectralCentroid' | 'stereoBalance';
 
 export const OCCUPANCY_CHANNELS: readonly OccupancyName[] = [
     'rms',
@@ -192,6 +202,8 @@ export const OCCUPANCY_CHANNELS: readonly OccupancyName[] = [
     'mid',
     'highMid',
     'treble',
+    'spectralCentroid',
+    'stereoBalance',
 ];
 
 /** Measures carrying an excitation channel beside their level: every band, plus overall level. */
@@ -246,8 +258,32 @@ export interface FeatureBusState {
  */
 export const TRANSIENT_GATE_SECONDS = 0.12;
 
-/** Highest centroid used for normalization. Above this, brightness is already saturated. */
-const CENTROID_CEILING_HZ = 8000;
+/**
+ * Bounds of the pre-map that puts the spectral centroid on a `[0, 1]` footing before its own
+ * distribution is taken.
+ *
+ * A linear cut at eight kilohertz stood here, and it saturated: measured on real material the median
+ * read 0.999 and on a synthesised bed 0.762 with a ninety-fifth percentile pinned at one. The centroid
+ * is a magnitude-weighted mean over bins reaching to half the sample rate, so a broadband floor alone
+ * carries it most of the way up, and a channel driving palette movement and complexity was a constant.
+ *
+ * Logarithmic, because that is how pitch and brightness are heard — an octave is an octave wherever it
+ * sits — and wide enough at both ends that no real material reaches either. Where the centroid
+ * actually lives within this span is then the distribution stage's question, not a constant's.
+ */
+const CENTROID_FLOOR_HZ = 20;
+const CENTROID_CEILING_HZ = 20000;
+
+/** Log-frequency position of a centroid within the audible span, clamped to it. */
+export function centroidPosition(hz: number): number {
+    if (!(hz > CENTROID_FLOOR_HZ)) {
+        return 0;
+    }
+
+    return clamp01(
+        Math.log2(hz / CENTROID_FLOOR_HZ) / Math.log2(CENTROID_CEILING_HZ / CENTROID_FLOOR_HZ),
+    );
+}
 
 /**
  * How long a transient takes to fall away.
@@ -474,10 +510,18 @@ function absorbSnapshot(
         highMidExcite: excite('highMid', snapshot.bands.highMid),
         trebleExcite: excite('treble', snapshot.bands.treble),
         spectralFlux: normalizeWith('flux', snapshot.spectralFlux),
-        spectralCentroid: clamp01(snapshot.spectralCentroidHz / CENTROID_CEILING_HZ),
+        spectralCentroid: occupy('spectralCentroid', centroidPosition(snapshot.spectralCentroidHz)),
         leftLevel: clamp01(snapshot.leftLevel),
         rightLevel: clamp01(snapshot.rightLevel),
-        stereoBalance: stereoBalance(snapshot.leftLevel, snapshot.rightLevel),
+        // Folded to [0, 1] before the distribution, so the negative half stops being clamped away.
+        // `normalize` maps a binding's input from [0, 1] by default, and the measure is signed, so
+        // every leftward moment read exactly zero and the six bindings on this channel sat at their
+        // output floor. A binding wanting a signed value says so in its `outputRange`, as
+        // `AudioImpulseField.stereo` already does with [-1, 1].
+        stereoBalance: occupy(
+            'stereoBalance',
+            centredStereo(stereoBalance(snapshot.leftLevel, snapshot.rightLevel)),
+        ),
         beatConfidence: clamp01(snapshot.beatConfidence),
     };
 
@@ -612,6 +656,15 @@ function advanceBeat(
     };
 }
 
+/** A signed balance as a position on the bus: 0 is hard left, 0.5 centred, 1 hard right. */
+export function centredStereo(balance: number): number {
+    return clamp01(balance * 0.5 + 0.5);
+}
+
+/**
+ * Signed balance, negative left and positive right. The raw measure; see `centredStereo` for the form
+ * the bus carries.
+ */
 export function stereoBalance(leftLevel: number, rightLevel: number): number {
     const total = leftLevel + rightLevel;
     if (total <= 0) {
@@ -664,6 +717,8 @@ function zeroContinuous(): ContinuousFeatures {
         beatPhase: 0,
         leftLevel: 0,
         rightLevel: 0,
-        stereoBalance: 0,
+        // Silence is centred, not hard left. As zero it pushed every lateral-force parameter to the
+        // bottom of its range before a single frame of audio had arrived.
+        stereoBalance: 0.5,
     };
 }

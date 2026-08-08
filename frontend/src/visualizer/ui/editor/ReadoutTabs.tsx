@@ -147,11 +147,14 @@ function Row({ label, value }: { label: string; value: string }) {
     );
 }
 
-/** Signed features render from the centre; unsigned from the left. */
+/** Centre-referenced features render out from the middle; the rest fill from the left. */
 function Meter({ label, value }: { label: string; value: number }) {
-    const signed = label === 'stereoBalance';
-    const magnitude = Math.min(100, Math.abs(value) * (signed ? 50 : 100));
-    const offset = signed ? (value >= 0 ? 50 : 50 - magnitude) : 0;
+    // `stereoBalance` is carried on the bus as a position, 0.5 being centred, so its meter grows out
+    // from the middle rather than from the left edge. Reading it as signed drew a mono track — which
+    // sits at 0.5 — as a half-full bar leaning right.
+    const centred = label === 'stereoBalance';
+    const magnitude = centred ? Math.min(50, Math.abs(value - 0.5) * 100) : Math.min(100, value * 100);
+    const offset = centred ? (value >= 0.5 ? 50 : 50 - magnitude) : 0;
 
     return (
         <div className="viz-debug__meter">

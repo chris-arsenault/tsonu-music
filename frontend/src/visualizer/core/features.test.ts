@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import {
     advanceFeatureBus,
+    centredStereo,
+    centroidPosition,
     createFeatureBusState,
+    silentFeatureBus,
     stereoBalance,
     TRANSIENT_GATE_SECONDS,
     type FeatureBusInput,
@@ -101,10 +104,10 @@ describe('feature bus normalization', () => {
 
         for (const [name, value] of values) {
             expect(Number.isFinite(value), `${name} is finite`).toBe(true);
-            if (name !== 'stereoBalance') {
-                expect(value, `${name} within unit range`).toBeGreaterThanOrEqual(0);
-                expect(value, `${name} within unit range`).toBeLessThanOrEqual(1);
-            }
+            // Every channel, with no exception: `stereoBalance` used to be the one signed member,
+            // which meant a binding normalizing from [0, 1] clamped its whole leftward half to zero.
+            expect(value, `${name} within unit range`).toBeGreaterThanOrEqual(0);
+            expect(value, `${name} within unit range`).toBeLessThanOrEqual(1);
         }
     });
 
@@ -139,29 +142,52 @@ describe('feature bus normalization', () => {
         expect(trebleHeavy.bus.continuous.treble).toBeGreaterThan(trebleHeavy.bus.continuous.bass);
     });
 
-    test('centroid normalizes against a brightness ceiling', () => {
-        const dull = advanceFeatureBus(
+    test('centroid rises with brightness across the audible span', () => {
+        const at = (hz: number) => advanceFeatureBus(
             createFeatureBusState(),
-            input({ snapshot: snapshot({ spectralCentroidHz: 500 }) }),
-        );
-        const bright = advanceFeatureBus(
-            createFeatureBusState(),
-            input({ snapshot: snapshot({ spectralCentroidHz: 7000 }) }),
-        );
-        const beyond = advanceFeatureBus(
-            createFeatureBusState(),
-            input({ snapshot: snapshot({ spectralCentroidHz: 40000 }) }),
-        );
+            input({ snapshot: snapshot({ spectralCentroidHz: hz }) }),
+        ).bus.continuous.spectralCentroid;
 
-        expect(bright.bus.continuous.spectralCentroid).toBeGreaterThan(dull.bus.continuous.spectralCentroid);
-        expect(beyond.bus.continuous.spectralCentroid).toBe(1);
+        expect(at(7000)).toBeGreaterThan(at(500));
+        expect(at(40000)).toBe(1);
     });
 
-    test('stereo balance is centred, signed, and bounded', () => {
+    test('centroid does not saturate on ordinary bright material', () => {
+        // A linear cut at eight kilohertz stood here, and the centroid is a magnitude-weighted mean
+        // over bins reaching to half the sample rate — so a broadband floor alone carried it to the
+        // ceiling and the channel measured a median of 0.999 on real material. Eight kilohertz is
+        // bright, not the top of the range.
+        expect(centroidPosition(8000)).toBeLessThan(0.9);
+        expect(centroidPosition(2000)).toBeGreaterThan(0.4);
+        expect(centroidPosition(2000)).toBeLessThan(0.8);
+        expect(centroidPosition(0)).toBe(0);
+    });
+
+    test('the raw stereo measure is centred, signed, and bounded', () => {
         expect(stereoBalance(0.5, 0.5)).toBe(0);
         expect(stereoBalance(1, 0)).toBe(-1);
         expect(stereoBalance(0, 1)).toBe(1);
         expect(stereoBalance(0, 0)).toBe(0);
+    });
+
+    test('the bus carries stereo as a position, so no part of it clamps to the floor', () => {
+        // Signed, the leftward half normalized to exactly zero and every binding on the only feature
+        // in the lateral-force role sat at its output floor whenever the image leaned left.
+        expect(centredStereo(0)).toBe(0.5);
+        expect(centredStereo(-1)).toBe(0);
+        expect(centredStereo(1)).toBe(1);
+
+        const leaning = advanceFeatureBus(
+            createFeatureBusState(),
+            input({ snapshot: snapshot({ leftLevel: 0.6, rightLevel: 0.2 }) }),
+        );
+
+        expect(leaning.bus.continuous.stereoBalance).toBeGreaterThan(0);
+        expect(leaning.bus.continuous.stereoBalance).toBeLessThan(0.5);
+    });
+
+    test('a silent bus reports a centred image rather than hard left', () => {
+        expect(silentFeatureBus().continuous.stereoBalance).toBe(0.5);
     });
 
     test('waveform and spectrum are passed through', () => {
