@@ -213,7 +213,7 @@ function buildSceneAttempt(
     }
 
     let plugins = assembled.plugins;
-    let wired = wireScene(plugins, context.assetResources ?? []);
+    let wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
     if (wired.unsatisfied.length > 0) {
         return {
             ok: false,
@@ -247,7 +247,8 @@ function buildSceneAttempt(
             };
         }
 
-        wired = wireScene(plugins, context.assetResources ?? []);
+        // The same draw, so a prune does not silently move every loop in the scene.
+        wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
     }
 
     // How the scene is joined, which counts alone cannot express. Checked after the prune above, so a

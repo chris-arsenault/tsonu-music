@@ -268,8 +268,15 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // resolved against positions two frames old — further out of date, at these speeds, than
             // one whole contact diameter — so bodies were being pushed apart from where their
             // neighbours used to be.
-            const isPrevious = !writtenThisFrame.has(resource)
-                && Object.values(node.previous).includes(resource);
+            // The exception is for a plugin reading a resource *it* wrote earlier this frame, which
+            // is the particle simulator binning the state its first pass produced. Restricted to
+            // this node's own outputs: once a loop may close to any producer (ADR-0012), an upstream
+            // node's resource is written before this one runs, and the unrestricted test silently
+            // turned every such historical read into a forward one — the loop would compile, run,
+            // and simply not be a loop.
+            const ownOutput = Object.values(node.outputs).includes(resource);
+            const isPrevious = Object.values(node.previous).includes(resource)
+                && !(ownOutput && writtenThisFrame.has(resource));
             const texture = resolveTexture(plan, resource, isPrevious);
             if (texture) {
                 device.bindTexture(program, sampler, texture, unit);

@@ -11,6 +11,7 @@
 
 import { portsCompatible, type GraphNode, type RenderGraphEdge } from './graph';
 import type { PluginCategory, PluginPort, VisualPluginDefinition } from './plugin';
+import type { Rng } from './random';
 
 /** Order plugins are chained in. Matches the scheduler's fill order. */
 const CHAIN_ORDER: readonly PluginCategory[] = [
@@ -86,9 +87,65 @@ export function assetResourceId(assetId: string): string {
     return `asset:${assetId}`;
 }
 
+/**
+ * Re-points each loop at a producer drawn from the whole scene (ADR-0012).
+ *
+ * Every closing edge was pointed at the plugin's own output, so a loop could only ever be a branch
+ * trailing itself. The compiler, the render plan, and the pass executor all accept a loop closed to
+ * any resource; only this file insisted otherwise.
+ *
+ * Two configurations are favoured because they read as something. A plugin reading its own output is
+ * a branch leaving a trail, which is what these plugins were written for. A plugin reading the
+ * scene's terminal colour is the whole composed image folding back into itself, which is where a
+ * tunnel comes from — and it is the configuration that makes a warp's small per-frame displacement
+ * compound over hundreds of frames instead of being rebuilt. The rest are the variety.
+ */
+function redirectLoops(
+    edges: RenderGraphEdge[],
+    nodes: readonly GraphNode[],
+    rng: Rng,
+): void {
+    const terminal = resolvePresent(nodes);
+
+    for (const edge of edges) {
+        if (!edge.feedback) {
+            continue;
+        }
+
+        const sink = nodes.find((node) => node.instanceId === edge.to.instanceId);
+        const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+        if (!sink || !port) {
+            continue;
+        }
+
+        const candidates = nodes.flatMap((node) => node.definition.outputs
+            .filter((output) => !output.internal && portsCompatible(output.type, port.type))
+            .map((output) => ({ instanceId: node.instanceId, port: output.name })));
+
+        const picked = rng.weighted(candidates, (candidate) => {
+            if (candidate.instanceId === sink.instanceId) {
+                return 3;
+            }
+            if (terminal && candidate.instanceId === terminal.instanceId) {
+                return 4;
+            }
+            return 1;
+        });
+
+        if (picked) {
+            edge.from = picked;
+        }
+    }
+}
+
 export function wireScene(
     plugins: readonly VisualPluginDefinition[],
     assets: readonly AssetResource[] = [],
+    /**
+     * Draws where each loop closes. Absent, every loop closes on its own plugin, which is what an
+     * authored graph and every wiring test expect: they state their edges rather than drawing them.
+     */
+    rng?: Rng,
 ): WiredScene {
     const ordered = orderByDependency(
         [...plugins].sort(
@@ -193,6 +250,10 @@ export function wireScene(
                 });
             }
         }
+    }
+
+    if (rng) {
+        redirectLoops(edges, nodes, rng);
     }
 
     return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };

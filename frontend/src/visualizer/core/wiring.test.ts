@@ -243,6 +243,63 @@ describe('feedback wiring', () => {
     });
 });
 
+/**
+ * ADR-0012. The compiler, the render plan, and the pass executor always accepted a loop closed to
+ * any resource; this file was the only thing insisting a plugin could read nothing but itself.
+ */
+describe('a loop may close to any producer', () => {
+    const scene = [source, plugin('other', 'source'), feedback, post];
+
+    test('without a draw, every loop still closes on its own plugin', () => {
+        // Authored graphs and every wiring test state their edges rather than drawing them, so the
+        // absent-rng path has to stay exactly what it was.
+        const loops = wireScene(scene).edges.filter((edge) => edge.feedback);
+
+        expect(loops).toHaveLength(1);
+        expect(loops[0].from.instanceId).toBe(loops[0].to.instanceId);
+    });
+
+    test('a draw can point the loop at another node entirely', () => {
+        const reached = new Set<string>();
+
+        for (let seed = 0; seed < 40; seed += 1) {
+            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            for (const edge of wired.edges.filter((entry) => entry.feedback)) {
+                reached.add(edge.from.instanceId);
+            }
+        }
+
+        expect(reached.size).toBeGreaterThan(1);
+        expect([...reached]).toContain(instanceIdFor(feedback, 0));
+    });
+
+    test('every drawn loop still compiles as a declared cycle and asks for a second slot', () => {
+        for (let seed = 0; seed < 40; seed += 1) {
+            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            const result = compileGraph(wired.nodes, wired.edges, wired.present);
+
+            expect(result.ok, result.ok ? '' : result.errors.join('; ')).toBe(true);
+            if (!result.ok) continue;
+
+            // Whichever resource the loop landed on is the one that gets ping-ponged, which the
+            // compiler derives rather than being told.
+            expect(result.graph.pingPong).toHaveLength(1);
+        }
+    });
+
+    test('a loop reaching the terminal branch folds the whole composed image back in', () => {
+        // The configuration a tunnel comes from: a warp reading the scene's output rather than its
+        // own means its small per-frame displacement compounds over the whole picture.
+        const terminal = instanceIdFor(post, 0);
+        const found = Array.from({ length: 40 }, (_, seed) =>
+            wireScene(scene, [], createRng(`loop-${seed}`)).edges
+                .filter((edge) => edge.feedback)
+                .some((edge) => edge.from.instanceId === terminal));
+
+        expect(found.some(Boolean)).toBe(true);
+    });
+});
+
 describe('reactivity distribution', () => {
     const binding = {
         feature: 'rms',
