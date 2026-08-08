@@ -16,8 +16,8 @@ has a decision in it that should be made deliberately rather than inside a fix.
 | 1 | Adaptive per-channel distribution mapping | R1 | done |
 | 2 | Bipolar and saturating channels | R2 | done |
 | 3 | Drift depth against the restored excursion | R3 | done |
-| 4 | Particle bindings, and the contract guard re-armed | R4 | not started |
-| 5 | Particle configuration nodes leave the field budget | R6 | not started |
+| 4 | Particle bindings, and the contract guard re-armed | R4 | done |
+| 5 | Particle configuration nodes leave the field budget | R6 | done |
 | 6 | The mask-to-particle path, and the two red tests | R5 | not started |
 | 7 | A palette reachable without album artwork | R8 (part) | not started |
 | 8 | **[hold]** Accumulation transform | R9 | design first |
@@ -185,10 +185,18 @@ resolver, discarding the first thirty seconds so the distribution stage is warm.
 | parameters where drift outweighs audio | 29 of 108 | **0 of 154** | |
 | `stereoBalance` occupancy | 0% | **89%** | |
 | `spectralCentroid` occupancy | 30%, pinned at 1.000 | **90%** | |
-| particle bodies at equilibrium | 144 | | |
-| particle frame coverage | 0.78% | | |
-| scenes selecting a particle force or collider | 0% | | |
+| particle bodies at equilibrium | 144 | **720** | |
+| particle frame coverage | 0.78% | **5.7%** | |
+| scenes selecting a particle force | 0% | **28.7%** | |
+| scenes selecting a particle collider | 0% | **27.3%** | |
+| nodes with no bindings at all | 16.1% | **8.1%** | |
 | visualizer suite | 2 failing | 2 failing | |
+
+The particle and node-binding rows land in steps 4 and 5 rather than 1 to 3, but
+share the column since no step between them moved either figure. What remains
+unbound at 8.1 percent is `ToneMapper`, whose four output-conversion parameters
+must not breathe with the music, and the non-circular colliders, where a wall
+being a wall is the answer rather than an oversight.
 
 The audio-share figures count `value`-mode bindings only. `modulateParameters`
 skips `rate` and `impulse` by design, so including them measured the integrator

@@ -2,7 +2,9 @@ import { describe, expect, test } from 'vitest';
 import {
     countByCategory,
     grammarViolations,
+    isConfigurationNode,
     isHighCost,
+    isSpatialField,
     isVisibleSource,
     ORGANIC_FLOW,
     REDUCED_GRAMMAR,
@@ -12,6 +14,12 @@ import {
     type SceneGrammar,
 } from './grammar';
 import type { PluginCategory, VisualPluginDefinition } from './plugin';
+import { createProceduralVectorField } from '../plugins/fields/procedural-fields';
+import {
+    createParticleCollider,
+    createParticleEmitter,
+    createParticleForceField,
+} from '../plugins/simulators/particles';
 
 function plugin(
     id: string,
@@ -275,5 +283,46 @@ describe('visual families', () => {
             expect(REDUCED_GRAMMAR.sourceCount[1]).toBeLessThanOrEqual(grammar.sourceCount[1]);
             expect(REDUCED_GRAMMAR.maximumHighCostPlugins).toBeLessThanOrEqual(grammar.maximumHighCostPlugins);
         }
+    });
+});
+
+describe('a configuration node is not a spatial field', () => {
+    const emitter = createParticleEmitter('ring');
+    const force = createParticleForceField('vortex');
+    const collider = createParticleCollider('frame');
+    const field = createProceduralVectorField('curl');
+
+    test('emitters, forces, and colliders are configuration nodes', () => {
+        for (const definition of [emitter, force, collider]) {
+            expect(isConfigurationNode(definition), definition.id).toBe(true);
+            expect(isSpatialField(definition), definition.id).toBe(false);
+        }
+    });
+
+    test('a vector field is a spatial field despite sharing the category', () => {
+        expect(field.category).toBe('field');
+        expect(collider.category).toBe('field');
+
+        expect(isSpatialField(field)).toBe(true);
+        expect(isConfigurationNode(field)).toBe(false);
+    });
+
+    test('configuration nodes are counted against their own range, not the field budget', () => {
+        // They were rationed by `fieldCount`, which is a budget for GPU passes over a texture — and
+        // these cost no passes and produce no spatial data. With organic flow at one to two fields
+        // and a motion source required, a scene that spent a slot on an emitter had the other
+        // claimed before a force or a collider could be drawn, so no scene ever contained either.
+        const grammar: SceneGrammar = { ...ORGANIC_FLOW, fieldCount: [1, 1], configurationCount: [0, 3] };
+        const scene = [field, emitter, force, collider];
+
+        const kinds = grammarViolations(scene, grammar).map((violation) => violation.kind);
+        expect(kinds).not.toContain('category-over');
+    });
+
+    test('too many configuration nodes is still a violation', () => {
+        const grammar: SceneGrammar = { ...ORGANIC_FLOW, configurationCount: [0, 1] };
+
+        expect(grammarViolations([emitter, force, collider], grammar).map((v) => v.kind))
+            .toContain('category-over');
     });
 });

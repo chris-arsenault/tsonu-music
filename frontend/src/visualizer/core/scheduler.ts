@@ -9,17 +9,19 @@ import { clamp01 } from './bindings';
 import {
     declaresCapability,
     grammarViolations,
+    isConfigurationNode,
+    isSpatialField,
     isVisibleSource,
     producesMotion,
     wouldViolate,
     type SceneGrammar,
 } from './grammar';
 import { portsCompatible } from './graph';
-import type {
-    PluginCategory,
-    PortType,
-    SelectionCharacter,
-    VisualPluginDefinition,
+import {
+    isValuePortType,
+    type PortType,
+    type SelectionCharacter,
+    type VisualPluginDefinition,
 } from './plugin';
 import { createRng, type Rng } from './random';
 
@@ -330,24 +332,31 @@ export function inputsSatisfiable(
         .every((port) => [...produced, ...selfSatisfied].some((type) => portsCompatible(type, port.type)));
 }
 
-/** Category fill order: sources first so later choices have something to work on. */
-const FILL_ORDER: readonly PluginCategory[] = [
-    'source',
-    'field',
-    'simulator',
-    'transformer',
-    'compositor',
-    'postprocess',
-];
+/**
+ * Fill order, and what each phase draws from.
+ *
+ * Sources first, so later choices have something to work on. Configuration nodes come after the
+ * spatial fields whose textures some of them read, and before the simulators that consume them.
+ *
+ * A phase is a pool predicate and a grammar range rather than a bare category, because the field
+ * category holds two different things: fields that occupy space and configuration nodes that
+ * publish a value. Ranging them together meant one budget for a GPU pass over a texture and for a
+ * struct describing an emitter.
+ */
+interface FillPhase {
+    key: keyof SceneGrammar;
+    includes(definition: VisualPluginDefinition): boolean;
+}
 
-const CATEGORY_RANGES: Record<PluginCategory, keyof SceneGrammar | undefined> = {
-    source: 'sourceCount',
-    field: 'fieldCount',
-    simulator: 'simulatorCount',
-    transformer: 'transformerCount',
-    compositor: 'compositorCount',
-    postprocess: 'postprocessCount',
-};
+const FILL_PHASES: readonly FillPhase[] = [
+    { key: 'sourceCount', includes: (definition) => definition.category === 'source' },
+    { key: 'fieldCount', includes: isSpatialField },
+    { key: 'configurationCount', includes: isConfigurationNode },
+    { key: 'simulatorCount', includes: (definition) => definition.category === 'simulator' },
+    { key: 'transformerCount', includes: (definition) => definition.category === 'transformer' },
+    { key: 'compositorCount', includes: (definition) => definition.category === 'compositor' },
+    { key: 'postprocessCount', includes: (definition) => definition.category === 'postprocess' },
+];
 
 /**
  * Builds a scene from one fresh entropy token.
@@ -363,15 +372,14 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
     const { grammar } = context.theme;
     const assetTypes = (context.assetResources ?? []).map((resource) => resource.type);
 
-    for (const category of FILL_ORDER) {
-        const rangeKey = CATEGORY_RANGES[category];
-        const [minimum, maximum] = rangeKey ? (grammar[rangeKey] as [number, number]) : [0, 0];
+    for (const phase of FILL_PHASES) {
+        const [minimum, maximum] = grammar[phase.key] as [number, number];
         if (maximum === 0) {
             continue;
         }
 
         const target = minimum + rng.int(maximum - minimum + 1);
-        const pool = eligible.filter((definition) => definition.category === category);
+        const pool = eligible.filter((definition) => phase.includes(definition));
 
         for (let slot = 0; slot < target; slot += 1) {
             const candidates = pool.filter((definition) =>
@@ -449,6 +457,44 @@ export function assembleScene(seed: string, context: SchedulerContext): Assemble
         );
         if (picked) {
             chosen.push(picked);
+        }
+    }
+
+    // An optional value input is a plugin saying "I can use this if it is there", and nothing ever
+    // put it there. The producers for a particle simulator's force and collider ports are drawn in
+    // an earlier phase than the simulator itself, so a scene had to have picked them speculatively,
+    // before anything wanted them — which the field budget made impossible and chance made rare.
+    // Measured across three hundred builds, no scene contained a particle force or a collider at
+    // all: the bodies were advected by nothing and collided with nothing.
+    //
+    // Restricted to value ports, so this cannot quietly add a texture stage. A port whose type the
+    // plugin also produces is skipped: that is the chaining idiom, where each emitter reads the list
+    // built so far, and satisfying it would draw an endless line of emitters.
+    for (const definition of [...chosen]) {
+        for (const port of definition.inputs) {
+            if (port.required || !isValuePortType(port.type)) {
+                continue;
+            }
+            if (definition.outputs.some((output) => portsCompatible(output.type, port.type))) {
+                continue;
+            }
+            if (chosen.some((entry) => entry.outputs.some((output) => portsCompatible(output.type, port.type)))) {
+                continue;
+            }
+
+            const candidates = eligible.filter((candidate) =>
+                candidate.outputs.some((output) => portsCompatible(output.type, port.type))
+                && !conflictsWith(chosen, candidate)
+                && !wouldViolate(chosen, candidate, grammar)
+                && inputsSatisfiable(chosen, candidate, assetTypes));
+
+            const picked = rng.weighted(
+                candidates,
+                (candidate) => interactionWeight(candidate, chosen, context),
+            );
+            if (picked) {
+                chosen.push(picked);
+            }
         }
     }
 

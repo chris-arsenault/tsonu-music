@@ -7,13 +7,26 @@
  */
 
 import { isMotionSource } from './persistence';
-import type { PluginCategory, VisualPluginDefinition } from './plugin';
+import { isValuePortType, type PluginCategory, type VisualPluginDefinition } from './plugin';
 
 export type CountRange = [number, number];
 
 export interface SceneGrammar {
     sourceCount: CountRange;
+    /** Spatial fields only. Configuration nodes are counted separately; see `configurationCount`. */
     fieldCount: CountRange;
+    /**
+     * Emitters, forces, and colliders: field-category plugins that produce a value rather than a
+     * texture.
+     *
+     * They were rationed by `fieldCount` alongside `ProceduralVectorField`, which is a budget for
+     * GPU passes over a spatial field — and these cost no passes and produce no spatial data. With
+     * `ORGANIC_FLOW.fieldCount` at one to two and a motion source required, a scene that spent one
+     * slot on an emitter had the other claimed before a force or a collider could be drawn.
+     * Measured across three hundred builds, no scene contained either: particles were advected by
+     * nothing and collided with nothing, in every scene that had them.
+     */
+    configurationCount: CountRange;
     simulatorCount: CountRange;
     transformerCount: CountRange;
     compositorCount: CountRange;
@@ -113,6 +126,23 @@ export function isHighCost(definition: VisualPluginDefinition): boolean {
     return definition.cost.gpu >= HIGH_COST_THRESHOLD;
 }
 
+/**
+ * A field-category plugin that publishes a value rather than producing a texture.
+ *
+ * Derived from the port types rather than tabulated, so a new emitter or force cannot be added
+ * without landing in the right budget. `isValuePortType` already names exactly these ports.
+ */
+export function isConfigurationNode(definition: VisualPluginDefinition): boolean {
+    return definition.category === 'field'
+        && definition.outputs.length > 0
+        && definition.outputs.every((port) => isValuePortType(port.type));
+}
+
+/** A field that occupies space: the kind `fieldCount` is a budget for. */
+export function isSpatialField(definition: VisualPluginDefinition): boolean {
+    return definition.category === 'field' && !isConfigurationNode(definition);
+}
+
 export function declaresCapability(definition: VisualPluginDefinition, capability: string): boolean {
     return definition.capabilities.includes(capability);
 }
@@ -129,6 +159,26 @@ export function grammarViolations(
 ): GrammarViolation[] {
     const violations: GrammarViolation[] = [];
     const counts = countByCategory(definitions);
+
+    // `countByCategory` reports what each plugin declares itself to be, which is what it is for.
+    // The field budget is about spatial fields, so the configuration nodes sharing that category are
+    // moved out of it and checked against their own range.
+    const configuration = definitions.filter(isConfigurationNode).length;
+    counts.field -= configuration;
+
+    const [minimumConfiguration, maximumConfiguration] = grammar.configurationCount;
+    if (configuration < minimumConfiguration) {
+        violations.push({
+            kind: 'category-under',
+            detail: `configuration ${configuration} < ${minimumConfiguration}`,
+        });
+    }
+    if (configuration > maximumConfiguration) {
+        violations.push({
+            kind: 'category-over',
+            detail: `configuration ${configuration} > ${maximumConfiguration}`,
+        });
+    }
 
     if (definitions.length < grammar.minimumSceneSize) {
         violations.push({
@@ -255,6 +305,9 @@ export function wouldViolate(
 export const ORGANIC_FLOW: SceneGrammar = {
     sourceCount: [2, 4],
     fieldCount: [1, 2],
+    // Enough for an emitter, a force, and something to collide with. They cost no GPU passes, so
+    // the ceiling is about how many distinct influences a viewer can read at once, not about budget.
+    configurationCount: [0, 4],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
     // Two, because one compositor can only join two branches. Everything it cannot reach stays a
@@ -277,6 +330,8 @@ export const ORGANIC_FLOW: SceneGrammar = {
 export const GEOMETRIC_SIGNAL: SceneGrammar = {
     sourceCount: [2, 4],
     fieldCount: [0, 2],
+    // No simulator to configure, so an emitter here would be an orphan the prune pass removes.
+    configurationCount: [0, 0],
     // No dense simulator: the family is about clean geometry.
     simulatorCount: [0, 0],
     transformerCount: [2, 4],
@@ -302,6 +357,8 @@ export const GEOMETRIC_SIGNAL: SceneGrammar = {
 export const COLLISION_ENERGY: SceneGrammar = {
     sourceCount: [2, 3],
     fieldCount: [1, 3],
+    // The family whose whole subject is bodies hitting things, so it gets the most room for them.
+    configurationCount: [0, 5],
     simulatorCount: [1, 2],
     transformerCount: [1, 3],
     // See the note on organic flow: one mixer joins two branches and leaves the rest to be summed.
@@ -321,6 +378,7 @@ export const COLLISION_ENERGY: SceneGrammar = {
 export const IMAGE_DREAM: SceneGrammar = {
     sourceCount: [2, 4],
     fieldCount: [1, 3],
+    configurationCount: [0, 4],
     simulatorCount: [0, 1],
     transformerCount: [2, 4],
     // Two, because one compositor can only join two branches. Everything it cannot reach stays a
@@ -351,6 +409,7 @@ export const VISUAL_FAMILIES: Readonly<Record<string, SceneGrammar>> = {
 export const REDUCED_GRAMMAR: SceneGrammar = {
     sourceCount: [1, 1],
     fieldCount: [0, 1],
+    configurationCount: [0, 0],
     simulatorCount: [0, 0],
     transformerCount: [0, 1],
     compositorCount: [0, 1],
