@@ -245,6 +245,51 @@ void main() {
 }`;
 
 /**
+ * The direction light is being thrown, published as a field (ADR-0012).
+ *
+ * Each mode already chooses a direction to gather along — a streak runs horizontally, an anamorphic
+ * smear almost so, a radial scatter runs outward from the centre. That direction is a displacement
+ * of light, and the same choice that decides where the bloom goes can decide where the image
+ * beneath it is carried.
+ *
+ * Scaled by how much there is to bloom. A dark region has no light to throw, so it publishes
+ * nothing rather than a direction with no brightness behind it — otherwise the whole frame would be
+ * dragged uniformly by a stage that only lit a corner of it.
+ */
+const GLOW_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uAmount;
+uniform float uThreshold;
+${GLSL_COMMON}
+
+void main() {
+    vec2 direction;
+
+    if (uMode < 0.5) {                       // soft bloom scatters evenly: no net direction
+        direction = vec2(0.0);
+    } else if (uMode < 1.5) {                // directional streak
+        direction = vec2(1.0, 0.0);
+    } else if (uMode < 2.5) {                // radial scatter
+        direction = normalize(vUv - 0.5 + 1e-5);
+    } else if (uMode < 3.5) {                // edge glow scatters evenly too
+        direction = vec2(0.0);
+    } else {                                 // anamorphic smear
+        direction = normalize(vec2(1.0, 0.08));
+    }
+
+    float lit = max(0.0, luminance(texture(uSource, vUv).rgb) - uThreshold);
+    vec2 field = direction * lit * uAmount;
+
+    fragColor = vec4(clamp(field, vec2(-2.0), vec2(2.0)), length(field), 1.0);
+}`;
+
+/**
  * Couples visible material to a spatial force field.
  *
  * Several earlier plugins could generate sophisticated fields, but nothing was guaranteed to show
@@ -317,6 +362,48 @@ void main() {
     fragColor = vec4(colour, max(source.a, clamp(ribbons + flow * 0.2, 0.0, 1.0)));
 }`;
 
+/**
+ * The flow this compositor traced, which is not the field it read (ADR-0012).
+ *
+ * I first excluded this as a re-publish. It is not: the colour pass walks nine steps through the
+ * field, accumulating direction as it goes, and the sum of a path is a different quantity from the
+ * vector at its start. Where the field is locally chaotic the accumulated direction is small because
+ * the steps cancel; where it is coherent the accumulation runs long. That distinction is exactly
+ * what makes an eddy read as an eddy, and nothing else in the graph computes it.
+ */
+const FLOW_FIELD_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uField;
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uAmount;
+uniform float uHue;
+uniform float uBreath;
+${GLSL_COMMON}
+
+void main() {
+    vec2 p = vUv;
+    vec2 accumulated = vec2(0.0);
+
+    // The same nine-step trace the colour pass runs, keeping the path rather than the shading.
+    for (int step = 0; step < 9; step += 1) {
+        vec2 force = texture(uField, clamp(p, 0.0, 1.0)).xy;
+        float forceLength = length(force);
+        vec2 direction = forceLength > 0.0001 ? force / forceLength : vec2(0.0);
+        accumulated += direction * min(forceLength, 2.5);
+        p = fract(p - direction * (0.007 + 0.002 * float(step)) * uAmount);
+    }
+
+    vec2 field = accumulated / 9.0;
+
+    fragColor = vec4(clamp(field, vec2(-2.0), vec2(2.0)), length(field), 1.0);
+}`;
+
 export const LAYER_MIXER_MODES = [
     'normal', 'add', 'screen', 'multiply', 'difference', 'lighten', 'darken', 'contrast',
 ] as const;
@@ -358,9 +445,14 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
             { name: 'source', type: 'color-texture', required: true },
             { name: 'field', type: 'vector-field', required: true },
         ],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['field-composition', 'chromatic-output', 'layer-mixing'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            // The traced path, not the field it was traced through.
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['field-composition', 'chromatic-output', 'layer-mixing', 'vector-field'],
         fragment: FLOW_FIELD_COMPOSITOR_FRAGMENT,
+        motion: { port: 'motion', fragment: FLOW_FIELD_MOTION_FRAGMENT },
         uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5 },
         parameters: { amount: 1, hue: 0.2, breath: 0.5 },
         bindings: [
@@ -621,10 +713,14 @@ export function createGlowAndScatter(
         id: `GlowAndScatter:${mode}`,
         category: 'postprocess',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
         // Optional secondary post-processing: the performance ladder gives this up at level five.
-        capabilities: ['glow', 'secondary-postprocess'],
+        capabilities: ['glow', 'secondary-postprocess', 'vector-field'],
         fragment: GLOW_FRAGMENT,
+        motion: { port: 'motion', fragment: GLOW_MOTION_FRAGMENT },
         uniforms: { uMode: GLOW_MODES.indexOf(mode), uAmount: 0.8, uThreshold: 0.55 },
         parameters: { amount: 0.8, threshold: 0.55 },
         bindings: [

@@ -67,19 +67,14 @@ void main() {
     fragColor = vec4(vec3(value), value);
 }`;
 
-const PARAMETRIC_CURVE_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform vec2 uResolution;
-uniform float uTime;
-uniform float uPhase;
-uniform float uMode;
-uniform float uThickness;
-uniform float uFrequency;
-${GLSL_COMMON}
-
+/**
+ * The curve itself, shared by the colour pass and the pass that publishes its direction.
+ *
+ * Two hundred and twenty iterations, so one copy rather than two — and more importantly one
+ * definition, since a motion field describing a different figure from the one on screen would be
+ * worse than none.
+ */
+const PARAMETRIC_CURVE_BODY = `
 /** Distance from the current pixel to the nearest point on the parametric curve. */
 float curveDistance(vec2 p) {
     float nearest = 10.0;
@@ -131,7 +126,21 @@ float curveDistance(vec2 p) {
     }
 
     return nearest;
-}
+}`;
+
+const PARAMETRIC_CURVE_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uMode;
+uniform float uThickness;
+uniform float uFrequency;
+${GLSL_COMMON}
+${PARAMETRIC_CURVE_BODY}
 
 void main() {
     vec2 p = (vUv - 0.5) * 2.0;
@@ -368,6 +377,55 @@ export const PROCEDURAL_TEXTURE_MODES = [
     'stripes', 'gradient', 'value-noise', 'curl-noise', 'cellular', 'checker', 'rings', 'angular',
 ] as const;
 
+/**
+ * Which way the curve is sweeping (ADR-0012).
+ *
+ * I first excluded this on the grounds that the curve does not travel. That was wrong: `uPhase`
+ * carries an audio-driven offset and three modes advance on `uTime`, so the figure moves every
+ * frame, and `uFrequency` — bound to beat phase — changes its shape as it goes.
+ *
+ * Differencing the distance field would cost four more sweeps of a 220-iteration loop, which is not
+ * worth it. The gradient is cheaper and says the same thing about direction: it points away from the
+ * nearest point on the curve, so rotating a quarter turn gives the tangent, which is the direction
+ * material would travel if it were being carried along the figure. Scaled by nearness, so the field
+ * is present at the line and absent in the empty space around it.
+ */
+const PARAMETRIC_CURVE_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform float uPhase;
+uniform float uSeed;
+uniform float uMode;
+uniform float uThickness;
+uniform float uFrequency;
+${GLSL_COMMON}
+${PARAMETRIC_CURVE_BODY}
+
+void main() {
+    vec2 p = (vUv - 0.5) * 2.0;
+    p.x *= uResolution.x / max(uResolution.y, 1.0);
+
+    float step = uThickness * 0.75;
+    float here = curveDistance(p);
+    float dx = curveDistance(p + vec2(step, 0.0)) - curveDistance(p - vec2(step, 0.0));
+    float dy = curveDistance(p + vec2(0.0, step)) - curveDistance(p - vec2(0.0, step));
+
+    // Perpendicular to the gradient is along the curve. Carrying material into the line instead
+    // would pile it against the figure and stop; carrying it around is what reads as a current.
+    vec2 gradient = vec2(dx, dy);
+    vec2 tangent = vec2(-gradient.y, gradient.x);
+
+    // Present at the line, absent in the space around it.
+    float nearness = 1.0 - smoothstep(0.0, uThickness * 3.0, here);
+    vec2 field = tangent * nearness * (0.6 + uFrequency * 0.05);
+
+    fragColor = vec4(clamp(field, vec2(-2.0), vec2(2.0)), length(field), 1.0);
+}`;
+
 export const PARAMETRIC_CURVE_MODES = [
     'spirograph', 'harmonograph', 'rose', 'hypotrochoid', 'epitrochoid', 'superformula', 'torus-knot', 'pendulum',
 ] as const;
@@ -470,9 +528,13 @@ export function createParametricCurveSource(
         id: `ParametricCurveSource:${mode}`,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['procedural', 'parametric-curve'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['procedural', 'parametric-curve', 'vector-field'],
         fragment: PARAMETRIC_CURVE_FRAGMENT,
+        motion: { port: 'motion', fragment: PARAMETRIC_CURVE_MOTION },
         uniforms: { uMode: PARAMETRIC_CURVE_MODES.indexOf(mode), uThickness: 0.02, uFrequency: 7 },
         parameters: { thickness: 0.02, frequency: 7 },
         bindings: [

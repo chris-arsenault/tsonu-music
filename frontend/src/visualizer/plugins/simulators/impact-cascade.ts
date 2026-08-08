@@ -17,6 +17,50 @@ import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/pl
 
 const CASCADE_SHADER = 'impact-cascade';
 const CASCADE_GEOMETRY = 'impact-fragments';
+const CASCADE_MOTION_SHADER = 'impact-cascade:motion';
+const CASCADE_MOTION_GEOMETRY = 'impact-fragments-motion';
+
+/**
+ * The wake of a projectile stream (ADR-0012).
+ *
+ * A `Projectile` carries `vx` and `vy`, so unlike every geometry source in the catalog this needs no
+ * differencing and no derivation — the velocity is the simulation's own state. It went unpublished
+ * because I did not look, not because there was nothing to publish.
+ *
+ * Reach is wider than the point the colour pass draws, for the same reason a brush is wider than a
+ * bristle: a field the size of the sprite drags only the pixels the sprite already covers.
+ */
+const CASCADE_MOTION_VERTEX = `#version 300 es
+in vec2 aPosition;
+in vec2 aVelocity;
+out vec2 vVelocity;
+
+uniform float uReach;
+
+void main() {
+    vVelocity = aVelocity;
+    gl_PointSize = uReach;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
+
+const CASCADE_MOTION_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vVelocity;
+out vec4 fragColor;
+
+uniform float uWakeScale;
+
+void main() {
+    float falloff = 1.0 - smoothstep(0.1, 0.5, length(gl_PointCoord - 0.5));
+    if (falloff <= 0.0) {
+        discard;
+    }
+
+    // Clip space spans two units across the frame against UV's one.
+    vec2 field = vVelocity * 0.5 * uWakeScale * falloff;
+
+    fragColor = vec4(field, falloff, 1.0);
+}`;
 
 const CASCADE_VERTEX = `#version 300 es
 in vec2 aPosition;
@@ -281,13 +325,17 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
         version: 1,
         category: 'simulator',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
-        capabilities: ['impact-dynamics', 'impact-producer'],
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            // Velocities the simulation already holds, so this needs no derivation at all.
+            { name: 'motion', type: 'vector-field', required: false },
+        ],
+        capabilities: ['impact-dynamics', 'impact-producer', 'vector-field'],
         cost: {
             gpu: 3,
             cpu: 2,
             memory: 2,
-            renderPasses: 1,
+            renderPasses: 2,
             qualityScalable: true,
             // Dominant: the grammar allows only one, so it never competes with another generator.
             dominant: true,
@@ -307,7 +355,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
             incompatibleWith: ['ReactionDiffusionSimulator'],
             prefersWith: ['ShockwaveTransform:bulge', 'GlowAndScatter:soft-bloom'],
         },
-        parameters: { energyScale: 1, brightness: 1.4 },
+        parameters: { energyScale: 1, brightness: 1.4, wakeScale: 1.4 },
         defaultBindings: [{
             feature: 'bass',
             parameter: 'energyScale',
@@ -315,11 +363,22 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
             attack: 0.08,
             release: 0.45,
             curve: 'smooth',
+        }, {
+            // How hard the stream pulls the image it crosses, for anything reading its wake.
+            feature: 'subBass',
+            role: 'large-scale-force',
+            parameter: 'wakeScale',
+            outputRange: [0.4, 2.6],
+            attack: 0.1,
+            release: 0.6,
+            curve: 'smooth',
         }],
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
             const vertices = new Float32Array(MAX_PROJECTILES * 3);
+            /** Position and velocity per projectile, for the pass that publishes the wake. */
+            const motion = new Float32Array(MAX_PROJECTILES * 4);
             let projectiles: Projectile[] = [];
             let count = 0;
             let emitting = true;
@@ -330,6 +389,11 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         id: CASCADE_SHADER,
                         vertex: CASCADE_VERTEX,
                         fragment: CASCADE_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: CASCADE_MOTION_SHADER,
+                        vertex: CASCADE_MOTION_VERTEX,
+                        fragment: CASCADE_MOTION_FRAGMENT,
                     });
                 },
 
@@ -372,6 +436,12 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         vertices[offset + 2] = projectile.fragment
                             ? projectile.energy * Math.max(0, 1 - projectile.age / FRAGMENT_LIFETIME)
                             : projectile.energy * 0.5;
+
+                        const motionOffset = count * 4;
+                        motion[motionOffset] = projectile.x;
+                        motion[motionOffset + 1] = projectile.y;
+                        motion[motionOffset + 2] = projectile.vx;
+                        motion[motionOffset + 3] = projectile.vy;
                         count += 1;
                     }
 
@@ -383,6 +453,15 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                             { name: 'aEnergy', components: 1 },
                         ],
                     });
+
+                    frame.uploadGeometry({
+                        id: CASCADE_MOTION_GEOMETRY,
+                        data: motion.subarray(0, count * 4),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aVelocity', components: 2 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
@@ -390,7 +469,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         return [];
                     }
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'geometry',
                         shader: CASCADE_SHADER,
                         geometry: CASCADE_GEOMETRY,
@@ -401,6 +480,24 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         clear: true,
                         uniforms: { uPointSize: 3.5, uBrightness: 1.4 },
                     }];
+
+                    if (render.outputs.motion) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: CASCADE_MOTION_SHADER,
+                            geometry: CASCADE_MOTION_GEOMETRY,
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.motion,
+                            // Projectiles crossing drag together where they agree and cancel where
+                            // they do not, which is what a collision looks like as a field.
+                            blend: 'add',
+                            clear: true,
+                            uniforms: { uReach: 18 },
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate(deactivation) {

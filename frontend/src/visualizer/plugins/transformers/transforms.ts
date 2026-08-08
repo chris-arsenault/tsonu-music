@@ -317,6 +317,49 @@ void main() {
     }
 }`;
 
+/**
+ * The luminance gradient this transform already computes (ADR-0012).
+ *
+ * A Sobel operator is a gradient, and a gradient is a field — the same shape of thing
+ * `ProceduralVectorField` generates from noise, except derived from whatever is actually on screen.
+ * Reading it displaces material along or across the edges in the picture, which is a relationship
+ * between the drag and the image that no procedural field can have.
+ *
+ * Along the contour rather than across it: the raw gradient points up the luminance slope, so
+ * material read through it piles into edges and stops. Rotating a quarter turn carries it around
+ * them instead, which is what makes an edge read as a current rather than as a wall.
+ */
+const EDGE_CONTOUR_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uStrength;
+${GLSL_COMMON}
+
+void main() {
+    vec2 texel = 1.0 / uResolution;
+
+    float l00 = luminance(texture(uSource, vUv + texel * vec2(-1.0, -1.0)).rgb);
+    float l10 = luminance(texture(uSource, vUv + texel * vec2(0.0, -1.0)).rgb);
+    float l20 = luminance(texture(uSource, vUv + texel * vec2(1.0, -1.0)).rgb);
+    float l01 = luminance(texture(uSource, vUv + texel * vec2(-1.0, 0.0)).rgb);
+    float l21 = luminance(texture(uSource, vUv + texel * vec2(1.0, 0.0)).rgb);
+    float l02 = luminance(texture(uSource, vUv + texel * vec2(-1.0, 1.0)).rgb);
+    float l12 = luminance(texture(uSource, vUv + texel * vec2(0.0, 1.0)).rgb);
+    float l22 = luminance(texture(uSource, vUv + texel * vec2(1.0, 1.0)).rgb);
+
+    float gx = (l20 + 2.0 * l21 + l22) - (l00 + 2.0 * l01 + l02);
+    float gy = (l02 + 2.0 * l12 + l22) - (l00 + 2.0 * l10 + l20);
+
+    vec2 field = vec2(-gy, gx) * uStrength;
+
+    fragColor = vec4(clamp(field, vec2(-2.0), vec2(2.0)), length(field), 1.0);
+}`;
+
 const SHOCKWAVE_BODY = `
 uniform sampler2D uSource;
 uniform vec2 uResolution;
@@ -594,9 +637,14 @@ export function createEdgeContourTransform(
         id: `EdgeContourTransform:${mode}`,
         category: 'transformer',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['edge-contour'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            // A gradient derived from what is actually on screen, which no procedural field can be.
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['edge-contour', 'vector-field'],
         fragment: EDGE_CONTOUR_FRAGMENT,
+        motion: { port: 'motion', fragment: EDGE_CONTOUR_MOTION },
         uniforms: { uMode: EDGE_CONTOUR_MODES.indexOf(mode), uStrength: 1.4 },
         parameters: { strength: 1.4 },
         bindings: [{
@@ -744,6 +792,60 @@ void main() {
     fragColor = vec4(mix(present.rgb, max(present.rgb, past), mix_weight), present.a);
 }`;
 
+/**
+ * Where each mode reaches for the past, published as a field (ADR-0012).
+ *
+ * I first called these "history taps, not a displacement of present material", which was a
+ * distinction with nothing behind it: a smear that reads from a point up and to the left visibly
+ * carries material down and to the right, and that offset is the displacement.
+ *
+ * Four modes reach somewhere: the multi-tap's weighted mean of three offsets, the banded shear of
+ * time slices, the directional smear, and the scatter of a frame mosaic. Echo, slit scan, frozen
+ * fragments and temporal difference all read the same pixel they write, so they publish nothing —
+ * they quote the past in place rather than moving it.
+ */
+const TEMPORAL_MOTION = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uSource;
+uniform sampler2D uHistory;
+uniform vec2 uResolution;
+uniform float uMode;
+uniform float uTime;
+uniform float uPhase;
+uniform float uAmount;
+uniform float uDepth;
+uniform float uDecay;
+uniform float uDelta;
+${GLSL_COMMON}
+
+/** Matches the colour pass: how much of the past this quality rung can afford to keep. */
+void main() {
+    vec2 tap = vUv;
+
+    if (uMode < 1.5 && uMode >= 0.5) {       // multi-tap: the weighted mean of its three offsets
+        tap = vUv + vec2(0.012, 0.0) * 0.5 + vec2(-0.008, 0.006) * 0.32 + vec2(0.004, -0.010) * 0.18;
+    } else if (uMode >= 2.5 && uMode < 3.5) { // time slices: a banded horizontal shear
+        float band = floor(vUv.y * 9.0);
+        tap = vUv + vec2(mod(band, 3.0) * 0.006 * uAmount, 0.0);
+    } else if (uMode >= 3.5 && uMode < 4.5) { // directional smear
+        tap = vUv - vec2(cos(uPhase), sin(uPhase)) * 0.01 * uAmount;
+    } else if (uMode >= 4.5 && uMode < 5.5) { // frame mosaic: a per-cell scatter
+        vec2 cell = floor(vUv * 4.0);
+        tap = vUv + (hash(cell) - 0.5) * 0.02 * uAmount;
+    }
+
+    // Reversed against the read, as everywhere: material travels from where it is read toward here.
+    // Scaled by the depth the ladder permits, so a rung that keeps less of the past also moves less
+    // of the picture with it.
+    float retain = clamp(0.55 + uDepth * 0.42, 0.0, 1.0);
+    vec2 field = (vUv - tap) * retain * 30.0;
+
+    fragColor = vec4(clamp(field, vec2(-2.0), vec2(2.0)), length(field), 1.0);
+}`;
+
 export const TEMPORAL_MODES = [
     'echo', 'multi-tap', 'slit-scan', 'time-slices', 'directional-smear',
     'frame-mosaic', 'delayed-mirror', 'temporal-difference', 'frozen-fragments',
@@ -759,9 +861,13 @@ export function createTemporalTransform(
             { name: 'source', type: 'color-texture', required: true },
             { name: 'history', type: 'color-texture', required: false },
         ],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['feedback', 'temporal'],
+        outputs: [
+            { name: 'color', type: 'color-texture' },
+            { name: 'motion', type: 'vector-field' },
+        ],
+        capabilities: ['feedback', 'temporal', 'vector-field'],
         fragment: TEMPORAL_FRAGMENT,
+        motion: { port: 'motion', fragment: TEMPORAL_MOTION },
         historyDriven: true,
         uniforms: { uMode: TEMPORAL_MODES.indexOf(mode), uDecay: 0.06 },
         // `depth` is the ladder's to set, not a parameter: `historyDriven` supplies it.

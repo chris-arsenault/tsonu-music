@@ -179,21 +179,35 @@ bound on it exists.
 | `WaveFieldView`, `ReactionDiffusionView` | propagation, chemical gradient | central differences over the state; the wave needs no derivation at all, since velocity is already a channel |
 | `ParticleRenderer` (4) | body velocities | already carried; the vertex buffer grew to bring them to the GPU |
 
-Deliberately silent, with the reason:
+Seven more, added after the first pass. Each had a real quantity and was written
+off as "silent with a reason", which is what a justification looks like when it is
+covering for work not done:
+
+| family | quantity | what the excuse was |
+| --- | --- | --- |
+| `ImpactCascadeSimulator` (6) | `vx`, `vy` on every projectile — no derivation at all | never considered; it was not in the table |
+| `TransientGlyphSource` (6) | a burst expanding at the rate the glyph's own radius gives | never considered |
+| `EdgeContourTransform` (6) | the Sobel gradient it already computes, rotated to run along the contour rather than into it | "neighbour taps, not a displacement" |
+| `TemporalTransform` (9) | the tap offsets of multi-tap, time-slices, directional-smear and frame-mosaic | "history taps, not present material" — a distinction with nothing behind it, since a smear reading up-left visibly carries material down-right |
+| `GlowAndScatter` (5) | the direction each mode already gathers along, scaled by how much there is to bloom | omitted from the table entirely |
+| `ParametricCurveSource` (8) | the tangent, from the distance field's gradient rotated a quarter turn | "the curve does not travel" — wrong; its phase and frequency are audio-bound |
+| `FlowFieldCompositor` (1) | the nine-step traced path, which is not the field it was traced through | "a re-publish" — it is not; the sum of a path differs from the vector at its start |
+
+Genuinely silent, twenty-two families:
 
 | family | why |
 | --- | --- |
-| `LayerMixer`, `MaskRouter`, `ColorTransform`, `PaletteMapper`, `GlowAndScatter`, `ToneMapper` | a join, a route, or a colour operation — no coordinate moves |
-| `AlbumArtSource`, `AlbumArtEdges`, `ProceduralPalette` | static material |
-| `ParametricCurveSource` (8) | the curve is redrawn from parameters each frame and does not travel; the modes that animate do so by changing shape, which is not a displacement of anything |
-| `EdgeContourTransform`, `TemporalTransform` | neighbour taps and history taps, not a displacement of present material |
+| `LayerMixer`, `MaskRouter`, `ColorTransform`, `PaletteMapper`, `ToneMapper`, `FeedbackInjector`, `ParticleTrailInjector` | a join, a route, a colour operation, or a mix into history — no coordinate moves |
+| `AlbumArtSource`, `AlbumArtEdges`, `AlbumArtPalette`, `ProceduralPalette` | static material |
+| `MaskSignedDistanceField`, `MaskContainmentField`, `MaskEffectStencil`, `ImageLuminanceField` | a static derivation of a mask that does not move; `MaskBoundaryField` publishes the family's field |
 | `ParticleSimulator`, `ParticleEmitter`, `ParticleForceField`, `ParticleCollider` | value nodes that publish configuration, not pixels |
-| `FieldFeedbackTransform`, `FlowFieldCompositor` | they read a field to decide their warp; republishing it would put one displacement in the graph twice |
+| `ReactionDiffusionSimulator`, `WaveFieldSimulator` | they emit state; their Views publish the motion |
+| `FieldFeedbackTransform` | reads a field to decide its warp, and unlike the flow compositor does not integrate a path from it |
 
-Measured after: seventeen families publish, thirteen of them have their motion
-read in assembled scenes, and 77.7 percent of scenes read some field. The
-remainder are geometric-signal, whose theme now excludes the plugins that require
-one — section 15 names no field in that family.
+Measured after: twenty-four families publish, seventeen have their motion read in
+assembled scenes, and 75.3 percent of scenes read some field. The remainder are
+geometric-signal, whose theme excludes the plugins that require one — section 15
+names no field in that family.
 
 ### Step 9 — `DomainWarpTransform` driver typing [R7]
 

@@ -69,6 +69,8 @@ void main() {
 const GLYPH_SHADER = 'transient-glyph';
 const SPECTRUM_GEOMETRY = 'spectrum-vertices';
 const GLYPH_GEOMETRY = 'glyph-vertices';
+const GLYPH_MOTION_SHADER = 'transient-glyph:motion';
+const GLYPH_MOTION_GEOMETRY = 'glyph-motion-vertices';
 
 /** Bars, points, or ring segments, all from the same vertex buffer. */
 const SPECTRUM_VERTEX = `#version 300 es
@@ -425,9 +427,13 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         version: 1,
         category: 'source',
         inputs: [],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
-        capabilities: ['transient-geometry', 'impact-consumer'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 1, qualityScalable: true, dominant: false },
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            // A burst expanding from where something struck, at a rate the glyph's own radius gives.
+            { name: 'motion', type: 'vector-field', required: false },
+        ],
+        capabilities: ['transient-geometry', 'impact-consumer', 'vector-field'],
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: character({
             motionEnergy: 0.85,
             visualDensity: 0.3,
@@ -436,7 +442,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
             dominance: 'supporting',
         }),
         activationRules: { activationWeight: 1.5, minimumDuration: 6 },
-        parameters: { scale: 1 },
+        parameters: { scale: 1, wakeScale: 1.5 },
         defaultBindings: [{
             // Onset strength already sets a glyph's brightness; peak level sets how far it reaches.
             feature: 'peak',
@@ -445,11 +451,22 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
             attack: 0.04,
             release: 0.35,
             curve: 'sqrt',
+        }, {
+            // How hard the burst shoves the image it opens on, for anything reading its motion.
+            feature: 'bass',
+            role: 'large-scale-force',
+            parameter: 'wakeScale',
+            outputRange: [0.5, 3],
+            attack: 0.08,
+            release: 0.5,
+            curve: 'smooth',
         }],
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
             const vertices = new Float32Array(MAX_GLYPHS * POINTS_PER_GLYPH * 3);
+            /** Position and outward velocity per vertex, for the pass that publishes the burst. */
+            const motion = new Float32Array(MAX_GLYPHS * POINTS_PER_GLYPH * 4);
             let glyphs: Glyph[] = [];
             /** Impacts already given a glyph, so each spawns one rather than one per frame it is new. */
             const spawnedImpacts = new Set<string>();
@@ -462,6 +479,11 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         id: GLYPH_SHADER,
                         vertex: GLYPH_VERTEX,
                         fragment: GLYPH_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: GLYPH_MOTION_SHADER,
+                        vertex: SPECTRUM_MOTION_VERTEX,
+                        fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
                 },
 
@@ -527,6 +549,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         vertices,
                         POINTS_PER_GLYPH,
                         frame.parameters.scale ?? 1,
+                        motion,
                     );
 
                     frame.uploadGeometry({
@@ -537,6 +560,15 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                             { name: 'aStrength', components: 1 },
                         ],
                     });
+
+                    frame.uploadGeometry({
+                        id: GLYPH_MOTION_GEOMETRY,
+                        data: motion.subarray(0, count * 4),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aVelocity', components: 2 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
@@ -544,7 +576,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         return [];
                     }
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'geometry',
                         shader: GLYPH_SHADER,
                         geometry: GLYPH_GEOMETRY,
@@ -554,6 +586,23 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         blend: 'add',
                         clear: true,
                     }];
+
+                    if (render.outputs.motion) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: GLYPH_MOTION_SHADER,
+                            geometry: GLYPH_MOTION_GEOMETRY,
+                            // Points rather than the lines above, for the reach a field needs.
+                            primitive: 'points',
+                            vertexCount: count,
+                            output: render.outputs.motion,
+                            blend: 'add',
+                            clear: true,
+                            uniforms: { uReach: 20 },
+                        });
+                    }
+
+                    return passes;
                 },
 
                 deactivate(deactivation) {
@@ -579,6 +628,15 @@ export function writeGlyphs(
     pointsPerGlyph: number,
     /** How far a glyph reaches at full age. Driven by level, so louder passages throw wider marks. */
     scale = 1,
+    /**
+     * Position and outward velocity per vertex, four floats each, when a caller wants the burst as a
+     * field (ADR-0012).
+     *
+     * A glyph's radius is `(0.05 + progress * 0.45) * scale`, so every vertex travels outward from
+     * its centre at a rate this function knows exactly and no consumer could recover from the
+     * positions alone. Optional, so the colour path costs nothing when nothing is reading it.
+     */
+    motion?: Float32Array,
 ): number {
     let written = 0;
     const capacity = Math.floor(vertices.length / 3);
@@ -587,6 +645,9 @@ export function writeGlyphs(
         const progress = Math.min(1, glyph.age / lifetime);
         const fade = (1 - progress) * glyph.strength;
         const radius = (0.05 + progress * 0.45) * scale;
+        // Clip units a second, from the radius expression above. Zero once the glyph has finished
+        // expanding, so a dying mark stops dragging before it stops being drawn.
+        const expansion = progress < 1 ? (0.45 * scale) / lifetime : 0;
 
         for (let segment = 0; segment < pointsPerGlyph / 2; segment += 1) {
             if (written + 2 > capacity) {
@@ -616,8 +677,10 @@ export function writeGlyphs(
                 : nextAngle;
 
             writeVertex(vertices, written, glyph.x + Math.cos(quantized) * inner, glyph.y + Math.sin(quantized) * inner, fade);
+            writeMotion(motion, written, glyph.x + Math.cos(quantized) * inner, glyph.y + Math.sin(quantized) * inner, Math.cos(quantized) * expansion, Math.sin(quantized) * expansion);
             written += 1;
             writeVertex(vertices, written, glyph.x + Math.cos(quantizedNext) * outer, glyph.y + Math.sin(quantizedNext) * outer, fade);
+            writeMotion(motion, written, glyph.x + Math.cos(quantizedNext) * outer, glyph.y + Math.sin(quantizedNext) * outer, Math.cos(quantizedNext) * expansion, Math.sin(quantizedNext) * expansion);
             written += 1;
         }
     }
@@ -630,4 +693,23 @@ function writeVertex(vertices: Float32Array, index: number, x: number, y: number
     vertices[offset] = x;
     vertices[offset + 1] = y;
     vertices[offset + 2] = strength;
+}
+
+function writeMotion(
+    motion: Float32Array | undefined,
+    index: number,
+    x: number,
+    y: number,
+    vx: number,
+    vy: number,
+): void {
+    if (!motion || (index + 1) * 4 > motion.length) {
+        return;
+    }
+
+    const offset = index * 4;
+    motion[offset] = x;
+    motion[offset + 1] = y;
+    motion[offset + 2] = vx;
+    motion[offset + 3] = vy;
 }
