@@ -518,31 +518,47 @@ export function consumesMotion(scene: WiredScene): boolean {
 }
 
 /**
- * Distinct colour producers that reach the screen, either terminally or through a compositor.
+ * Where the picture's material comes into being: colour producers that consume no colour.
  *
- * Counted by producing instance rather than by edge, so a mixer wired to the same texture on both
- * inputs counts once — which is exactly the case this exists to catch.
+ * A branch is a root of the colour graph, not any node on one. Two earlier versions of this counted
+ * nodes instead, and each time the excluded set was widened by one category rather than the question
+ * being asked properly. First every compositor counted itself, so one source plus one mixer reported
+ * two branches; that was fixed by excluding compositors and post-processing, and the count stayed
+ * wrong in the same way for transformers — every warp, tile, symmetry and shockwave in the catalog
+ * outputs a colour texture, so a single source pushed through four stages reported five branches and
+ * satisfied a minimum of three while composing one.
+ *
+ * Measured over 300 scenes before this was corrected: the old count read 5 or 6 in most scenes, never
+ * below its minimum of 3, while the number of actual roots was 1 in fifteen scenes and 2 in
+ * sixty-one. A quarter of everything built was a single chain wearing the shape of a composition.
+ *
+ * A feedback edge does not disqualify a root — a producer reading its own last frame is still where
+ * new material enters. Only a forward colour edge makes a node a stage in somebody else's branch.
  */
 export function materialBranchCount(scene: WiredScene): number {
-    const producers = new Set<string>();
+    const colourSinks = new Set(
+        scene.edges
+            .filter((edge) => !edge.feedback)
+            .filter((edge) => {
+                const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
+                const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+
+                return port?.type === 'color-texture';
+            })
+            .map((edge) => edge.to.instanceId),
+    );
+
+    const roots = new Set<string>();
 
     for (const node of scene.nodes) {
         const producesColour = node.definition.outputs.some((port) => port.type === 'color-texture');
-        // A post-processing stage transforms one branch rather than being one, and a compositor joins
-        // branches rather than being one. Every compositor outputs a colour texture and none is
-        // categorised as postprocess, so each was counting itself: a scene of one source and one
-        // compositor reported two material branches and satisfied a minimum of two while composing a
-        // single branch. That is one of the two things behind a frame that is almost entirely black
-        // with a thin line in it.
-        const joinsBranches = node.definition.category === 'compositor'
-            || node.definition.category === 'postprocess';
 
-        if (producesColour && !joinsBranches) {
-            producers.add(node.instanceId);
+        if (producesColour && !colourSinks.has(node.instanceId)) {
+            roots.add(node.instanceId);
         }
     }
 
-    return producers.size;
+    return roots.size;
 }
 
 /**

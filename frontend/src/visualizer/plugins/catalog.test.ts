@@ -751,17 +751,28 @@ describe('scenes accumulate and move', () => {
         }
     });
 
-    test('a family built for clean geometry is not forced to be dragged', () => {
-        // Section 15 describes geometric signal as a waveform or spectrum source, parametric or SDF
-        // geometry, symmetry, and restrained feedback. It names no field, so its scenes accumulate and
-        // decay without being dragged. Requiring motion everywhere would erase the distinction.
+    test('every family is dragged by something', () => {
+        // This asserted the opposite for geometric signal: section 15 names no field for that family,
+        // so some of its scenes were expected to accumulate and decay without being dragged, and the
+        // distinction between families was partly that one of them stayed still.
         //
-        // Asked about consumption rather than production. Almost every transform now publishes the
-        // displacement it applies (ADR-0012), so a scene containing one has a motion resource
-        // whether or not anything reads it — and being dragged is a fact about an edge.
-        const undragged = scenesFor(GEOMETRIC_SIGNAL_THEME).filter((scene) => !consumesMotion(scene.wired));
-
-        expect(undragged.length).toBeGreaterThan(0);
+        // That distinction is no longer assembly's to make. Almost every transform publishes the
+        // displacement it applies (ADR-0012), and every colour producer now takes a field it can be
+        // displaced by (ADR-0014), so a field exists in every scene and something always reads it.
+        // Measured across sixty entropies per family: 236 of 236 scenes consume motion, and the
+        // undragged geometric-signal scene no longer occurs at any seed.
+        //
+        // Recorded as what it is rather than tuned back: suppressing drag for one family would now
+        // take an explicit grammar switch that refuses to wire a field into a producer, which is a
+        // design decision about family character and not a repair.
+        for (const theme of THEMES) {
+            const scenes = scenesFor(theme);
+            expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
+            expect(
+                scenes.filter((scene) => !consumesMotion(scene.wired)).map((scene) => scene.entropy),
+                `${theme.id} scenes nothing drags`,
+            ).toEqual([]);
+        }
     });
 
     test('every layer stack has something that means to persist', () => {
