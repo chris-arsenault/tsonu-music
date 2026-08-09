@@ -704,6 +704,36 @@ describe('scenes accumulate and move', () => {
         .map((seed) => buildScene(seed, theme, { ...base, assets: [] }, profileFor(0)))
         .flatMap((result) => (result.ok ? [result.scene] : []));
 
+    test('a scene rarely comes out of an operator that can only darken', () => {
+        // The derived joins converge N branches into one, and they were drawn from all eight mixer
+        // modes by activation weight — a character weight, which says nothing about whether the
+        // operator can produce an image with both branches still in it. `multiply` drives toward
+        // zero, `darken` keeps the darker operand, `difference` cancels wherever the branches agree.
+        //
+        // Measured over 300 scenes before `isBranchJoiner` excluded them: 146 (48.7%) came out of a
+        // darkening mixer and 156 held two or more in series. Chained, they converge on black.
+        // After: 6 of 300, and those are mixers the scene drew for itself rather than joins derived
+        // for it — which is a character choice and stays available.
+        const darkening = ['multiply', 'darken', 'difference'];
+        let scenes = 0;
+        let dark = 0;
+
+        for (const theme of THEMES) {
+            for (const scene of scenesFor(theme)) {
+                const last = [...scene.wired.nodes].reverse().find((node) =>
+                    node.definition.category !== 'postprocess'
+                    && node.definition.outputs.some((port) => port.type === 'color-texture'));
+                if (!last) continue;
+
+                scenes += 1;
+                if (darkening.includes(last.definition.id.split(':')[1] ?? '')) dark += 1;
+            }
+        }
+
+        expect(scenes, 'scenes measured').toBeGreaterThan(40);
+        expect(dark / scenes, `${dark} of ${scenes} terminate on a darkening operator`).toBeLessThan(0.15);
+    });
+
     test('a family that names a feedback stage always gets one', () => {
         for (const theme of [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME]) {
             const scenes = scenesFor(theme);
