@@ -117,5 +117,12 @@ export function useKernelReadout(subject: KernelSubject, active: boolean): Kerne
         handleRef.current?.setTrack(subject.trackId, subject.trackDurationSeconds);
     }, [subject.trackId, subject.trackDurationSeconds]);
 
+    // Pushed like the track, not read once at start. `artworkSrc` was held in a ref and deliberately
+    // kept out of the kernel effect's dependencies, so the texture uploaded was whatever track was
+    // playing when the visualizer opened and no later track ever replaced it.
+    useEffect(() => {
+        handleRef.current?.setArtwork(subject.artworkSrc);
+    }, [subject.artworkSrc]);
+
     return { availability, readout, handle };
 }

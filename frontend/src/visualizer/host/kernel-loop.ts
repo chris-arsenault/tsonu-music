@@ -171,6 +171,8 @@ export interface KernelOptions {
 
 export interface KernelHandle extends KernelControlHandle {
     setTrack(trackId: string | null, durationSeconds: number): void;
+    /** Uploads a new track's artwork. A no-op when the source has not changed. */
+    setArtwork(src: string | undefined): void;
     stop(): void;
 }
 
@@ -260,21 +262,25 @@ export function startKernel(options: KernelOptions): KernelHandle {
         }
     }
 
-    // Masks load asynchronously and are optional, so the scene starts without them and is rebuilt once
-    // they arrive rather than blocking the first frame on a fetch.
-    void (async () => {
-        const masks = await loadMaskAssets();
-        const assets: VisualAsset[] = [...masks];
-        if (options.artworkSrc) {
-            assets.push(albumArtAssetFrom(options.artworkSrc));
-        }
+    /** Every asset whose texture actually uploaded, so a plugin is never activated for a missing one. */
+    let usableAssets: VisualAsset[] = [];
+    let artworkSrc = options.artworkSrc;
 
+    /**
+     * Uploads a set of assets and republishes what the graph may use.
+     *
+     * This was a single fire-and-forget block that ran once per `startKernel`. Masks are fine that
+     * way — they are same-origin, they do not change, and they are the reason the block existed. The
+     * artwork is neither: it is one per track, it is the only cross-origin asset in the system, and
+     * `artworkSrc` was read from a ref deliberately excluded from the effect's dependencies. So the
+     * texture uploaded was whatever track was selected when the visualizer opened, and every track
+     * after that showed the first one's artwork or none at all.
+     */
+    const publishAssets = async (assets: readonly VisualAsset[]): Promise<void> => {
         if (assets.length === 0 || !running || !renderer) {
             return;
         }
 
-        // Only assets whose texture actually uploaded are advertised, so a plugin is never activated for
-        // an asset the graph cannot bind.
         const loaded = await loadTextures(assets.map((asset) => ({
             assetId: asset.id,
             src: 'src' in asset ? asset.src : '',
@@ -295,13 +301,42 @@ export function startKernel(options: KernelOptions): KernelHandle {
             uploadedIds.add(asset.id);
         }
 
-        const usable = assets.filter((asset) => uploadedIds.has(asset.id));
-        if (usable.length === 0) {
+        // Said out loud rather than dropped. An asset that fails to load is indistinguishable from a
+        // scene that chose not to draw one, and the artwork is the only asset that can fail — masks
+        // are bundled and same-origin. Reported as a warning because it is not fatal: the scene is
+        // still valid, it simply cannot contain the plugins that would have read it.
+        for (const asset of assets) {
+            if (!uploadedIds.has(asset.id)) {
+                console.warn('[visualizer] asset did not load', asset.kind, asset.id);
+            }
+        }
+
+        // Replacing this kind's entries rather than appending, so a track change swaps the artwork
+        // instead of accumulating one per track.
+        const kinds = new Set(assets.map((asset) => asset.kind));
+        usableAssets = [
+            ...usableAssets.filter((asset) => !kinds.has(asset.kind)),
+            ...assets.filter((asset) => uploadedIds.has(asset.id)),
+        ];
+
+        if (usableAssets.length === 0) {
             return;
         }
 
-        renderer.setAssets(availableAssetIds(usable));
+        renderer.setAssets(availableAssetIds(usableAssets));
         renderer.rebuildCurrent(currentProfile());
+    };
+
+    // Masks load asynchronously and are optional, so the scene starts without them and is rebuilt once
+    // they arrive rather than blocking the first frame on a fetch.
+    void (async () => {
+        const masks = await loadMaskAssets();
+        const assets: VisualAsset[] = [...masks];
+        if (artworkSrc) {
+            assets.push(albumArtAssetFrom(artworkSrc));
+        }
+
+        await publishAssets(assets);
     })();
 
     void acquireTap(element)
@@ -567,6 +602,17 @@ export function startKernel(options: KernelOptions): KernelHandle {
             trackId = nextTrackId;
             trackDuration = durationSeconds;
             emit({ kind: 'track-changed', trackId: nextTrackId, duration: durationSeconds });
+        },
+
+        setArtwork(src) {
+            if (src === artworkSrc) {
+                return;
+            }
+
+            artworkSrc = src;
+            if (src) {
+                void publishAssets([albumArtAssetFrom(src)]);
+            }
         },
 
         stop() {
