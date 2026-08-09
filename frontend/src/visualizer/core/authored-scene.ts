@@ -29,7 +29,7 @@ import type { DistributedBinding } from './audio-mapping';
 import type { LayerOverride } from './layers';
 import type { PluginRegistry, VisualPluginDefinition } from './plugin';
 import { instanceSeed } from './random';
-import type { WiredScene } from './wiring';
+import { unabsorbedOutputs, type WiredScene } from './wiring';
 
 /**
  * The document format's version.
@@ -162,7 +162,7 @@ export interface AuthoredScene {
  * fault. A list of sentences is something to log, not something to show.
  */
 export interface AuthoredProblem {
-    kind: 'version' | 'unknown-plugin' | 'duplicate-node' | 'dangling-edge' | 'compile' | 'binding';
+    kind: 'version' | 'unknown-plugin' | 'duplicate-node' | 'dangling-edge' | 'compile' | 'binding' | 'structure';
     detail: string;
     nodeId?: string;
     edgeId?: string;
@@ -344,6 +344,34 @@ export function resolveAuthoredScene(
     const seeds: Record<string, number> = {};
     const muted: string[] = [];
     const warnings: AuthoredProblem[] = [];
+
+    // Reported rather than enforced, and only what holds without a family to check against.
+    //
+    // This path had no structural check of any kind: a document went from parse to `compileGraph` and
+    // was accepted if it typed. As policy that is right — an author may want a graph the grammar
+    // would never draw, and refusing it would make the editor useless — but silence is not. A capture
+    // carries whatever shape the renderer was in when it was taken, and while the live mutation was
+    // rewiring without the builder's checks, every capture taken more than a few seconds into a scene
+    // held a degraded graph the Lab said nothing about. Those captures were then read as evidence
+    // about how scenes are built.
+    //
+    // Terminal convergence is the one check that needs no grammar: a colour output nothing reads is a
+    // layer summed flat over the picture, having passed through no transform and no loop, whatever
+    // family the scene belongs to.
+    const unabsorbed = unabsorbedOutputs({
+        nodes,
+        edges,
+        assetBindings: wired.assetBindings,
+        unsatisfied: [],
+        present: wired.present,
+    });
+
+    if (unabsorbed.length > 1) {
+        warnings.push({
+            kind: 'structure',
+            detail: `${unabsorbed.length} colour outputs reach the canvas unjoined`,
+        });
+    }
 
     for (const node of document.nodes) {
         const definition = definitions.get(node.id)!;

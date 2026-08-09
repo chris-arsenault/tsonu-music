@@ -309,6 +309,34 @@ describe('authored scene resolution', () => {
         }));
     });
 
+    test('a document whose branches never converge is resolved and reported', () => {
+        // This path had no structural check at all. A capture carries whatever shape the renderer was
+        // in when it was taken, so a scene pasted into the Lab could hold branches that reach the
+        // canvas having passed through nothing, and nothing said so. Reported rather than refused:
+        // an author may want a graph the builder would not draw.
+        const split = document({
+            nodes: [
+                { id: 'src#0', pluginId: 'src', position: { x: 0, y: 0 } },
+                { id: 'src#1', pluginId: 'src', position: { x: 0, y: 200 } },
+            ],
+            edges: [],
+        });
+
+        const result = resolveAuthoredScene(split, REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.warnings).toContainEqual(expect.objectContaining({ kind: 'structure' }));
+    });
+
+    test('a document that converges to one image is not warned about', () => {
+        const result = resolveAuthoredScene(document(), REGISTRY);
+
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.warnings.filter((problem) => problem.kind === 'structure')).toEqual([]);
+    });
+
     test('a muted node stays in the graph and is reported as excluded', () => {
         const muted = document({
             nodes: document().nodes.map((node) =>
