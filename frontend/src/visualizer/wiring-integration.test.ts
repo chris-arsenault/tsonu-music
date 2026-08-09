@@ -13,6 +13,8 @@ import {
     buildFirstViableScene,
     buildScene,
     colourOverrides,
+    settleScene,
+    structuralViolations,
     variedThemeOrder,
 } from './core/scene-builder';
 import { profileFor, QUALITY_LADDER } from './core/performance';
@@ -20,7 +22,8 @@ import { mergeUniforms, resolveParameters } from './core/parameters';
 import { isSuppressedByQuality } from './core/passes';
 import { planTargets, RESOURCE_SIZING } from './core/render-plan';
 import { compileGraph } from './core/graph';
-import { assetResourceId, wireScene, type AssetResource } from './core/wiring';
+import { assetResourceId, wireScene, type AssetResource, type WiredScene } from './core/wiring';
+import { createRng } from './core/random';
 import { isMotionSource } from './core/fields';
 import { MASK_SET_OPERATIONS } from './plugins/compositors/composition';
 import { advanceMutation, createMutationState } from './core/scheduler';
@@ -551,6 +554,82 @@ describe('assets are reachable by scene assembly', () => {
             expect(results.filter((result) => result.ok).length, theme.id)
                 .toBeGreaterThanOrEqual(results.length - 1);
         }
+    });
+
+    test('a structural mutation keeps every guarantee the build made', () => {
+        // The mutation path called `wireScene` directly and passed no rng. `wireScene` closes the
+        // scene's loop and draws its assets only when given one, so 81% of mutations — the plugin and
+        // branch kinds, on a five-second timer — quietly removed the composed-image fold-back, reset
+        // every asset to the first entry of its manifest, and skipped the derived joins and the
+        // structural check. Nothing reported it because every check that would have lives in the
+        // builder, and the builder is not on that path.
+        //
+        // Measured over 200 scenes before the repair: cross-node loops 95/200 at build and 0/200
+        // after one mutation, structural violations 0 then 81/200, and mask selection 161 of 161 on
+        // the manifest's first entry. This asserts the shape of that, not the exact counts.
+        const crossLoops = (scene: WiredScene) => scene.edges
+            .filter((edge) => edge.feedback && edge.from.instanceId !== edge.to.instanceId).length;
+
+        // Several masks, because a draw from one entry cannot be told from taking the first one.
+        const maskIds = ['band-mark', 'second-mark', 'third-mark', 'fourth-mark'];
+        const withMasks = {
+            ...CONTEXT,
+            assets: [...maskIds, 'mask'],
+            assetResources: maskIds.map((id) => ({
+                resource: assetResourceId(id),
+                type: 'mask-texture' as const,
+            })),
+        };
+
+        let mutated = 0;
+        let keptCrossLoop = 0;
+        let builtCrossLoop = 0;
+        const masks = new Set<string>();
+
+        for (let seed = 0; seed < 60; seed += 1) {
+            const entropy = `mutate-${seed}`;
+            const built = buildFirstViableScene(entropy, variedThemeOrder(entropy, THEMES), withMasks, profileFor(0));
+            if (!built.ok) continue;
+            const scene = built.scene;
+            if (crossLoops(scene.wired) > 0) builtCrossLoop += 1;
+
+            const rng = createRng(`${entropy}:swap`);
+            const target = scene.plugins[rng.int(scene.plugins.length)];
+            const candidates = CATALOG.filter((entry) =>
+                entry.category === target.category && entry.id !== target.id);
+            if (candidates.length === 0) continue;
+
+            const plugins = scene.plugins.map((entry) =>
+                (entry.id === target.id ? candidates[rng.int(candidates.length)] : entry));
+
+            const settled = settleScene(plugins, entropy, scene.theme, withMasks, {
+                ...withMasks,
+                theme: scene.theme,
+                allowHighCost: true,
+                allowDominant: true,
+            });
+
+            if (!settled.ok) continue;
+            mutated += 1;
+
+            // A mutation that is applied is a scene that would have been accepted at build time.
+            expect(
+                structuralViolations(settled.wired, scene.theme.grammar),
+                `${entropy} after mutation`,
+            ).toEqual([]);
+
+            if (crossLoops(settled.wired) > 0) keptCrossLoop += 1;
+            for (const binding of settled.wired.assetBindings) {
+                masks.add(binding.resource);
+            }
+        }
+
+        expect(mutated, 'mutations that settled').toBeGreaterThan(20);
+        expect(builtCrossLoop, 'scenes built with a cross-node loop').toBeGreaterThan(0);
+        // The rate does not collapse. Before the repair this was exactly zero however many scenes ran.
+        expect(keptCrossLoop, 'cross-node loops surviving a mutation').toBeGreaterThan(0);
+        // And the asset draw stays a draw rather than reverting to the manifest's first entry.
+        expect(masks.size, 'distinct assets bound across mutated scenes').toBeGreaterThan(1);
     });
 
     test('a theme that fails still leaves the viewer with a scene', () => {

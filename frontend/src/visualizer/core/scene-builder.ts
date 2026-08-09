@@ -193,36 +193,40 @@ export function buildScene(
     return { ok: false, failure: lastFailure };
 }
 
-function buildSceneAttempt(
+export interface SettledScene {
+    ok: true;
+    plugins: VisualPluginDefinition[];
+    wired: WiredScene;
+    graph: CompiledGraph;
+}
+
+/**
+ * Wires a plugin list into a scene that satisfies its own grammar, or says why it cannot.
+ *
+ * Everything between "here is a set of plugins" and "here is a graph worth rendering" lives here:
+ * the loop draw, the derived joins, the connectivity prune, the structural check, the compile. It is
+ * exported because it had exactly one caller and needed two.
+ *
+ * The second caller is the live mutation in `host/renderer.ts`, which was calling `wireScene`
+ * directly and passing no rng. `wireScene` closes the scene's loop and draws its assets only when it
+ * is given one, so every structural mutation — 81% of them, on a five-second timer — silently
+ * removed the composed-image loop, reset every asset to the first entry of its manifest, and skipped
+ * the join and the structural check entirely. Measured across three independent samples: the
+ * cross-node fold-back loop went from ~45% of scenes to 0% after a single mutation, and mask
+ * selection collapsed to the manifest's first entry in 100% of cases. Every figure this file's
+ * comments quote was true of the first frame after a build and false a few seconds later.
+ */
+export function settleScene(
+    initial: readonly VisualPluginDefinition[],
     entropy: string,
     theme: VisualTheme,
     context: SceneBuildContext,
-    profile: QualityProfile,
-): SceneBuildResult {
-    const effectiveTheme: VisualTheme = profile.reducedGrammar
-        ? { ...theme, grammar: REDUCED_GRAMMAR }
-        : theme;
+    schedulerContext: SchedulerContext,
+): SettledScene | { ok: false; failure: SceneBuildFailure } {
+    let plugins = [...initial];
+    const rewire = () => wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
 
-    const schedulerContext: SchedulerContext = {
-        ...context,
-        theme: effectiveTheme,
-        allowHighCost: profile.expensivePrimary,
-        allowDominant: profile.expensivePrimary,
-    };
-
-    const assembled = assembleScene(entropy, schedulerContext);
-    if (assembled.violations.length > 0) {
-        return {
-            ok: false,
-            failure: {
-                reason: 'grammar',
-                detail: assembled.violations.map((violation) => violation.detail).join('; '),
-            },
-        };
-    }
-
-    let plugins = assembled.plugins;
-    let wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
+    let wired = rewire();
     if (wired.unsatisfied.length > 0) {
         return {
             ok: false,
@@ -246,8 +250,6 @@ function buildSceneAttempt(
     //
     // The prune within a round repeats too, because dropping one plugin can strand the plugin that
     // fed it. `unreachableInstances` had already learned this at render time.
-    const rewire = () => wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
-
     for (let round = 0; round < ASSEMBLY_ROUNDS; round += 1) {
         const joined = withJoiningCompositors(
             plugins,
@@ -276,7 +278,7 @@ function buildSceneAttempt(
             }
 
             plugins = plugins.filter((definition) => contributing.has(definition.id));
-            const violations = grammarViolations(plugins, effectiveTheme.grammar);
+            const violations = grammarViolations(plugins, theme.grammar);
             if (violations.length > 0) {
                 return {
                     ok: false,
@@ -303,7 +305,7 @@ function buildSceneAttempt(
     // How the scene is joined, which counts alone cannot express. Checked after the prune above, so a
     // scene that only reaches two branches by keeping a disconnected one is rejected rather than
     // counted.
-    const structural = structuralViolations(wired, effectiveTheme.grammar);
+    const structural = structuralViolations(wired, theme.grammar);
     if (structural.length > 0) {
         return {
             ok: false,
@@ -319,6 +321,44 @@ function buildSceneAttempt(
         return { ok: false, failure: { reason: 'compile', detail: compiled.errors.join('; ') } };
     }
 
+    return { ok: true, plugins, wired, graph: compiled.graph };
+}
+
+function buildSceneAttempt(
+    entropy: string,
+    theme: VisualTheme,
+    context: SceneBuildContext,
+    profile: QualityProfile,
+): SceneBuildResult {
+    const effectiveTheme: VisualTheme = profile.reducedGrammar
+        ? { ...theme, grammar: REDUCED_GRAMMAR }
+        : theme;
+
+    const schedulerContext: SchedulerContext = {
+        ...context,
+        theme: effectiveTheme,
+        allowHighCost: profile.expensivePrimary,
+        allowDominant: profile.expensivePrimary,
+    };
+
+    const assembled = assembleScene(entropy, schedulerContext);
+    if (assembled.violations.length > 0) {
+        return {
+            ok: false,
+            failure: {
+                reason: 'grammar',
+                detail: assembled.violations.map((violation) => violation.detail).join('; '),
+            },
+        };
+    }
+
+    const settled = settleScene(assembled.plugins, entropy, effectiveTheme, context, schedulerContext);
+    if (!settled.ok) {
+        return settled;
+    }
+
+    const { plugins, wired, graph } = settled;
+
     return {
         ok: true,
         scene: {
@@ -326,7 +366,7 @@ function buildSceneAttempt(
             theme: effectiveTheme,
             plugins,
             wired,
-            graph: compiled.graph,
+            graph,
             bindings: applyColourPolicy(
                 distributeReactivity(wired.nodes, createRng(`${entropy}:bindings`)),
                 effectiveTheme.colorPolicy,

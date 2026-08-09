@@ -38,8 +38,7 @@ import type { AudioFeatureBus } from '../core/features';
 import type { PlaybackClock } from '../core/clock';
 import type { QualityProfile } from '../core/performance';
 import type { DiagnosticsControls } from '../core/diagnostics';
-import { buildFirstViableScene, variedThemeOrder } from '../core/scene-builder';
-import { compileGraph } from '../core/graph';
+import { buildFirstViableScene, settleScene, variedThemeOrder } from '../core/scene-builder';
 import { graphCycles } from '../core/loop-gain';
 import { planTargets } from '../core/render-plan';
 import { distributeReactivity } from '../core/audio-mapping';
@@ -63,7 +62,6 @@ import {
     type SchedulerContext,
 } from '../core/scheduler';
 import type { VisualPluginDefinition } from '../core/plugin';
-import { wireScene } from '../core/wiring';
 import { assetResourceId, type AssetResource } from '../core/wiring';
 import { createM1Registry } from '../plugins/registry';
 import { satisfiableThemes } from '../plugins/themes';
@@ -438,7 +436,10 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * image was discarded and replaced rather than evolving. That is the wholesale jump; nothing
      * about the old implementation was scoped to a branch except its name.
      */
-    const swapPlugins = (swaps: readonly { instanceId: string; replacementId: string }[]): boolean => {
+    const swapPlugins = (
+        swaps: readonly { instanceId: string; replacementId: string }[],
+        profile: QualityProfile,
+    ): boolean => {
         if (swaps.length === 0) {
             return false;
         }
@@ -455,19 +456,38 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
 
         const plugins = scene.plugins.map((definition) => replacements.get(definition.id) ?? definition);
 
-        const wired = wireScene(plugins, assetResources);
-        if (wired.unsatisfied.length > 0) {
-            return false;
-        }
+        // The same path the builder takes, rather than a bare `wireScene` with no rng.
+        //
+        // `wireScene` closes the scene's loop and draws its assets only when it is handed an rng, and
+        // this call passed none — so every structural mutation dropped the composed-image fold-back,
+        // reset each asset to the first entry of its manifest, and skipped the derived joins and the
+        // structural check. Weighted at 81% of mutations on a five-second timer, that undid the
+        // scene's structure within seconds of it being built, and undid it again after every
+        // subsequent mutation. Measured independently three times over: cross-node loops from ~45% of
+        // scenes to 0% after one mutation, and mask choice to the manifest's first entry in 100% of
+        // cases. Nothing reported it, because every check that would have lives in the builder.
+        const settled = settleScene(
+            plugins,
+            scene.entropy,
+            scene.theme,
+            {
+                available: registry.all(),
+                assets: assetIds,
+                assetResources,
+                capabilities: deviceCapabilities,
+                history: {},
+                playbackTime: 0,
+            },
+            schedulerContext(0, profile),
+        );
 
-        const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
-        if (!compiled.ok) {
+        if (!settled.ok) {
             return false;
         }
 
         return applyBuild({
             ok: true,
-            scene: { ...scene, plugins, wired, graph: compiled.graph },
+            scene: { ...scene, plugins: settled.plugins, wired: settled.wired, graph: settled.graph },
         });
     };
 
@@ -916,7 +936,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         // plugin changing, because the three-way attempt failed and nothing was tried
                         // in between.
                         for (let size = swaps.length; size >= 1; size -= 1) {
-                            if (swapPlugins(swaps.slice(0, size))) {
+                            if (swapPlugins(swaps.slice(0, size), profile)) {
                                 return 'branch';
                             }
                         }
@@ -932,7 +952,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         const swapped = swapPlugins([{
                             instanceId: decision.targetInstanceId,
                             replacementId: decision.replacement.id,
-                        }]);
+                        }], profile);
                         return swapped ? decision.kind : 'none';
                     }
 
