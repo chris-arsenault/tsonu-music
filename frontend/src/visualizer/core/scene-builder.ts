@@ -224,7 +224,12 @@ export function settleScene(
     schedulerContext: SchedulerContext,
 ): SettledScene | { ok: false; failure: SceneBuildFailure } {
     let plugins = [...initial];
-    const rewire = () => wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
+    const rewire = () => wireScene(
+        plugins,
+        context.assetResources ?? [],
+        createRng(`${entropy}:loops`),
+        theme.grammar.maximumFeedbackLoops,
+    );
 
     let wired = rewire();
     if (wired.unsatisfied.length > 0) {

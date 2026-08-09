@@ -9,6 +9,7 @@ import {
     transformerDefinitions,
 } from './registry';
 import {
+    isImagePortType,
     isValuePortType,
     validateDefinition,
     type PluginCategory,
@@ -16,7 +17,7 @@ import {
 } from '../core/plugin';
 import { silentFeatureBus } from '../core/features';
 import { compileGraph } from '../core/graph';
-import { assetResourceId, wireScene, type AssetResource } from '../core/wiring';
+import { assetResourceId, wireScene, type AssetResource, type WiredScene } from '../core/wiring';
 import { buildScene, consumesMotion } from '../core/scene-builder';
 import { profileFor, QUALITY_LADDER } from '../core/performance';
 import { COLLISION_ENERGY, GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } from '../core/grammar';
@@ -744,6 +745,43 @@ describe('scenes accumulate and move', () => {
                     definition.capabilities.includes('feedback'));
 
                 expect(feedback.length, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
+            }
+        }
+    });
+
+    test('a family that budgets several loops gets several, and one that budgets one does not', () => {
+        // `closeLoop` stripped every loop a plugin nominated and installed one composed-image loop in
+        // their place, so a scene came out with exactly one image loop — measured, 200 of 200 — while
+        // three of the four grammars permit five. The function's own closing comment already argued
+        // against that and applied the argument only to the path where no candidate was legal: a
+        // chain of stages each keeping its own trail is a legitimate composition, and what those
+        // scenes lack is not fewer loops but one that folds the composed image back.
+        //
+        // "Not fewer loops but one more" is an addition and it was written as a replacement. With the
+        // local trails gone every stage but one resamples material drawn fresh this frame, which is
+        // invertible: the picture returns exactly when the parameter does.
+        const loopsIn = (wired: WiredScene) => wired.edges.filter((edge) => {
+            if (!edge.feedback) return false;
+            const sink = wired.nodes.find((node) => node.instanceId === edge.to.instanceId);
+            const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+            return port !== undefined && isImagePortType(port.type);
+        }).length;
+
+        for (const theme of THEMES) {
+            const scenes = scenesFor(theme);
+            expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
+
+            const counts = scenes.map((scene) => loopsIn(scene.wired));
+            const ceiling = theme.grammar.maximumFeedbackLoops;
+
+            // Nothing exceeds what the family declared, which is what makes the ceiling meaningful.
+            expect(Math.max(...counts), `${theme.id} exceeds its ceiling of ${ceiling}`)
+                .toBeLessThanOrEqual(ceiling);
+
+            // And a family with room for more than one actually uses it.
+            if (ceiling > 1) {
+                expect(Math.max(...counts), `${theme.id} never keeps more than one loop`)
+                    .toBeGreaterThan(1);
             }
         }
     });

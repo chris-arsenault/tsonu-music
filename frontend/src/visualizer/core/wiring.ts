@@ -182,6 +182,7 @@ function closeLoop(
     edges: RenderGraphEdge[],
     nodes: readonly GraphNode[],
     rng: Rng,
+    maximumImageLoops: number,
 ): void {
     // The last node before presentation begins, not the node that reaches the screen.
     //
@@ -195,8 +196,7 @@ function closeLoop(
     // Image loops a nominated port already closed are candidates to relocate, not fixtures. The
     // nomination says where a previous frame is most useful *to that plugin*; where the scene
     // remembers is a different question, and answering it with whichever loop-capable plugin
-    // selection happened to draw is what ADR-0013 removed. Exactly one survives either way, because
-    // the grammar budgets for one.
+    // selection happened to draw is what ADR-0013 removed.
     const isImageLoop = (edge: RenderGraphEdge): boolean => {
         if (!edge.feedback) {
             return false;
@@ -208,7 +208,30 @@ function closeLoop(
         return port !== undefined && isImagePortType(port.type) && !port.required;
     };
 
-    const kept = edges.filter((edge) => !isImageLoop(edge));
+    // The self-loops a plugin nominated stay, and the drawn loop is added to them.
+    //
+    // This was `edges.filter((edge) => !isImageLoop(edge))`: every nominated loop stripped, one
+    // composed-image loop installed in their place, so a scene came out with exactly one image loop —
+    // measured, 200 of 200 — while the grammars permit five. The note at the bottom of this function
+    // already argued the case against doing that, and applied it only to the path where no candidate
+    // was legal: a chain of stages each keeping its own trail is a legitimate composition, and what
+    // those scenes lack is not fewer loops but one loop that folds the *composed* image back.
+    //
+    // "Not fewer loops but one more" is an addition, and it was implemented as a replacement. With
+    // the local trails gone, every stage but one is a resampling of material drawn fresh this frame,
+    // which is invertible — the picture returns exactly when the parameter does. That is the reported
+    // "every translation or zoom is immediately met with the exact inverse".
+    //
+    // How many survive is the family's business. Geometric signal budgets for one loop and means it:
+    // keeping every nominated trail there contradicts the character the grammar is stating, and the
+    // scene would be rejected on every candidate rather than composed differently. The drawn loop
+    // takes one place of the ceiling and the nominated ones fill what is left, oldest first so the
+    // trail that survives is the one earliest in the chain.
+    const nominated = edges.filter(isImageLoop);
+    const kept = [
+        ...edges.filter((edge) => !isImageLoop(edge)),
+        ...nominated.slice(0, Math.max(0, maximumImageLoops - 1)),
+    ];
 
     for (const { node: sink, input } of orderLoopSinks(nodes, rng)) {
         const candidates = nodes.flatMap((node) => node.definition.outputs
@@ -291,6 +314,13 @@ export function wireScene(
      * authored graph and every wiring test expect: they state their edges rather than drawing them.
      */
     rng?: Rng,
+    /**
+     * The family's ceiling on image loops, so the trails a scene keeps stay inside its character.
+     *
+     * Defaults to one, which is what every wiring test and every authored graph expects: they state
+     * their edges rather than drawing them.
+     */
+    maximumImageLoops = 1,
 ): WiredScene {
     // Derived joins sort after every category, not with the compositors they otherwise resemble.
     // Placed by category they ran before the post-processing stages, and each of those takes one
@@ -466,7 +496,7 @@ export function wireScene(
     }
 
     if (rng) {
-        closeLoop(edges, nodes, rng);
+        closeLoop(edges, nodes, rng, maximumImageLoops);
     }
 
     return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };
