@@ -78,9 +78,15 @@ destination, so this needs no texture read and therefore no second slot. Emitted
 `defineShaderPlugin` ahead of a producer's own passes, it gives every colour target a per-second
 survival for zero VRAM.
 
-`survival` is an ordinary bound parameter with a ceiling strictly below 1, tagged `gainParameter`.
-Every producer thereby acquires a self-loop that `core/loop-gain.ts` can see and bound, which is
-ADR-0013's rule applied to a cycle that previously did not exist.
+`survival` is an ordinary bound parameter and is bound to the music rather than left constant, with a
+ceiling of 0.9 a second — comfortably below the 1 at which the decay stops being one. The binding is
+inverted: a dense passage overwrites the frame whatever the survival is, so holding a long memory
+through one buries the picture, while a sparse passage has nothing to show but what it remembers.
+
+The pair is bounded without help. With a `lighten` combine the target never exceeds the brightest
+contribution ever made to it, at any survival below 1. `core/loop-gain.ts` neither sees this loop nor
+needs to: it closes through the fixed-function blender rather than through an edge, and `graphCycles`
+only walks edges. A first draft of this ADR claimed the opposite.
 
 ### Sources composite rather than replace
 
@@ -89,8 +95,10 @@ target holds `max(survival · previous, contribution)`. That is the sup-norm non
 ADR-0013 settled on: bounded above by the brightest thing ever injected, and unlike a convex blend
 it holds an arbitrarily long memory without the weights summing back to one copy of the source.
 
-The four geometry sources keep `blend: 'add'` and drop the clear, adding into the decayed base
-instead of into a wiped one.
+The four geometry sources drop the clear and take `lighten` too, rather than the `add` they had.
+Additive injection into a decaying target has a steady state of `c / (1 − s_frame)`, and `s_frame`
+approaches 1 as the frame rate rises for any fixed per-second decay — so the same scene would be
+brighter on a 144 Hz display than on a 60 Hz one. A max combine has no such term.
 
 Both are path dependent: what a target holds at second five depends on the whole sequence since
 second zero, not on the feature values at second five.
@@ -98,18 +106,26 @@ second zero, not on the feature values at second five.
 ### Drift needs a second slot, and only where a field is bound
 
 Decay alone leaves a trail in place. Displacing what the target already holds requires sampling it,
-which requires a ping-pong slot. Scoped to sources with a `field` input wired — roughly 1.4 per
-scene since every colour producer was opened to displacement — that is **+23 MB**, against +181 MB
-for ping-ponging every colour resource. Those sources sample their previous contents through
-`perturbed()` before the new contribution lands on top.
+which requires a ping-pong slot. An output declares `retained` to ask for one, and the compiler
+grants it only to a node something is wired into — displacement by a field nothing produced is the
+identity, and would buy a full-resolution buffer to copy a texture to itself.
+
+Measured over sixty built scenes: **1.42** drifting producers a scene, at least one in **50 of 60**
+scenes, and target memory from **261 MB to 287 MB**. Retaining every colour resource would have been
+442 MB.
+
+The ageing pass reads from behind. A field is a velocity in UV per second, so material travelling
+along `+field` arrives from `uv − field·Δt` — the sign convention `GLSL_RESAMPLE_MOTION` already
+states, where a transform reads at `source` and writes at `uv`. Where there is no field or no slot it
+falls back to the multiply decay rather than sampling the target it is writing.
 
 This is the part that turns a trail into motion that goes somewhere.
 
 ## Consequences
 
 Every colour target in the graph becomes a memory whose contents outlive the frame, and every scene
-gains as many bounded self-loops as it has colour producers. The bound stays global and stays
-checkable: `divergentCycles` sees each new loop through its survival ceiling.
+gains as many bounded self-loops as it has colour producers. None of them reaches `divergentCycles`,
+because none is an edge; each is bounded locally by a survival below 1 against a max combine.
 
 Trails on every producer risks scenes reading as mush. `survival`'s range is the control, and the
 harness decides rather than judgement: period-locked divergence against the null model, before and
