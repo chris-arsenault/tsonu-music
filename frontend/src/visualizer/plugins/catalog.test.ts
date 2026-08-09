@@ -727,7 +727,7 @@ describe('scenes accumulate and move', () => {
         }
     });
 
-    test('every family has exactly one previous-frame image edge', () => {
+    test('every family reads its previous frame at least through the canonical state', () => {
         const loopsIn = (wired: WiredScene) => wired.edges.filter((edge) => {
             if (!edge.feedback) return false;
             const sink = wired.nodes.find((node) => node.instanceId === edge.to.instanceId);
@@ -739,8 +739,14 @@ describe('scenes accumulate and move', () => {
             const scenes = scenesFor(theme);
             expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
 
-            expect(scenes.map((scene) => loopsIn(scene.wired)), theme.id)
-                .toEqual(scenes.map(() => 1));
+            // At least the canonical state loop; material trails and fold-backs may add more, up
+            // to the family's own budget plus the state.
+            for (const scene of scenes) {
+                const loops = loopsIn(scene.wired);
+                expect(loops, `${theme.id}/${scene.entropy}`).toBeGreaterThanOrEqual(1);
+                expect(loops, `${theme.id}/${scene.entropy}`)
+                    .toBeLessThanOrEqual(theme.grammar.maximumFeedbackLoops + 1);
+            }
         }
     });
 

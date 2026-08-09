@@ -35,7 +35,7 @@ describe('canonical scene state', () => {
 
         expect(result.ok).toBe(false);
         if (result.ok) return;
-        expect(result.errors).toContain('previous-frame image must come from the temporal combine output');
+        expect(result.errors).toContain('scene requires exactly one previous-frame read of the combine output; found 0');
     });
 
     test('rejects a material branch that bypasses the fresh-state input', () => {

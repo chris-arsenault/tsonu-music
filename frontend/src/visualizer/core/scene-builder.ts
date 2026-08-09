@@ -226,12 +226,18 @@ export function settleScene(
     schedulerContext: SchedulerContext,
 ): SettledScene | { ok: false; failure: SceneBuildFailure } {
     let plugins = [...initial];
+    // Material wiring keeps its nominated trails and draws its own fold-back loop. These are the
+    // scene's *material* memory — a stage echoing itself, the composed image folding back through a
+    // lossy port — and they are distinct from the canonical image state `withCanonicalState` adds
+    // afterwards. `nominateImageHistory` was passed as `false` here when the canonical state was
+    // introduced, on the reasoning that the builder supplies the one loop a scene needs; that made
+    // every stage upstream of the combine a fresh redraw resampled through per-frame absolute warps,
+    // which is invertible — the picture returned exactly when the parameter did.
     const rewire = () => wireScene(
         plugins,
         context.assetResources ?? [],
         createRng(`${entropy}:loops`),
         theme.grammar.maximumFeedbackLoops,
-        false,
     );
 
     let wired = rewire();
@@ -592,7 +598,7 @@ export function structuralViolations(
     // chain has no upstream producer, so wiring closes it on itself. That is a harmless empty read
     // of a value port, not a picture fed back into a picture, and counting it put four loops in a
     // family whose ceiling is one.
-    const loops = scene.edges.filter((edge) => {
+    const imageLoops = scene.edges.filter((edge) => {
         if (!edge.feedback) {
             return false;
         }
@@ -602,16 +608,24 @@ export function structuralViolations(
 
         return port !== undefined && isImagePortType(port.type);
     });
-    if (loops.length < grammar.minimumFeedbackLoops) {
+    // The canonical state loop counts toward the minimum — it is a real memory and a scene holding
+    // only it is legal — but not against the ceiling, which is a character budget on the *material*
+    // loops a family keeps. Counted against the ceiling, the infrastructure loop consumed the whole
+    // budget of a one-loop grammar and no scene was permitted any material memory of its own.
+    const materialLoops = imageLoops.filter((edge) => {
+        const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
+        return !sink?.definition.capabilities.includes(DERIVED_STATE);
+    });
+    if (imageLoops.length < grammar.minimumFeedbackLoops) {
         violations.push({
             kind: 'too-few-feedback',
-            detail: `${loops.length} loops below ${grammar.minimumFeedbackLoops}`,
+            detail: `${imageLoops.length} loops below ${grammar.minimumFeedbackLoops}`,
         });
     }
-    if (loops.length > grammar.maximumFeedbackLoops) {
+    if (materialLoops.length > grammar.maximumFeedbackLoops) {
         violations.push({
             kind: 'too-many-feedback',
-            detail: `${loops.length} loops exceed ${grammar.maximumFeedbackLoops}`,
+            detail: `${materialLoops.length} material loops exceed ${grammar.maximumFeedbackLoops}`,
         });
     }
 
@@ -646,8 +660,9 @@ export function structuralViolations(
 
     // A loop that only mixes colour gives the scene a memory and no motion. Once the kernel stops
     // dragging the accumulation itself, this is the difference between a picture that flows and one
-    // that fades.
-    if (grammar.requireSpatialLoop && !loops.some((edge) => {
+    // that fades. The canonical warp counts here even though it is outside the loop budget above:
+    // the requirement is that something displaces what it remembers, and the scene state does.
+    if (grammar.requireSpatialLoop && !imageLoops.some((edge) => {
         const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
         return sink !== undefined && displacesHistory(sink.definition);
     })) {

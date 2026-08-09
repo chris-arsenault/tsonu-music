@@ -234,6 +234,19 @@ function closeLoop(
     ];
 
     for (const { node: sink, input } of orderLoopSinks(nodes, rng)) {
+        // A port already carrying a forward edge is not a candidate. Closing there replaces real
+        // structure: the displaced producer becomes a second terminal, and under the one-terminal
+        // invariant the join and the loop draw then feed each other a new orphan every round until
+        // the candidate is abandoned. A loop closes where a port is free for it — an optional
+        // history input, or one whose only occupant is the self-loop nomination it replaces.
+        const forwardOccupied = kept.some((edge) =>
+            !edge.feedback
+            && edge.to.instanceId === sink.instanceId
+            && edge.to.port === input.name);
+        if (forwardOccupied) {
+            continue;
+        }
+
         const candidates = nodes.flatMap((node) => node.definition.outputs
             .filter((output) => !output.internal && portsCompatible(output.type, input.type))
             .map((output) => ({ instanceId: node.instanceId, port: output.name })));
@@ -321,7 +334,12 @@ export function wireScene(
      * their edges rather than drawing them.
      */
     maximumImageLoops = 1,
-    /** False for material assembly; the scene builder adds the one canonical image state itself. */
+    /**
+     * False only for graphs that state their own memory, such as authored documents. The scene
+     * builder passes true: nominated trails and the drawn fold-back loop are the material's memory,
+     * and the canonical image state it adds afterwards is validated separately by
+     * `analyzeSceneState`.
+     */
     nominateImageHistory = true,
 ): WiredScene {
     // Derived joins sort after every category, not with the compositors they otherwise resemble.

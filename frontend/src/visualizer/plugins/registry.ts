@@ -70,11 +70,13 @@ import {
     createEdgeContourTransform,
     createShockwaveTransform,
     createSymmetryTransform,
+    createTemporalTransform,
     createTilingTransform,
     DOMAIN_WARP_MODES,
     EDGE_CONTOUR_MODES,
     SHOCKWAVE_MODES,
     SYMMETRY_MODES,
+    TEMPORAL_MODES,
     TILING_MODES,
 } from './transformers/transforms';
 import {
@@ -167,6 +169,12 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
         // The drag, which the kernel used to own (ADR-0012) and which no longer carries its own
         // combine (ADR-0013).
         createFieldAdvectTransform(),
+        // Deregistered by the graph-owned-state change alongside the plugins whose hidden retention
+        // it removed, but this one had already been rewritten to the ADR-0013 model: its history is
+        // an ordinary optional port whose `decay` is the gain of any cycle closing there. Without
+        // it the catalog offers no port a drawn loop can legally close on, so no scene holds any
+        // material memory — every stage upstream of the canonical combine redraws from scratch.
+        ...TEMPORAL_MODES.map(createTemporalTransform),
     ];
 }
 
