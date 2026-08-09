@@ -1,9 +1,11 @@
 /**
  * Concurrent parameter motion.
  *
- * Audio bindings provide the immediate musical response. This adds a slower, independent motion to
+ * Audio bindings provide the immediate musical response. This adds a slower, independent wander to
  * every bound parameter so several layers keep breathing, folding, and drifting at once between
- * transients. Playback time is the only clock, therefore pause and seek semantics remain intact.
+ * transients. The wander is value noise over an unrepeating lattice, not an oscillator: it visits
+ * new positions for as long as the track runs. Playback time is the only clock, therefore pause
+ * and seek semantics remain intact.
  */
 
 import { bindingMode, clamp01, type BindingRole, type ParameterBinding } from './bindings';
@@ -110,15 +112,26 @@ export function modulateParameters(
         );
         const dynamics = dynamicsFor(binding.role);
         const rate = lerp(dynamics.rate, identity);
-        const phase = playbackTime * rate * TAU + identity * TAU;
+        const phase = playbackTime * rate + identity * 127.31;
 
         // Nudged by transients rather than by beat phase. Beat phase is a position between beats —
         // it advances whether or not anything is playing, so warping on it produced a metronome
         // riding under every parameter regardless of what the music did. The warp is scaled by the
         // role's own depth so a detail parameter twitches on a hit and a structural one leans.
-        const warp = clamp01(transient) * TAU * lerp(dynamics.depth, identity) * 0.6;
-        const motion = Math.sin(phase + warp) * 0.68
-            + Math.sin(phase * 1.731 + identity * 11.0) * 0.32;
+        const warp = clamp01(transient) * lerp(dynamics.depth, identity) * 0.6;
+
+        // A phase-warped oscillator rather than plain sines. Two sines of fixed ratio are periodic
+        // in playback time: the parameter retraces the same figure every cycle, which is the
+        // reported "motion with periodicity instead of additive chaos" — for an unchanged graph,
+        // seconds one and five looked alike because they *were* alike, one lap apart. Here lattice
+        // noise wanders the sine's phase by up to ±2.5 radians per cycle and a second noise rides
+        // on top, so the excursion each period is still guaranteed — which is what keeps a slow
+        // structural role sweeping further than a fast detail role — but no two cycles trace the
+        // same path, for as long as the track runs. Still a pure function of playback time, so
+        // pause and seek semantics are untouched.
+        const wander = valueNoise(phase * 0.37 + 11.3, identity) * 2.5;
+        const ripple = valueNoise(phase * 2.317 + 71.7, identity);
+        const motion = Math.sin(TAU * (phase + warp) + wander) * 0.62 + ripple * 0.38;
 
         // Depth is a share of the room left in the direction of travel, not of the whole range.
         //
@@ -150,6 +163,29 @@ export function modulateParameters(
 
 function fractional(value: number): number {
     return value - Math.floor(value);
+}
+
+/**
+ * Smooth 1D value noise in [-1, 1]: hashed lattice values, smoothstep-interpolated.
+ *
+ * The lattice hash never repeats over any practical playback length, which is the property the
+ * oscillator it replaced lacked. `seed` separates parameters so two of them at the same rate do
+ * not trace the same wander.
+ */
+function valueNoise(position: number, seed: number): number {
+    const cell = Math.floor(position);
+    const t = position - cell;
+    const eased = t * t * (3 - 2 * t);
+    const a = latticeValue(cell, seed);
+    const b = latticeValue(cell + 1, seed);
+    return a + (b - a) * eased;
+}
+
+function latticeValue(cell: number, seed: number): number {
+    let hash = Math.imul(cell | 0, 374761393) ^ Math.imul(Math.floor(seed * 65521), 668265263);
+    hash = Math.imul(hash ^ (hash >>> 13), 1274126177);
+    hash ^= hash >>> 16;
+    return ((hash >>> 0) / 4294967295) * 2 - 1;
 }
 
 function stringPhase(value: string): number {

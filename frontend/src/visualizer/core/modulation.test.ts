@@ -31,6 +31,27 @@ describe('concurrent modulation', () => {
         expect(later.hue).not.toBeCloseTo(first.hue, 6);
     });
 
+    test('the wander never repeats itself at any lag', () => {
+        // The motion used to be two sines of fixed ratio, so the parameter retraced the same figure
+        // once per cycle — for an unchanged graph, seconds one and five looked alike because they
+        // were alike, one lap apart. Whatever the lag, the trajectory must differ somewhere: an
+        // oscillator fails this at its own period, a wandering one does not.
+        const trajectory = (offset: number): number[] => {
+            const samples: number[] = [];
+            for (let time = 0; time < 30; time += 0.25) {
+                samples.push(modulateParameters({ hue: 0.5 }, BINDINGS, offset + time, 0, 0.371).hue);
+            }
+            return samples;
+        };
+
+        const base = trajectory(0);
+        for (let lag = 5; lag <= 120; lag += 5) {
+            const shifted = trajectory(lag);
+            const divergence = Math.max(...base.map((value, index) => Math.abs(value - shifted[index])));
+            expect(divergence, `lag ${lag}s`).toBeGreaterThan(0.02);
+        }
+    });
+
     test('the same playback instant holds every modulation during pause', () => {
         const resolved = { amount: 1, hue: 0.5 };
         const first = modulateParameters(resolved, BINDINGS, 42, 0.3, 0.712);
