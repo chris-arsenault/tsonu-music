@@ -70,6 +70,7 @@ import {
     downloadScene,
     loadStoredScene,
     readSceneFile,
+    readSceneText,
     storeScene,
 } from './scene-storage';
 import { particleSanityScene } from './particle-sanity-scene';
@@ -133,6 +134,9 @@ export default function GraphEditorDock({
     const [search, setSearch] = useState<SearchRequest | undefined>();
     const [manualGraphCopy, setManualGraphCopy] = useState<string | undefined>();
     const fileInput = useRef<HTMLInputElement | null>(null);
+    /** Open paste box, and what is in it. A scene quoted in a report is not a file yet. */
+    const [pasting, setPasting] = useState(false);
+    const [pasted, setPasted] = useState('');
     const canvas = useRef<HTMLDivElement | null>(null);
     const project = useRef<((point: Point) => Point) | undefined>(undefined);
     const attemptedRestore = useRef(false);
@@ -269,6 +273,20 @@ export default function GraphEditorDock({
         window.addEventListener('keydown', onKeyDown);
         return () => window.removeEventListener('keydown', onKeyDown);
     }, [editable, step]);
+
+    const importPasted = useCallback(() => {
+        const read = readSceneText(pasted);
+        if (!read.ok) {
+            setNotice(read.problems[0].detail);
+            return;
+        }
+
+        setPasting(false);
+        setPasted('');
+        apply(read.scene, read.warnings.length > 0
+            ? read.warnings[0].detail
+            : `loaded ${read.scene.entropy}`);
+    }, [apply, pasted]);
 
     const importFile = useCallback(async (file: File | undefined) => {
         if (!file) {
@@ -611,6 +629,14 @@ export default function GraphEditorDock({
                         <button
                             type="button"
                             className="viz-editor__action"
+                            onClick={() => setPasting((open) => !open)}
+                            title="Paste a scene document as JSON"
+                        >
+                            Paste
+                        </button>
+                        <button
+                            type="button"
+                            className="viz-editor__action"
                             onClick={loadParticleSanityScene}
                             title="Replace the Lab document with an unbound particle physics sanity scene"
                         >
@@ -692,6 +718,33 @@ export default function GraphEditorDock({
                         ) : null}
 
                         {notice ? <span className="viz-editor__note">{notice}</span> : null}
+
+                        {pasting ? (
+                            <div className="viz-editor__paste">
+                                <textarea
+                                    className="viz-editor__paste-input"
+                                    value={pasted}
+                                    onChange={(event) => setPasted(event.currentTarget.value)}
+                                    placeholder="Paste a scene document as JSON, then Load"
+                                    spellCheck={false}
+                                    autoFocus
+                                />
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={importPasted}
+                                >
+                                    Load
+                                </button>
+                                <button
+                                    type="button"
+                                    className="viz-editor__action"
+                                    onClick={() => { setPasting(false); setPasted(''); }}
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        ) : null}
                     </>
                 ) : null}
 

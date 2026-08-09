@@ -102,6 +102,32 @@ export type SceneFileResult =
     | { ok: true; scene: AuthoredScene; warnings: AuthoredProblem[] }
     | { ok: false; problems: AuthoredProblem[] };
 
+/**
+ * Reads a document from pasted text.
+ *
+ * The file path assumes the scene is already a file somewhere. A scene printed by the render harness,
+ * quoted in a report, or copied out of a terminal is not, and saving it to disk first to look at it
+ * is friction in exactly the loop that most needs to be short — deciding whether a measured scene is
+ * actually any good.
+ */
+export function readSceneText(text: string): SceneFileResult {
+    if (text.trim() === '') {
+        return { ok: false, problems: [{ kind: 'version', detail: 'nothing pasted' }] };
+    }
+
+    try {
+        return parseScene(text);
+    } catch (error) {
+        return {
+            ok: false,
+            problems: [{
+                kind: 'version',
+                detail: `could not read pasted scene: ${error instanceof Error ? error.message : 'unknown'}`,
+            }],
+        };
+    }
+}
+
 /** Reads a document the user picked. */
 export async function readSceneFile(file: File): Promise<SceneFileResult> {
     try {

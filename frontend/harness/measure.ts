@@ -62,6 +62,14 @@ export interface SceneMeasurement {
     peak: number[];
     /** The last captured frame as a PNG data URI, so a run can be looked at rather than inferred. */
     lastFrame?: string;
+    /**
+     * The scene document, so a measured scene can be opened and judged rather than taken on trust.
+     *
+     * A number saying one scene holds its picture four times longer than another is not the same
+     * claim as that scene being worth watching, and the harness cannot tell the difference. This is
+     * what gets pasted into the Lab.
+     */
+    document: unknown;
     /** Correlation between captures this many seconds apart, and the shift that best aligns them. */
     lags: {
         seconds: number;
@@ -423,7 +431,8 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         throw new Error(`scene did not build: ${built.failure.reason} ${built.failure.detail}`);
     }
 
-    const problems = renderer.setAuthoredScene(captureScene(built.scene));
+    const document = captureScene(built.scene);
+    const problems = renderer.setAuthoredScene(document);
     if (problems.length > 0) {
         throw new Error(`scene did not resolve: ${problems.map((entry) => entry.detail).join('; ')}`);
     }
@@ -530,6 +539,7 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         changeRate,
         peak,
         lastFrame,
+        document,
         lags,
         problems: renderer.problems(),
     };

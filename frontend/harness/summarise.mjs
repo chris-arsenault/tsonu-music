@@ -35,6 +35,16 @@ for (const result of results) {
         );
     }
 
+    // The scene beside its frame, so a measurement can be opened in the Lab and judged rather than
+    // trusted. A statistic saying one scene remembers longer is not a claim that it is worth
+    // watching, and nothing here can tell the difference.
+    if (frameDirectory && result.document) {
+        writeFileSync(
+            join(frameDirectory, `${result.entropy}.json`),
+            JSON.stringify(result.document, null, 2),
+        );
+    }
+
     // Steady state only: the first samples are before anything has been drawn.
     const settled = (values) => values.slice(Math.floor(values.length / 3));
 

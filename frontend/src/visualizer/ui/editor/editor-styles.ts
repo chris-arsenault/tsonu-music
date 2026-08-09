@@ -117,6 +117,28 @@ const EDITOR_CSS = `
 .viz-editor__note { color: #8a8a94; }
 .viz-editor__note.is-problem { color: #e0806a; }
 
+/* Takes the full toolbar row, since a scene document is long and worth seeing while it is pasted. */
+.viz-editor__paste {
+    align-items: flex-start;
+    display: flex;
+    flex-basis: 100%;
+    gap: 0.4rem;
+    padding-top: 0.4rem;
+}
+
+.viz-editor__paste-input {
+    background: #101014;
+    border: 1px solid #34343d;
+    border-radius: 0.25rem;
+    color: #d8d8de;
+    flex: 1 1 auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.75rem;
+    min-height: 6rem;
+    padding: 0.4rem;
+    resize: vertical;
+}
+
 .viz-editor__body { flex: 1 1 auto; min-height: 0; overflow: hidden; position: relative; }
 .viz-editor__scroll { height: 100%; overflow: auto; padding: 0.6rem 0.75rem; }
 
