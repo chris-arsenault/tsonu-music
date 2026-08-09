@@ -497,13 +497,18 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
                 // The palette phase turns at a music-set speed instead of tracking the centroid's
                 // level. Bound as a value, `hue` parked wherever the centroid sat — near-constant
                 // on mastered material — and the stage's colour locked for entire runs. Integrated,
-                // the phase keeps moving for as long as the track does: a rotation every half
-                // minute to three minutes.
+                // the phase keeps moving for as long as the track does.
+                //
+                // Slowly: a rotation every ninety seconds to eight minutes. The first range turned
+                // up to a full rotation in half a minute, and the scene state remembers for
+                // seconds — stamps a quarter-turn apart share the frame, and complementary hues
+                // average to grey. Measured: collision-energy scenes fell from 0.68 to 0.17 mean
+                // saturation. The phase must move slower than the memory forgets.
                 feature: 'spectralCentroid',
                 role: 'complexity',
                 mode: 'rate',
                 parameter: 'hue',
-                outputRange: [0.005, 0.035],
+                outputRange: [0.002, 0.011],
                 attack: 0.35,
                 release: 1.1,
                 curve: 'linear',
