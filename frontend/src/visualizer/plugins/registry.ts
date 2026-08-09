@@ -92,7 +92,7 @@ import {
     MASK_ROUTER_MODES,
 } from './compositors/composition';
 import { SCENE_HISTORY_MODES, createSceneHistoryWarp } from './transformers/scene-history';
-import { createSceneStateCombine } from './compositors/scene-state';
+import { createSceneStateCombine, SCENE_STATE_COMBINE_MODES } from './compositors/scene-state';
 
 /** Signal-derived and procedural plugins, available whether or not any asset is loaded. */
 export function m1Definitions(): VisualPluginDefinition[] {
@@ -194,7 +194,7 @@ export function compositorDefinitions(): VisualPluginDefinition[] {
 export function derivedStateDefinitions(): VisualPluginDefinition[] {
     return [
         ...SCENE_HISTORY_MODES.map(createSceneHistoryWarp),
-        createSceneStateCombine(),
+        ...SCENE_STATE_COMBINE_MODES.map(createSceneStateCombine),
     ];
 }
 

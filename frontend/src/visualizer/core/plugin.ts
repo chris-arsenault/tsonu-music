@@ -135,8 +135,14 @@ export interface SelectionCharacter {
     dominance: 'supporting' | 'primary' | 'either';
 }
 
-/** Arithmetic used by the graph-owned scene-state transition. */
-export type TemporalCombineOperator = 'max';
+/**
+ * Arithmetic used by the graph-owned scene-state transition.
+ *
+ * `stamp` replaces the decayed history where the fresh frame drew, keyed on the source's own
+ * luminance; `screen` accumulates bounded energy; `max` keeps the brighter of the two, a flash
+ * afterimage. The operator is drawn per scene, so memory has a character like everything else.
+ */
+export type TemporalCombineOperator = 'stamp' | 'screen' | 'max';
 
 /**
  * Identifies the one node that combines warped history with fresh scene material.
