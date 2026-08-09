@@ -559,7 +559,10 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         }
     }
 
-    const lags = [0.25, 0.5, 1, 2, 4]
+    // The alignment search costs a few thousand resampled correlations per pair, which is most of a
+    // run. A path-dependence run does not need it and pays for the scene twice over already, so it is
+    // skipped there rather than making every measurement wait for a statistic it is not using.
+    const lags = (options.periodSeconds ?? 0) > 0 ? [] : [0.25, 0.5, 1, 2, 4]
         .filter((seconds) => seconds / options.sampleInterval < grids.length - 1)
         .map((seconds) => {
             const step = Math.round(seconds / options.sampleInterval);
