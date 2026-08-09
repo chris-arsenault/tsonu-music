@@ -335,8 +335,10 @@ export function createMaskEffectStencil(): VisualPluginDefinition {
                 shader: STENCIL_SHADER,
                 inputs: { uSource: source, uField: field },
                 output: render.outputs.color,
+                // Replaces the target, so the clear changed no pixel and is gone (ADR-0014). What
+                // the stencil writes is a transform of the image it read.
                 blend: 'none',
-                clear: true,
+                clear: false,
             }];
         }),
     };

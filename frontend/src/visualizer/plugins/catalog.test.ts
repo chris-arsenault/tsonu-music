@@ -25,6 +25,7 @@ import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
 import { isMotionSource } from '../core/fields';
+import { isPresentationCategory, portTypes, redrawViolations } from '../core/redraw';
 import { TEMPORAL_MODES } from './transformers/transforms';
 import type { FrameContext } from '../core/plugin';
 
@@ -215,6 +216,52 @@ describe('catalog integrity', () => {
         expect(dominant.length).toBeGreaterThan(0);
         for (const definition of dominant) {
             expect(definition.id.startsWith('ImpactCascadeSimulator'), definition.id).toBe(true);
+        }
+    });
+
+    test('no colour pass redraws the frame', () => {
+        // ADR-0014. Two ways to fail, both decidable from the pass descriptor: clearing a colour
+        // target destroys what it held, and replacing one while reading no colour generates a frame
+        // out of time and audio rather than transforming an existing image. Presentation stages are
+        // exempt, having no state to preserve.
+        //
+        // Measured when this rule was written: 99 clears and 29 generates across 202 definitions.
+        // Written as a catalog-wide check rather than a note against each offender, so a producer
+        // added later cannot reintroduce a redraw by omission.
+        const offenders: string[] = [];
+        const checked: string[] = [];
+
+        for (const definition of CATALOG) {
+            if (isPresentationCategory(definition.category)) {
+                continue;
+            }
+
+            const types = {
+                ...portTypes(definition.inputs, Object.fromEntries(
+                    definition.inputs.map((port) => [port.name, `in.${port.name}`]))),
+                ...portTypes(definition.outputs, Object.fromEntries(
+                    definition.outputs.map((port) => [port.name, `out.${port.name}`]))),
+            };
+
+            const passes = renderWithAllInputs(definition);
+            if (passes.some((pass) => pass.output !== undefined && types[pass.output] === 'color-texture')) {
+                checked.push(definition.id);
+            }
+
+            for (const finding of redrawViolations(passes, types)) {
+                offenders.push(`${definition.id} pass ${finding.pass} ${finding.violation}`);
+            }
+        }
+
+        expect(offenders, 'colour passes that redraw the frame').toEqual([]);
+
+        // A plugin that emits no passes under this fixture is not evidence of anything, so the rule
+        // is only as good as how many producers it actually reached. Asserted rather than assumed:
+        // the check passed silently over the four geometry sources for as long as they returned no
+        // passes without geometry uploaded, which is exactly the set the clear rule was written for.
+        expect(checked.length, 'colour producers the rule reached').toBeGreaterThanOrEqual(120);
+        for (const id of ['SignalTraceSource:oscilloscope', 'SpectrumGeometrySource:radial', 'ParticleRenderer:discs']) {
+            expect(checked, `${id} reached`).toContain(id);
         }
     });
 

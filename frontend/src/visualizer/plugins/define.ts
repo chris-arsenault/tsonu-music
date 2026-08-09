@@ -185,7 +185,11 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
     // not: it is already a transform of whatever it read, and a decay ahead of it would be
     // overwritten in the same frame. The declared blend says which of the two this is, so no plugin
     // has to opt in.
-    const colourOutput = spec.outputs.find((output) => output.type === 'color-texture');
+    // The first output, and only if it carries colour: that is the one the plugin's own pass writes,
+    // so a plugin whose primary product is a field is untouched by any of this even when it also
+    // publishes a colour port.
+    const primaryOutput = spec.outputs[0];
+    const colourOutput = primaryOutput?.type === 'color-texture' ? primaryOutput : undefined;
     const persists = colourOutput !== undefined && (spec.blend ?? 'none') !== 'none';
     const parameters = persists
         ? { [SURVIVAL_PARAMETER]: DEFAULT_SURVIVAL, ...spec.parameters }
@@ -361,10 +365,12 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         inputs,
                         output: render.outputs[spec.outputs[0]?.name],
                         blend: spec.blend ?? 'none',
-                        // A compositing pass must never clear: the target is the memory it is adding
-                        // to. Only a pass that replaces the target outright may, and for that one the
-                        // flag changes no pixel anyway (ADR-0014).
-                        clear: persists ? false : spec.clear ?? true,
+                        // No colour pass clears (ADR-0014). For a compositing one the target is the
+                        // memory it is adding to; for a replacing one the flag changes no pixel,
+                        // since a fullscreen quad with blend 'none' overwrites the target whether or
+                        // not it was cleared first. A pass writing a field or a mask keeps the flag,
+                        // because those are recomputed each frame by design.
+                        clear: colourOutput ? false : spec.clear ?? true,
                         uniforms,
                     });
 
