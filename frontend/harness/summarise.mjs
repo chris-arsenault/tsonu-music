@@ -52,6 +52,16 @@ for (const result of results) {
     const one = lag(1);
     const two = lag(2);
 
+    // How much of the picture is remembered rather than replayed, against the per-frame change as a
+    // floor. Only meaningful when the run was given a period.
+    const divergence = result.periodDivergence ?? [];
+    const floor = median(settled(result.changeRate));
+    const drift = divergence.length > 0
+        ? `  P1=${divergence[0].difference.toFixed(4)}`
+            + (divergence[2] ? ` P3=${divergence[2].difference.toFixed(4)}` : '')
+            + ` floor=${floor.toFixed(4)}`
+        : '';
+
     rows.push([
         result.entropy.padEnd(12),
         result.themeId.padEnd(17),
@@ -66,7 +76,7 @@ for (const result of results) {
         two ? `disp2=${two.displacement.toFixed(3)}` : '',
         two ? `zoom2=${two.scale.toFixed(3)}` : '',
         one ? `gain1=${(one.alignedCorrelation - one.correlation).toFixed(3)}` : '',
-    ].join('  '));
+    ].join('  ') + drift);
 }
 
 console.log(rows.join('\n'));
@@ -96,6 +106,42 @@ if (usable.length > 0) {
         );
     }
     console.log('');
+    const withPeriod = usable.filter((result) => (result.periodDivergence ?? []).length > 0);
+    if (withPeriod.length > 0) {
+        console.log('');
+        console.log('path dependence, with the audio repeating exactly:');
+        for (const periods of [1, 2, 3]) {
+            const at = (source) => withPeriod
+                .map((result) => (result[source] ?? []).find((e) => e.periods === periods)?.difference)
+                .filter((value) => value !== undefined);
+
+            const values = at('periodDivergence');
+            const control = at('withoutHistory');
+            if (values.length === 0) continue;
+
+            console.log(
+                `  ${periods} period${periods === 1 ? ' ' : 's'} apart:`
+                + `  with history=${median(values).toFixed(4)}`
+                + (control.length > 0
+                    ? `  without=${median(control).toFixed(4)}`
+                        + `  attributable to memory=${(median(values) - median(control)).toFixed(4)}`
+                    : ''),
+            );
+        }
+        const floors = withPeriod.map((result) => {
+            const settled = result.changeRate.slice(Math.floor(result.changeRate.length / 3));
+            return median(settled);
+        });
+        console.log(`  frame-to-frame change, as a floor:  ${median(floors).toFixed(4)}`);
+        console.log('');
+        console.log('"without" is the same scene with its memory blanked every frame, so whatever');
+        console.log('diverges there is the plugins own clocks rather than history. The difference is');
+        console.log('what the accumulation actually contributed; near zero means the picture replays');
+        console.log('rather than accumulates, which is motion with a period rather than motion that');
+        console.log('goes somewhere.');
+        console.log('');
+    }
+
     console.log('displacement is how far the best-aligning zoom, rotation and shift move a point at');
     console.log('mid-radius, as a fraction of frame width. A picture that flows has it growing with');
     console.log('the interval; a picture that changes in place has it flat and near zero. Zoom and');

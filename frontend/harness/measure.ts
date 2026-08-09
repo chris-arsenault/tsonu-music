@@ -46,6 +46,22 @@ export interface MeasureOptions {
     height: number;
     /** Seconds between captured frames. */
     sampleInterval: number;
+    /**
+     * Repeat the whole feature bus on this period, so history can be told apart from the music.
+     *
+     * Zero leaves the bus free-running, which is what the correlation figures were measured against.
+     */
+    periodSeconds?: number;
+    /**
+     * Blank every historical slot each frame, so the scene keeps its structure and loses its memory.
+     *
+     * The control for the period-divergence figure. Plugins animate from their own accumulated
+     * `uTime`, so two frames one audio period apart differ whether or not anything was remembered —
+     * a procedural source running on a clock is enough. Measured against a run of the same scene with
+     * no history at all, the difference between the two divergences is what memory actually
+     * contributed, and the null model's own divergence is what the clocks contributed.
+     */
+    withoutHistory?: boolean;
 }
 
 export interface SceneMeasurement {
@@ -58,6 +74,21 @@ export interface SceneMeasurement {
     coverage: number[];
     /** Mean absolute difference between consecutive captures. */
     changeRate: number[];
+    /**
+     * Difference between frames one, two, three periods apart while the audio repeats exactly.
+     *
+     * Zero means the picture is a function of the current audio and nothing else — it plays back
+     * rather than accumulating, which reads as motion with a period instead of motion that goes
+     * somewhere. Growth across periods is path dependence.
+     */
+    periodDivergence: { periods: number; difference: number }[];
+    /**
+     * The same figure for the same scene with its memory blanked every frame.
+     *
+     * Whatever divergence survives here is the plugins' own clocks, not history. Subtracting it is
+     * what turns the period figure from a number into a measurement.
+     */
+    withoutHistory?: { periods: number; difference: number }[];
     /** Brightest cell in each capture. Separates "dim everywhere" from "black with a line in it". */
     peak: number[];
     /** The last captured frame as a PNG data URI, so a run can be looked at rather than inferred. */
@@ -99,7 +130,15 @@ export interface SceneMeasurement {
  * animates from `uTime`, which is not the question — the question is what the scene does with audio
  * that moves.
  */
-function featuresAt(time: number): AudioFeatureBus {
+function featuresAt(rawTime: number, periodSeconds = 0): AudioFeatureBus {
+    // Wrapped, so the whole bus repeats exactly.
+    //
+    // This is what makes path dependence measurable. With the input exactly periodic, any difference
+    // between a frame and the frame one period later is something the system remembered rather than
+    // something the music did — and a picture that is a pure function of the current audio produces
+    // no difference at all. Correlation cannot separate those two: an image that repeats with the
+    // beat is highly self-similar, so it scores as though it had a long memory when it has none.
+    const time = periodSeconds > 0 ? rawTime % periodSeconds : rawTime;
     const beat = 2.0;
     const beatPhase = (time % beat) / beat;
     const hit = Math.exp(-beatPhase * 9);
@@ -431,8 +470,10 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         throw new Error(`scene did not build: ${built.failure.reason} ${built.failure.detail}`);
     }
 
-    const document = captureScene(built.scene);
-    const problems = renderer.setAuthoredScene(document);
+    // Not named `document`: that shadows the DOM global this function uses to make its canvas, and
+    // the shadow reaches back over the whole body.
+    const sceneDocument = captureScene(built.scene);
+    const problems = renderer.setAuthoredScene(sceneDocument);
     if (problems.length > 0) {
         throw new Error(`scene did not resolve: ${problems.map((entry) => entry.detail).join('; ')}`);
     }
@@ -452,9 +493,12 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         const time = frame * dt;
         renderer.renderFrame({
             clock: clockAt(time),
-            features: featuresAt(time),
+            features: featuresAt(time, options.periodSeconds ?? 0),
             deltaSeconds: dt,
             profile,
+            // Reaches `clearHistory` in the runtime, which blanks every ping-ponged slot before
+            // anything reads one. The graph is unchanged; only its memory is gone.
+            clearTransients: options.withoutHistory === true,
         });
 
         if (frame % everyFrames === 0) {
@@ -482,6 +526,37 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
             total += Math.abs(grids[index][cell] - grids[index - 1][cell]);
         }
         changeRate.push(total / grids[index].length);
+    }
+
+    // How much of the picture is remembered rather than played back.
+    //
+    // With the bus repeating exactly on `periodSeconds`, the audio at t and at t+P is identical, so
+    // any difference between those two frames came from the system's own state. Reported against the
+    // frame-to-frame change as a floor: a divergence at or below that is noise, and a divergence that
+    // grows with each period is a picture whose present depends on how it got here.
+    //
+    // A system with no memory scores zero here no matter how much it moves, which is the case the
+    // correlation figures could not distinguish and the one that was actually shipping.
+    const periodDivergence: { periods: number; difference: number }[] = [];
+    if ((options.periodSeconds ?? 0) > 0) {
+        const step = Math.round((options.periodSeconds ?? 0) / options.sampleInterval);
+        const settle = Math.min(grids.length - 1, step);
+
+        for (let periods = 1; settle + periods * step < grids.length; periods += 1) {
+            let total = 0;
+            let pairs = 0;
+
+            for (let index = settle; index + periods * step < grids.length; index += 1) {
+                const a = grids[index];
+                const b = grids[index + periods * step];
+                let sum = 0;
+                for (let cell = 0; cell < a.length; cell += 1) sum += Math.abs(a[cell] - b[cell]);
+                total += sum / a.length;
+                pairs += 1;
+            }
+
+            periodDivergence.push({ periods, difference: total / Math.max(1, pairs) });
+        }
     }
 
     const lags = [0.25, 0.5, 1, 2, 4]
@@ -539,7 +614,8 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         changeRate,
         peak,
         lastFrame,
-        document,
+        document: sceneDocument,
+        periodDivergence,
         lags,
         problems: renderer.problems(),
     };

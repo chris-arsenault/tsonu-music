@@ -268,6 +268,21 @@ function closeLoop(
         edges.push(...proposed);
         return;
     }
+
+    // No candidate was legal, so the scene keeps at most the first loop a port nominated.
+    //
+    // Falling out of the search used to leave every nominated self-loop in place — one per plugin
+    // declaring a `history` port, which in a chain of feedback-capable stages is four or five. Each is
+    // a node trailing its own output, and none of them folds the composed image back, so the scene
+    // gets several small local smears and no transport. The grammar budgets for one loop and this is
+    // the path that quietly returned more.
+    const nominated = edges.filter(isImageLoop);
+    if (nominated.length > 1) {
+        const first = nominated[0];
+        const survivors = edges.filter((edge) => !isImageLoop(edge) || edge === first);
+        edges.length = 0;
+        edges.push(...survivors);
+    }
 }
 
 export function wireScene(

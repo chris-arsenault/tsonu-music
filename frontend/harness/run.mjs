@@ -65,6 +65,8 @@ const seconds = argument('seconds', '12');
 const prefix = argument('prefix', 'harness');
 const width = argument('width', '320');
 const height = argument('height', '180');
+/** Repeat the audio exactly on this period. Zero leaves it free-running. */
+const period = argument('period', '0');
 
 const server = spawn(
     'npx',
@@ -80,7 +82,7 @@ try {
     await waitForServer(`http://127.0.0.1:${HARNESS_PORT}/`);
 
     const url = `http://127.0.0.1:${HARNESS_PORT}/?scenes=${scenes}&seconds=${seconds}`
-        + `&prefix=${prefix}&width=${width}&height=${height}`;
+        + `&prefix=${prefix}&width=${width}&height=${height}&period=${period}`;
 
     const result = spawnSync(findChromium(), [
         '--headless=new',

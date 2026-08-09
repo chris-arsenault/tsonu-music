@@ -15,6 +15,8 @@ const fps = Number(parameters.get('fps') ?? 60);
 const width = Number(parameters.get('width') ?? 320);
 const height = Number(parameters.get('height') ?? 180);
 const sampleInterval = Number(parameters.get('interval') ?? 0.25);
+/** Repeat the audio exactly on this period, so history can be told apart from the music. */
+const periodSeconds = Number(parameters.get('period') ?? 0);
 const prefix = parameters.get('prefix') ?? 'harness';
 
 const output = document.getElementById('results')!;
@@ -25,7 +27,17 @@ async function run(): Promise<void> {
     for (let index = 0; index < count; index += 1) {
         const entropy = `${prefix}-${index}`;
         try {
-            results.push(measureScene({ entropy, seconds, fps, width, height, sampleInterval }));
+            const options = { entropy, seconds, fps, width, height, sampleInterval, periodSeconds };
+            const measured = measureScene(options);
+
+            // The same scene without its memory, so the period divergence has something to be
+            // compared against. Only worth paying for when the run is measuring path dependence.
+            if (periodSeconds > 0) {
+                const control = measureScene({ ...options, withoutHistory: true });
+                measured.withoutHistory = control.periodDivergence;
+            }
+
+            results.push(measured);
         } catch (error) {
             results.push({ entropy, error: error instanceof Error ? error.message : String(error) });
         }
