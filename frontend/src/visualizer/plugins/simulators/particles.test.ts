@@ -164,7 +164,7 @@ describe('particle graph contract', () => {
             ['wake', 'vector-field'],
         ]);
         expect(Object.keys(definition.parameters ?? {}).sort())
-            .toEqual(['brightness', 'debug', 'wakeScale']);
+            .toEqual(['brightness', 'debug', 'survival', 'wakeScale']);
         expect(instance.render({
             inputs: { state: 'ParticleSimulator#0.state' },
             outputs: {
@@ -176,8 +176,12 @@ describe('particle graph contract', () => {
             renderWidth: 1280,
             renderHeight: 720,
         })).toMatchObject([
+            // The colour target is aged rather than wiped, and the bodies are composited into what
+            // it still holds — which is the difference between a trail and a fresh scatter of discs
+            // every frame (ADR-0014).
+            { output: 'ParticleRenderer:discs#0.color', blend: 'multiply', clear: false },
             { output: 'ParticleRenderer:discs#0.mask', vertexCount: 0, clear: true },
-            { output: 'ParticleRenderer:discs#0.color', vertexCount: 0, clear: true },
+            { output: 'ParticleRenderer:discs#0.color', vertexCount: 0, blend: 'lighten', clear: false },
             { output: 'ParticleRenderer:discs#0.wake', vertexCount: 0, blend: 'add' },
         ]);
     });

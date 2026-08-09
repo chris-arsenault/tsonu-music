@@ -518,6 +518,10 @@ export function createProceduralTextureSource(
         capabilities: ['procedural', 'vector-field'],
         fragment: PROCEDURAL_TEXTURE_FRAGMENT,
         motion: { port: 'motion', fragment: PROCEDURAL_TEXTURE_MOTION },
+        // Composited into the aged frame rather than written over it (ADR-0014). Taken as the
+        // brighter of the two, so the target is bounded by the brightest pattern ever drawn into it
+        // and what it holds where the new pattern is darker is the wake of where the pattern was.
+        blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,
             uMode: PROCEDURAL_TEXTURE_MODES.indexOf(mode),
@@ -563,6 +567,10 @@ export function createParametricCurveSource(
         capabilities: ['procedural', 'parametric-curve', 'vector-field'],
         fragment: PARAMETRIC_CURVE_FRAGMENT,
         motion: { port: 'motion', fragment: PARAMETRIC_CURVE_MOTION },
+        // A curve is thin, so almost every pixel it writes is a pixel it did not write last frame.
+        // Compositing is the whole difference between a curve that redraws itself in a new place and
+        // a curve that leaves the track of where it has been.
+        blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,
             uMode: PARAMETRIC_CURVE_MODES.indexOf(mode),
@@ -611,6 +619,7 @@ export function createSdfShapeSource(
         capabilities: ['procedural', 'sdf', 'vector-field'],
         fragment: SDF_SHAPE_FRAGMENT,
         motion: { port: 'motion', fragment: SDF_SHAPE_MOTION },
+        blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,
             uMode: SDF_SHAPE_MODES.indexOf(mode),

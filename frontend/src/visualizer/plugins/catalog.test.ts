@@ -185,10 +185,16 @@ describe('catalog integrity', () => {
             });
 
             if (definition.inputs.some((port) => isValuePortType(port.type))) {
+                // A value renderer with nothing to draw still emits passes, because its outputs are
+                // its own and would otherwise hold the last frame it managed forever. What it must
+                // not do is draw: a geometry pass with no vertices, or the decay that ages a colour
+                // target it is no longer contributing to (ADR-0014). Colour is faded rather than
+                // wiped, so a starved renderer trails off instead of vanishing between frames.
                 expect(
-                    passes.every((pass) =>
-                        pass.kind === 'geometry' && pass.vertexCount === 0 && pass.clear === true),
-                    `${definition.id} only clears stale value-renderer outputs`,
+                    passes.every((pass) => pass.kind === 'geometry'
+                        ? pass.vertexCount === 0
+                        : pass.blend === 'multiply' && pass.clear === false),
+                    `${definition.id} draws nothing and only ages what it left behind`,
                 ).toBe(true);
             } else {
                 expect(passes, `${definition.id} degrades to no passes`).toEqual([]);

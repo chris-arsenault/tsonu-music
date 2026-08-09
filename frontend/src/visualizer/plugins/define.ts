@@ -111,6 +111,26 @@ export const SURVIVAL_PARAMETER = 'survival';
 /** Fraction of a colour target surviving one second, when a plugin states no preference. */
 export const DEFAULT_SURVIVAL = 0.6;
 
+/**
+ * How long the memory is, driven by how much new material is arriving.
+ *
+ * Inverted on purpose. A dense passage overwrites the frame quickly whatever the survival is, so
+ * holding a long memory through one buries the picture; a sparse one has nothing to show but what it
+ * remembers. Bound this way the trail lengthens as the track thins out, which is when there is room
+ * for it — and the length of the memory becomes something the music moves rather than a constant.
+ *
+ * The ceiling is 0.9 a second, comfortably below the 1 at which the decay stops being a decay.
+ */
+export const SURVIVAL_BINDING: ParameterBinding = {
+    feature: 'spectralFlux',
+    role: 'intensity',
+    parameter: SURVIVAL_PARAMETER,
+    outputRange: [0.9, 0.35],
+    attack: 0.8,
+    release: 2.5,
+    curve: 'smooth',
+};
+
 const DECAY_FRAGMENT = `#version 300 es
 precision highp float;
 out vec4 fragColor;
@@ -170,6 +190,10 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
     const parameters = persists
         ? { [SURVIVAL_PARAMETER]: DEFAULT_SURVIVAL, ...spec.parameters }
         : spec.parameters;
+    const statesSurvival = spec.bindings?.some((binding) => binding.parameter === SURVIVAL_PARAMETER);
+    const bindings = persists && !statesSurvival
+        ? [SURVIVAL_BINDING, ...(spec.bindings ?? [])]
+        : spec.bindings;
 
     return {
         id: spec.id,
@@ -209,7 +233,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             prefersWith: spec.prefersWith,
         },
         parameters,
-        defaultBindings: spec.bindings,
+        defaultBindings: bindings,
         deactivationPolicy: spec.deactivationPolicy ?? 'fade',
 
         create(context): VisualPluginInstance {
