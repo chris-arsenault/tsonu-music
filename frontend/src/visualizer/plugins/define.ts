@@ -108,6 +108,14 @@ export interface SimpleShaderPlugin {
  */
 export const SURVIVAL_PARAMETER = 'survival';
 
+/**
+ * The input port a producer is displaced by, and the one its memory drifts along.
+ *
+ * Named rather than searched for by type: a plugin may read several fields, and the one its own
+ * material moves with is the one its memory should move with too.
+ */
+export const FIELD_INPUT = 'field';
+
 /** Fraction of a colour target surviving one second, when a plugin states no preference. */
 export const DEFAULT_SURVIVAL = 0.6;
 
@@ -145,13 +153,53 @@ void main() {
     fragColor = vec4(survival);
 }`;
 
+/**
+ * The same ageing, with the memory carried along the field instead of held in place.
+ *
+ * Decaying a target leaves a trail where the material was. Advecting it makes the trail flow, which
+ * is the difference between a shape that moves across its own wake and a picture that goes somewhere.
+ * It costs a texture read, so it costs the second slot a `retained` output asks for, and it is only
+ * worth that where a field is wired.
+ *
+ * Read from behind: a field is a velocity in UV per second, so material travelling along `+field`
+ * arrives from `uv − field·Δt`. That is the same sign convention `GLSL_RESAMPLE_MOTION` states, where
+ * a transform reads at `source` and writes at `uv`.
+ */
+const DRIFT_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uPrevious;
+uniform sampler2D uField;
+uniform float uDelta;
+uniform float uSurvival;
+uniform float uPerturb;
+
+void main() {
+    float survival = uDelta > 0.0 ? pow(clamp(uSurvival, 0.0, 1.0), uDelta) : 1.0;
+    vec2 velocity = texture(uField, clamp(vUv, 0.0, 1.0)).xy;
+    vec2 source = clamp(vUv - velocity * uPerturb * uDelta, 0.0, 1.0);
+
+    fragColor = texture(uPrevious, source) * survival;
+}`;
+
 /** The decay shader a plugin registers alongside its own. */
 export function decayShaderId(pluginId: string): string {
     return `${pluginId}:decay`;
 }
 
-export function decayShaderSource(pluginId: string): { id: string; vertex: string; fragment: string } {
-    return { id: decayShaderId(pluginId), vertex: QUAD_VERTEX_SHADER, fragment: DECAY_FRAGMENT };
+/** The drift shader, used in place of the decay where a previous frame is available. */
+export function driftShaderId(pluginId: string): string {
+    return `${pluginId}:drift`;
+}
+
+/** Both ageing shaders. Registered together, because which one runs is decided per frame. */
+export function decayShaderSource(pluginId: string): { id: string; vertex: string; fragment: string }[] {
+    return [
+        { id: decayShaderId(pluginId), vertex: QUAD_VERTEX_SHADER, fragment: DECAY_FRAGMENT },
+        { id: driftShaderId(pluginId), vertex: QUAD_VERTEX_SHADER, fragment: DRIFT_FRAGMENT },
+    ];
 }
 
 /**
@@ -160,12 +208,32 @@ export function decayShaderSource(pluginId: string): { id: string; vertex: strin
  * `uSurvival` arrives from the plugin's own `survival` parameter, which the runtime merges into
  * every pass of the node — so binding it makes the memory itself follow the music.
  */
-export function decayPass(pluginId: string, output: ResourceId): RenderPass {
+export function decayPass(
+    pluginId: string,
+    output: ResourceId,
+    /** The previous frame, when the output is `retained` and the plan gave it a second slot. */
+    previous?: ResourceId,
+    /** The field to carry the memory along. Absent, the drift would be the identity. */
+    field?: ResourceId,
+): RenderPass {
+    if (!previous || !field) {
+        return {
+            kind: 'fullscreen',
+            shader: decayShaderId(pluginId),
+            output,
+            blend: 'multiply',
+            clear: false,
+        };
+    }
+
     return {
         kind: 'fullscreen',
-        shader: decayShaderId(pluginId),
+        shader: driftShaderId(pluginId),
+        inputs: { uPrevious: previous, uField: field },
         output,
-        blend: 'multiply',
+        // Replaces the write slot, which holds the frame before last. What is being preserved is the
+        // read slot, and this pass is what carries it across.
+        blend: 'none',
         clear: false,
     };
 }
@@ -214,6 +282,9 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             name: output.name,
             type: output.type,
             required: false,
+            // The colour a compositing producer accumulates into is the one thing worth a second
+            // slot: it is the only output whose previous frame this plugin reads (ADR-0014).
+            ...(persists && output === colourOutput ? { retained: true } : {}),
         })),
         capabilities: spec.capabilities,
         cost: {
@@ -264,7 +335,9 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                     }
 
                     if (persists) {
-                        context.registerShader(decayShaderSource(spec.id));
+                        for (const source of decayShaderSource(spec.id)) {
+                            context.registerShader(source);
+                        }
                     }
                 },
 
@@ -356,7 +429,12 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                     // rather than a fresh one. A compositing pass over a target nobody ages is an
                     // accumulation with no upper bound; over a target somebody clears, it is a redraw.
                     if (persists && colourTarget) {
-                        passes.push(decayPass(spec.id, colourTarget));
+                        passes.push(decayPass(
+                            spec.id,
+                            colourTarget,
+                            render.previous[colourOutput.name],
+                            render.inputs[FIELD_INPUT],
+                        ));
                     }
 
                     passes.push({

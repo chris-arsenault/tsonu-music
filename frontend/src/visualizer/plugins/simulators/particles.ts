@@ -730,7 +730,9 @@ export function createParticleRenderer(
                         vertex: PARTICLE_VERTEX,
                         fragment: PARTICLE_WAKE_FRAGMENT,
                     });
-                    context.registerShader(decayShaderSource(`ParticleRenderer:${mode}`));
+                    for (const source of decayShaderSource(`ParticleRenderer:${mode}`)) {
+                        context.registerShader(source);
+                    }
                 },
 
                 activate() {
@@ -797,6 +799,9 @@ export function createParticleRenderer(
                         // the frame shows is a trail rather than a fresh scatter of discs. Ahead of
                         // the colour pass, because that is what it composites into (ADR-0014).
                         ...(render.outputs.color
+                            // Decay, never drift: the renderer's only input is the particle state,
+                            // and it publishes the wake rather than reading one, so there is no
+                            // field here for a memory to travel along.
                             ? [decayPass(`ParticleRenderer:${mode}`, render.outputs.color)]
                             : []),
                         {

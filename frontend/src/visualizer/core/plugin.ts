@@ -99,6 +99,20 @@ export interface PluginPort {
      * its source and is exactly why a warp alone cannot be the lossy element in a loop.
      */
     gainParameter?: string;
+    /**
+     * This output's previous frame is read back by the plugin that wrote it (ADR-0014).
+     *
+     * A decay drawn with `multiply` ages a target without sampling it, which is what makes every
+     * producer's memory free. What it cannot do is *move* that memory: displacing an image means
+     * reading its neighbours, and reading means a second slot. An output marked this way gets one,
+     * and the plugin is handed the previous frame in `render.previous` under this port's name.
+     *
+     * Honoured only for a node with something wired into it, because a displacement by a field
+     * nothing produced is the identity and would buy a full-resolution buffer to copy a texture to
+     * itself. On a colour output at 1080p the slot costs 16 MB, so this is roughly 23 MB a scene
+     * rather than the 181 MB that retaining every colour resource would take.
+     */
+    retained?: boolean;
 }
 
 export interface PluginCost {
@@ -347,6 +361,15 @@ export function validateDefinition(definition: VisualPluginDefinition): string[]
     for (const binding of definition.defaultBindings ?? []) {
         if (definition.parameters?.[binding.parameter] === undefined) {
             problems.push(`binding targets undeclared parameter ${binding.parameter}`);
+        }
+    }
+
+    // A retained output is delivered in `render.previous`, which is keyed by port name and otherwise
+    // holds inputs. Sharing a name would hand a plugin its own last frame where it asked for an
+    // upstream one, silently and only in the scenes where the retention took effect.
+    for (const output of definition.outputs) {
+        if (output.retained && definition.inputs.some((input) => input.name === output.name)) {
+            problems.push(`retained output ${output.name} collides with an input of the same name`);
         }
     }
 

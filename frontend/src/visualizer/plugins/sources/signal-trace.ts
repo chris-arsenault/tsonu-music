@@ -235,7 +235,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
         // every frame no matter what else was happening.
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false },
+            { name: 'color', type: 'color-texture', required: false, retained: true },
             // What the waveform is doing to the shape, which is the thing this plugin knows and
             // nothing else in the graph can see.
             { name: 'motion', type: 'vector-field', required: false },
@@ -365,7 +365,9 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         vertex: MOTION_VERTEX,
                         fragment: MOTION_FRAGMENT,
                     });
-                    context.registerShader(decayShaderSource('SignalTraceSource'));
+                    for (const source of decayShaderSource('SignalTraceSource')) {
+                        context.registerShader(source);
+                    }
                 },
 
                 activate() {
@@ -435,7 +437,12 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                     const passes: RenderPass[] = [];
 
                     if (render.outputs.color) {
-                        passes.push(decayPass('SignalTraceSource', render.outputs.color));
+                        passes.push(decayPass(
+                            'SignalTraceSource',
+                            render.outputs.color,
+                            render.previous.color,
+                            render.inputs.field,
+                        ));
                     }
 
                     passes.push({

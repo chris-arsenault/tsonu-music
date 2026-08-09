@@ -336,7 +336,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
         category: 'simulator',
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false },
+            { name: 'color', type: 'color-texture', required: false, retained: true },
             // Velocities the simulation already holds, so this needs no derivation at all.
             { name: 'motion', type: 'vector-field', required: false },
         ],
@@ -407,7 +407,9 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         vertex: CASCADE_MOTION_VERTEX,
                         fragment: CASCADE_MOTION_FRAGMENT,
                     });
-                    context.registerShader(decayShaderSource('ImpactCascadeSimulator'));
+                    for (const source of decayShaderSource('ImpactCascadeSimulator')) {
+                        context.registerShader(source);
+                    }
                 },
 
                 activate() {
@@ -485,7 +487,12 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                     const passes: RenderPass[] = [];
 
                     if (render.outputs.color) {
-                        passes.push(decayPass('ImpactCascadeSimulator', render.outputs.color));
+                        passes.push(decayPass(
+                            'ImpactCascadeSimulator',
+                            render.outputs.color,
+                            render.previous.color,
+                            render.inputs.field,
+                        ));
                     }
 
                     passes.push({

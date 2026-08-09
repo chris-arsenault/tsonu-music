@@ -154,17 +154,44 @@ export function compileGraph(
         return failed(problems);
     }
 
+    /**
+     * Outputs whose producer reads them back, so the second slot is theirs (ADR-0014).
+     *
+     * Only for a node something is wired into. A producer with nothing feeding it is displaced by a
+     * field that does not exist, and the drift would resolve to copying the texture to itself at the
+     * cost of a full-resolution buffer.
+     */
+    const wiredInto = new Set([
+        ...edges.map((edge) => edge.to.instanceId),
+        ...assetBindings.map((binding) => binding.instanceId),
+    ]);
+    const retained = ordered.flatMap((node) => (wiredInto.has(node.instanceId)
+        ? node.definition.outputs
+            .filter((port) => port.retained)
+            .map((port) => resourceIdFor(node.instanceId, port.name))
+        : []));
+
     const pingPong = [
-        ...new Set(
-            edges
+        ...new Set([
+            ...edges
                 .filter((edge) => edge.feedback)
                 .map((edge) => resourceIdFor(edge.from.instanceId, edge.from.port)),
-        ),
+            ...retained,
+        ]),
     ];
+
+    const retainedResources = new Set(retained);
 
     const compiled = ordered.map((node): CompiledNode => {
         const inputs: Record<string, ResourceId> = {};
         const previous: Record<string, ResourceId> = {};
+
+        for (const port of node.definition.outputs) {
+            const resource = resourceIdFor(node.instanceId, port.name);
+            if (retainedResources.has(resource)) {
+                previous[port.name] = resource;
+            }
+        }
 
         for (const binding of assetBindings) {
             if (binding.instanceId === node.instanceId) {

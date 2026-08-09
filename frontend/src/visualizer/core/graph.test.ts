@@ -255,6 +255,67 @@ describe('graph validation', () => {
     });
 });
 
+describe('retained outputs', () => {
+    // ADR-0014. A producer's memory can be aged without being sampled, but not moved without one, so
+    // an output whose producer displaces it asks for the second slot directly rather than through an
+    // edge nobody would draw.
+    const drifting = definition({
+        id: 'drifting-source',
+        category: 'source',
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
+        outputs: [{ name: 'color', type: 'color-texture', required: false, retained: true }],
+    });
+
+    const fieldSource = definition({
+        id: 'field-source',
+        outputs: [{ name: 'field', type: 'vector-field', required: false }],
+    });
+
+    function compiled(edges: RenderGraphEdge[] = []) {
+        const result = compileGraph([node('f', fieldSource), node('p', drifting)], edges);
+        if (!result.ok) throw new Error(result.errors.join(', '));
+        return result.graph;
+    }
+
+    const wired: RenderGraphEdge[] = [
+        { from: { instanceId: 'f', port: 'field' }, to: { instanceId: 'p', port: 'field' } },
+    ];
+
+    test('a wired producer gets a second slot for its own colour', () => {
+        expect(compiled(wired).pingPong).toContain(resourceIdFor('p', 'color'));
+    });
+
+    test('the producer is handed its previous frame under the output port name', () => {
+        const node = compiled(wired).order.find((entry) => entry.instanceId === 'p')!;
+
+        expect(node.previous.color).toBe(resourceIdFor('p', 'color'));
+    });
+
+    test('a producer with nothing wired into it gets no slot', () => {
+        // Displacement by a field nothing produced is the identity, so the buffer would be bought to
+        // copy a texture to itself.
+        expect(compiled().pingPong).toEqual([]);
+        expect(compiled().order.find((entry) => entry.instanceId === 'p')!.previous).toEqual({});
+    });
+
+    test('an unretained output never gets one', () => {
+        const plain = definition({ id: 'plain', inputs: [{ name: 'field', type: 'vector-field', required: false }] });
+        const result = compileGraph([node('f', fieldSource), node('p', plain)], wired);
+
+        expect(result.ok && result.graph.pingPong).toEqual([]);
+    });
+
+    test('a retained output may not share a name with an input', () => {
+        const colliding = definition({
+            inputs: [{ name: 'color', type: 'color-texture', required: false }],
+            outputs: [{ name: 'color', type: 'color-texture', required: false, retained: true }],
+        });
+
+        expect(validateDefinition(colliding))
+            .toContain('retained output color collides with an input of the same name');
+    });
+});
+
 describe('feedback', () => {
     const feedbackConsumer = definition({
         id: 'feedback-consumer',

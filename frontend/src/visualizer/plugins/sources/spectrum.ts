@@ -270,7 +270,9 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         category: 'source',
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false },
+            // Retained, so the spectrum's memory is carried along whatever field is pushing the
+            // spectrum itself rather than sitting still while the bands move over it (ADR-0014).
+            { name: 'color', type: 'color-texture', required: false, retained: true },
             // How fast each band is rising, which is what this plugin knows about the music that
             // nothing downstream of it can see.
             { name: 'motion', type: 'vector-field', required: false },
@@ -339,7 +341,9 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
-                    context.registerShader(decayShaderSource('SpectrumGeometrySource'));
+                    for (const source of decayShaderSource('SpectrumGeometrySource')) {
+                        context.registerShader(source);
+                    }
                 },
 
                 activate() {
@@ -399,7 +403,12 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                     const passes: RenderPass[] = [];
 
                     if (render.outputs.color) {
-                        passes.push(decayPass('SpectrumGeometrySource', render.outputs.color));
+                        passes.push(decayPass(
+                            'SpectrumGeometrySource',
+                            render.outputs.color,
+                            render.previous.color,
+                            render.inputs.field,
+                        ));
                     }
 
                     passes.push({
@@ -484,7 +493,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         category: 'source',
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false },
+            { name: 'color', type: 'color-texture', required: false, retained: true },
             // A burst expanding from where something struck, at a rate the glyph's own radius gives.
             { name: 'motion', type: 'vector-field', required: false },
         ],
@@ -543,7 +552,9 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
-                    context.registerShader(decayShaderSource('TransientGlyphSource'));
+                    for (const source of decayShaderSource('TransientGlyphSource')) {
+                        context.registerShader(source);
+                    }
                 },
 
                 activate() {
@@ -638,7 +649,12 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                     const passes: RenderPass[] = [];
 
                     if (render.outputs.color) {
-                        passes.push(decayPass('TransientGlyphSource', render.outputs.color));
+                        passes.push(decayPass(
+                            'TransientGlyphSource',
+                            render.outputs.color,
+                            render.previous.color,
+                            render.inputs.field,
+                        ));
                     }
 
                     passes.push({

@@ -9,6 +9,7 @@ import {
     character,
     decayShaderId,
     defineShaderPlugin,
+    driftShaderId,
 } from './define';
 import { silentFeatureBus } from '../core/features';
 import { createImpactBus } from '../core/impact';
@@ -126,6 +127,48 @@ describe('a compositing colour producer ages its target', () => {
 
     test('the extra pass is counted, so the performance ladder budgets for it', () => {
         expect(compositing.cost.renderPasses).toBe(2);
+    });
+});
+
+describe('a retained producer carries its memory along the field', () => {
+    const drifting = plugin({
+        blend: 'lighten',
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
+    });
+
+    function aged(previous: Record<string, string>, inputs: Record<string, string>) {
+        const instance = drifting.create({ instanceId: 'f', seed: 0.5, registerShader: () => undefined });
+        instance.initialize();
+
+        return instance.render({
+            inputs,
+            outputs: { color: 'out.color' },
+            previous,
+            renderWidth: 64,
+            renderHeight: 64,
+        })[0];
+    }
+
+    test('the ageing pass samples the previous frame through the field', () => {
+        expect(aged({ color: 'out.color' }, { field: 'in.field' })).toMatchObject({
+            shader: driftShaderId('Fixture'),
+            inputs: { uPrevious: 'out.color', uField: 'in.field' },
+            output: 'out.color',
+            blend: 'none',
+            clear: false,
+        });
+    });
+
+    test('the colour output declares the retention that buys the second slot', () => {
+        expect(drifting.outputs.find((port) => port.name === 'color')?.retained).toBe(true);
+    });
+
+    test('no field wired falls back to the decay, which costs no memory', () => {
+        expect(aged({ color: 'out.color' }, {})).toMatchObject({ blend: 'multiply' });
+    });
+
+    test('no second slot planned falls back too, rather than sampling the target it writes', () => {
+        expect(aged({}, { field: 'in.field' })).toMatchObject({ blend: 'multiply' });
     });
 });
 
