@@ -282,10 +282,13 @@ describe('plugin render contracts', () => {
         });
 
         // The motion pass appears only when something asked for the port, so a scene that does not
-        // read the trace's motion does not pay for it.
-        expect(countPasses(colourOnly)).toBe(1);
-        expect(isGeometryPass(colourOnly[0])).toBe(true);
-        expect(colourOnly[0].output).toBe('trace.color');
+        // read the trace's motion does not pay for it. The other two are the decay that ages the
+        // colour target and the trace composited into it (ADR-0014).
+        expect(countPasses(colourOnly)).toBe(2);
+        expect(isGeometryPass(colourOnly[0])).toBe(false);
+        expect(colourOnly[0]).toMatchObject({ output: 'trace.color', blend: 'multiply', clear: false });
+        expect(isGeometryPass(colourOnly[1])).toBe(true);
+        expect(colourOnly[1]).toMatchObject({ output: 'trace.color', blend: 'lighten', clear: false });
 
         const withMotion = instance.render({
             inputs: {},
@@ -295,8 +298,8 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        expect(countPasses(withMotion)).toBe(2);
-        expect(withMotion[1].output).toBe('trace.motion');
+        expect(countPasses(withMotion)).toBe(3);
+        expect(withMotion[2].output).toBe('trace.motion');
     });
 
     test('the feedback transform reads its previous frame when one is wired', () => {

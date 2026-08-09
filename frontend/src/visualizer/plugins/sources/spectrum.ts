@@ -6,7 +6,15 @@
  * neither duplicates any analysis.
  */
 
-import { character, GLSL_COMMON, GLSL_PERTURB_VERTEX } from '../define';
+import {
+    character,
+    decayPass,
+    decayShaderSource,
+    GLSL_COMMON,
+    GLSL_PERTURB_VERTEX,
+    SURVIVAL_BINDING,
+    SURVIVAL_PARAMETER,
+} from '../define';
 import type { RenderContext } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
 
@@ -268,11 +276,15 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['spectrum-geometry', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
-        parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2 },
+        // A spectrum redrawn every frame into a cleared target is the thin spectrogram that sits
+        // behind a scene interacting with nothing. What it holds between frames is the whole of
+        // what makes it a shape rather than a readout (ADR-0014).
+        parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2, [SURVIVAL_PARAMETER]: 0.7 },
         defaultBindings: [
+            SURVIVAL_BINDING,
             {
                 feature: 'rms',
                 role: 'intensity',
@@ -327,6 +339,7 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
+                    context.registerShader(decayShaderSource('SpectrumGeometrySource'));
                 },
 
                 activate() {
@@ -383,7 +396,13 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         return [];
                     }
 
-                    const passes: RenderPass[] = [{
+                    const passes: RenderPass[] = [];
+
+                    if (render.outputs.color) {
+                        passes.push(decayPass('SpectrumGeometrySource', render.outputs.color));
+                    }
+
+                    passes.push({
                         kind: 'geometry',
                         shader: SPECTRUM_SHADER,
                         geometry: SPECTRUM_GEOMETRY,
@@ -391,10 +410,13 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         primitive: mode === 'cell-matrix' ? 'points' : 'line-strip',
                         vertexCount: count,
                         output: render.outputs.color,
-                        blend: 'add',
-                        clear: true,
+                        // Over the decayed frame rather than into a wiped one: where a band was a
+                        // second ago stays visible under where it is now, which is what makes a
+                        // spectrum a surface instead of a line that moves.
+                        blend: 'lighten',
+                        clear: false,
                         uniforms: { uBrightness: 1.3, uPerturb: 0.12, uHue: 0 },
-                    }];
+                    });
 
                     if (render.outputs.motion) {
                         passes.push({
@@ -467,7 +489,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['transient-geometry', 'impact-consumer', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
         character: character({
             motionEnergy: 0.85,
             visualDensity: 0.3,
@@ -476,8 +498,10 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
             dominance: 'supporting',
         }),
         activationRules: { activationWeight: 1.5, minimumDuration: 6 },
-        parameters: { scale: 1, wakeScale: 1.5 },
-        defaultBindings: [{
+        // A glyph lives 0.7 seconds. Short survival, so what it leaves is a mark of where the hit
+        // was rather than a smear that outlasts several of them.
+        parameters: { scale: 1, wakeScale: 1.5, [SURVIVAL_PARAMETER]: 0.4 },
+        defaultBindings: [SURVIVAL_BINDING, {
             // Onset strength already sets a glyph's brightness; peak level sets how far it reaches.
             feature: 'peak',
             parameter: 'scale',
@@ -519,6 +543,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
+                    context.registerShader(decayShaderSource('TransientGlyphSource'));
                 },
 
                 activate() {
@@ -610,7 +635,13 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         return [];
                     }
 
-                    const passes: RenderPass[] = [{
+                    const passes: RenderPass[] = [];
+
+                    if (render.outputs.color) {
+                        passes.push(decayPass('TransientGlyphSource', render.outputs.color));
+                    }
+
+                    passes.push({
                         kind: 'geometry',
                         shader: GLYPH_SHADER,
                         geometry: GLYPH_GEOMETRY,
@@ -618,10 +649,10 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         primitive: 'lines',
                         vertexCount: count,
                         output: render.outputs.color,
-                        blend: 'add',
-                        clear: true,
+                        blend: 'lighten',
+                        clear: false,
                         uniforms: { uPerturb: 0.12, uHue: 0 },
-                    }];
+                    });
 
                     if (render.outputs.motion) {
                         passes.push({

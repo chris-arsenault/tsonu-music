@@ -10,7 +10,14 @@
  * kernel type rather than private to this file.
  */
 
-import { character, GLSL_PERTURB_VERTEX } from '../define';
+import {
+    character,
+    decayPass,
+    decayShaderSource,
+    GLSL_PERTURB_VERTEX,
+    SURVIVAL_BINDING,
+    SURVIVAL_PARAMETER,
+} from '../define';
 import type { ImpactEvent } from '../../core/impact';
 import type { RenderPass } from '../../core/passes';
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
@@ -338,7 +345,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
             gpu: 3,
             cpu: 2,
             memory: 2,
-            renderPasses: 2,
+            renderPasses: 3,
             qualityScalable: true,
             // Dominant: the grammar allows only one, so it never competes with another generator.
             dominant: true,
@@ -358,8 +365,10 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
             incompatibleWith: ['ReactionDiffusionSimulator'],
             prefersWith: ['ShockwaveTransform:bulge', 'GlowAndScatter:soft-bloom'],
         },
-        parameters: { energyScale: 1, brightness: 1.4, wakeScale: 1.4 },
-        defaultBindings: [{
+        // Longer than the catalog default: the whole subject is bodies travelling, and how far back
+        // the trail reaches is how much of the travel is visible at once.
+        parameters: { energyScale: 1, brightness: 1.4, wakeScale: 1.4, [SURVIVAL_PARAMETER]: 0.8 },
+        defaultBindings: [SURVIVAL_BINDING, {
             feature: 'bass',
             parameter: 'energyScale',
             outputRange: [0.5, 2.5],
@@ -398,6 +407,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         vertex: CASCADE_MOTION_VERTEX,
                         fragment: CASCADE_MOTION_FRAGMENT,
                     });
+                    context.registerShader(decayShaderSource('ImpactCascadeSimulator'));
                 },
 
                 activate() {
@@ -472,7 +482,13 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         return [];
                     }
 
-                    const passes: RenderPass[] = [{
+                    const passes: RenderPass[] = [];
+
+                    if (render.outputs.color) {
+                        passes.push(decayPass('ImpactCascadeSimulator', render.outputs.color));
+                    }
+
+                    passes.push({
                         kind: 'geometry',
                         shader: CASCADE_SHADER,
                         geometry: CASCADE_GEOMETRY,
@@ -480,10 +496,12 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         primitive: 'points',
                         vertexCount: count,
                         output: render.outputs.color,
-                        blend: 'add',
-                        clear: true,
+                        // A cascade is a handful of fragments a frame. Drawn into a cleared target it
+                        // is a scatter of dots; drawn over a decayed one it is the path they took.
+                        blend: 'lighten',
+                        clear: false,
                         uniforms: { uPointSize: 3.5, uBrightness: 1.4, uPerturb: 0.12 },
-                    }];
+                    });
 
                     if (render.outputs.motion) {
                         passes.push({

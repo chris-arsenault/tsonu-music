@@ -11,7 +11,14 @@ import type {
     VisualPluginInstance,
 } from '../../core/plugin';
 import type { GeometryUpload, RenderPass } from '../../core/passes';
-import { GLSL_COMMON, GLSL_PERTURB_VERTEX } from '../define';
+import {
+    decayPass,
+    decayShaderSource,
+    GLSL_COMMON,
+    GLSL_PERTURB_VERTEX,
+    SURVIVAL_BINDING,
+    SURVIVAL_PARAMETER,
+} from '../define';
 
 export type SignalTraceMode =
     | 'oscilloscope'
@@ -234,7 +241,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['waveform-geometry', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.35,
             motionEnergy: 0.6,
@@ -261,8 +268,13 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             // returns to the same level. Of 448 bindings in the catalog, 21 were integrated and none
             // of them was on a source's appearance.
             hue: 0,
+            // A waveform is redrawn from the same buffer every frame. Without a memory it can only
+            // ever be where the signal is now; with one, the trace of where it has been is the
+            // surface the rest of the scene has something to push around (ADR-0014).
+            [SURVIVAL_PARAMETER]: 0.7,
         },
         defaultBindings: [
+            SURVIVAL_BINDING,
             {
                 // How far the wired field pushes the trace.
                 feature: 'lowMid',
@@ -353,6 +365,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         vertex: MOTION_VERTEX,
                         fragment: MOTION_FRAGMENT,
                     });
+                    context.registerShader(decayShaderSource('SignalTraceSource'));
                 },
 
                 activate() {
@@ -419,7 +432,13 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         inputs.uField = render.inputs.field;
                     }
 
-                    const passes: RenderPass[] = [{
+                    const passes: RenderPass[] = [];
+
+                    if (render.outputs.color) {
+                        passes.push(decayPass('SignalTraceSource', render.outputs.color));
+                    }
+
+                    passes.push({
                         kind: 'geometry',
                         shader: SHADER_ID,
                         geometry: GEOMETRY_ID,
@@ -427,15 +446,15 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         primitive: mode === 'lissajous' ? 'points' : 'line-strip',
                         vertexCount,
                         output: render.outputs.color,
-                        blend: 'add',
-                        clear: true,
+                        blend: 'lighten',
+                        clear: false,
                         uniforms: {
                             uThickness: 2,
                             uBrightness: 1.4,
                             uPerturb: 0.12,
                             uHue: 0,
                         },
-                    }];
+                    });
 
                     if (render.outputs.motion) {
                         passes.push({
