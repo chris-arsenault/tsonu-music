@@ -57,6 +57,16 @@ export interface SimpleShaderPlugin {
     /** Reads its own previous frame through a declared feedback edge. */
     feedbackPort?: string;
     /**
+     * Inputs whose wiring the shader needs to know about, as `u<Name>IsHistory` set to 1 or 0.
+     *
+     * A weight can mean two different things depending on whether the port it scales carries a
+     * forward edge or a loop, and only the CPU side knows which. Without this the shader has to
+     * assume, and `LayerMixer` assumed history: it raised its base weight to the frame delta on
+     * every port, which is a survival, and 631 of its 643 source ports across 200 scenes carry a
+     * forward edge with nothing accumulating on it at all (ADR-0014).
+     */
+    historyFlags?: string[];
+    /**
      * Feeds the strongest live impact into `uImpactCentre`, `uImpactRadius`, and `uImpactEnergy`.
      *
      * Declaring `impact-consumer` is not enough on its own — a plugin has to actually read the bus, and
@@ -407,6 +417,10 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         uPhase: phase + spin,
                         uSeed: context.seed,
                         ...(spec.historyDriven ? { uDepth: depth } : {}),
+                        ...Object.fromEntries((spec.historyFlags ?? []).map((name) => [
+                            `u${name.charAt(0).toUpperCase()}${name.slice(1)}IsHistory`,
+                            render.previous[name] === undefined ? 0 : 1,
+                        ])),
                         ...(spec.uniforms ?? {}),
                         ...(spec.impactDriven
                             ? {

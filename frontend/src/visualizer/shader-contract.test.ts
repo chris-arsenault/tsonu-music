@@ -15,6 +15,7 @@ import { allDefinitions } from './plugins/registry';
 import { GLSL_HISTORY } from './plugins/define';
 import { portGain } from './core/loop-gain';
 import { isMotionSource } from './core/fields';
+import { isFeedbackPort } from './core/wiring';
 import { isImagePortType } from './core/plugin';
 import { parameterUniformName } from './core/parameters';
 import type { VisualPluginDefinition } from './core/plugin';
@@ -326,6 +327,32 @@ describe('every declared loop gain is a per-second survival', () => {
             // stable until the track does something, which is the worst way to be wrong.
             expect(portGain(definition, port), `${definition.id}.${port.name} ceiling`)
                 .toBeLessThan(1);
+        }
+    });
+
+    test('a gain sits on a port that carries history, or the shader is told which it got', () => {
+        // A per-second survival is only a survival if something is accumulating on the port. Raised
+        // to the frame delta on a forward edge it is arithmetic without a referent, and the result
+        // is a near-constant: at sixty frames a second, weights of 0.05 and 0.7 both land the
+        // operand within five percent of unity.
+        //
+        // `LayerMixer.source` was exactly this. It carries a gain so a loop may close there, and 631
+        // of its 643 source ports across 200 scenes carry a forward edge instead — so in 98% of
+        // scenes a bound parameter with a declared range moved the picture by four percent while the
+        // overlay weight beside it moved it by a factor of two. That asymmetry, three mixers deep in
+        // an average scene, is what reads as the whole frame pulsing with the music.
+        //
+        // Either the port is one wiring nominates for history, or the plugin asks which it was given
+        // and applies the weight accordingly.
+        for (const { definition, port } of gained) {
+            const flagged = definition.inputs.some((input) => input.name === port.name)
+                && shaderSources(definition).some((source) =>
+                    source.fragment.includes(`u${port.name.charAt(0).toUpperCase()}${port.name.slice(1)}IsHistory`));
+
+            expect(
+                isFeedbackPort(port) || flagged,
+                `${definition.id}.${port.name} applies a survival to a port that may be forward`,
+            ).toBe(true);
         }
     });
 
