@@ -253,7 +253,10 @@ export default function GraphEditorDock({
 
             const next = direction === 'undo' ? undo(current) : redo(current);
             if (next !== current) {
-                handle?.setAuthoredScene(next.present);
+                // Said out loud like every other apply path. A step that fails to compile left the
+                // kernel rendering the previous scene with no indication anything was wrong.
+                const failures = handle?.setAuthoredScene(next.present) ?? [];
+                setNotice(failures.length > 0 ? failures[0].detail : undefined);
             }
 
             return next;

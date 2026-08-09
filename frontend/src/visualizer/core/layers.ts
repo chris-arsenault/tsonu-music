@@ -12,6 +12,12 @@ import type { SelectionCharacter } from './plugin';
 
 export interface VisualLayer {
     id: string;
+    /**
+     * The instance whose output this layer presents. The id itself is unique per scene — the state
+     * layer's is its resource, namespace and all — which is what crossfade identity needs, and
+     * exactly what an authored override cannot know. Overrides key on the producer.
+     */
+    producer?: string;
     color?: ResourceId;
     alpha?: ResourceId;
     depth?: ResourceId;
@@ -91,7 +97,13 @@ export function blendForCharacter(character: SelectionCharacter): BlendMode {
  */
 export function layersForGraph(graph: CompiledGraph): VisualLayer[] {
     if (graph.state && graph.present) {
-        return [createLayer(graph.state.stateResource, graph.present, { order: 0 })];
+        return [createLayer(graph.state.stateResource, graph.present, {
+            order: 0,
+            // Authored overrides are keyed by the instance that produced the layer, and the one
+            // layer every scene now has was keyed only by its namespaced resource — an id no
+            // document could name, so `layers` blocks in captures matched nothing.
+            producer: graph.state.combineInstanceId,
+        })];
     }
 
     const consumed = new Set<ResourceId>();
@@ -117,6 +129,7 @@ export function layersForGraph(graph: CompiledGraph): VisualLayer[] {
 
             layers.push(createLayer(node.instanceId, resource, {
                 order: index,
+                producer: node.instanceId,
                 // Chosen from what the plugin says it produces. Every layer above the base used to
                 // blend with `screen`, which is a lighten operator: parallel branches accumulated
                 // toward white and read as superposition rather than as interaction.
@@ -149,7 +162,7 @@ export interface LayerOverride {
     feedbackParticipation?: number;
 }
 
-/** Applies per-layer overrides, keyed by the layer id — which is the instance that produced it. */
+/** Applies per-layer overrides, keyed by the producing instance (or the layer id itself). */
 export function applyLayerOverrides(
     layers: readonly VisualLayer[],
     overrides: Readonly<Record<string, LayerOverride>> | undefined,
@@ -159,7 +172,8 @@ export function applyLayerOverrides(
     }
 
     return layers.map((layer) => {
-        const override = overrides[layer.id];
+        const override = overrides[layer.id]
+            ?? (layer.producer !== undefined ? overrides[layer.producer] : undefined);
         if (!override) {
             return layer;
         }
