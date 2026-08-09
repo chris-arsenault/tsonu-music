@@ -342,13 +342,19 @@ export function wireScene(
      */
     nominateImageHistory = true,
 ): WiredScene {
-    // Derived joins sort after every category, not with the compositors they otherwise resemble.
-    // Placed by category they ran before the post-processing stages, and each of those takes one
-    // branch and emits one — so three of them consuming three different producers split the image
-    // back into three terminals immediately after it had been joined into one. A join has to be able
-    // to reach whatever the scene finished with.
+    // Derived joins sort at the end of the compositors, before post-processing. They sorted after
+    // every category once, so a join could reach whatever the scene finished with — but that also
+    // meant a joined branch passed through zero downstream stages by construction: a spectrum
+    // absorbed by a terminal join was pasted over the finished, graded picture, untouched by the
+    // tone mapper, the palette, the glow, or anything else — the reported flat overlay. Joining
+    // before the presentation tail sends every absorbed branch through the same grading as the
+    // chain it joined, and into the scene state as part of one image. The stable sort keeps the
+    // derived joins after the drawn compositors sharing their index, so a two-input mixer the
+    // grammar chose still takes its branches before a derived join absorbs the rest.
     const chainIndex = (definition: VisualPluginDefinition) =>
-        (isDerivedJoin(definition) ? CHAIN_ORDER.length : CHAIN_ORDER.indexOf(definition.category));
+        (isDerivedJoin(definition)
+            ? CHAIN_ORDER.indexOf('compositor') + 0.5
+            : CHAIN_ORDER.indexOf(definition.category));
 
     const ordered = orderByDependency(
         [...plugins].sort((left, right) => chainIndex(left) - chainIndex(right)),
