@@ -713,18 +713,25 @@ export function createColorTransform(
 export function createGlowAndScatter(
     mode: typeof GLOW_MODES[number] = 'soft-bloom',
 ): VisualPluginDefinition {
+    // Soft bloom and edge glow scatter evenly: their motion fragment writes a zero vector at every
+    // texel by design. Declaring the port anyway offered the rest of the graph a field that moves
+    // nothing — and the canonical state warp, steered by the freshest motion output, could pick it
+    // and spend the scene warping the state by zero. A field that is identically zero is not a
+    // field; those modes now declare none.
+    const scatters = mode !== 'soft-bloom' && mode !== 'edge-glow';
+
     return defineShaderPlugin({
         id: `GlowAndScatter:${mode}`,
         category: 'postprocess',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
         outputs: [
             { name: 'color', type: 'color-texture' },
-            { name: 'motion', type: 'vector-field' },
+            ...(scatters ? [{ name: 'motion', type: 'vector-field' as const }] : []),
         ],
         // Optional secondary post-processing: the performance ladder gives this up at level five.
-        capabilities: ['glow', 'secondary-postprocess', 'vector-field'],
+        capabilities: ['glow', 'secondary-postprocess', ...(scatters ? ['vector-field'] : [])],
         fragment: GLOW_FRAGMENT,
-        motion: { port: 'motion', fragment: GLOW_MOTION_FRAGMENT },
+        ...(scatters ? { motion: { port: 'motion', fragment: GLOW_MOTION_FRAGMENT } } : {}),
         uniforms: { uMode: GLOW_MODES.indexOf(mode), uAmount: 0.8, uThreshold: 0.55 },
         parameters: { amount: 0.8, threshold: 0.55 },
         bindings: [

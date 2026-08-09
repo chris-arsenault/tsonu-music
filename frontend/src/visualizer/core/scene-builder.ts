@@ -424,8 +424,17 @@ function withCanonicalState(
 
     const fieldInput = warpDefinition.inputs.find((input) => isMotionSource(input.type));
     if (fieldInput) {
-        const field = [...fieldOutputs].reverse()
-            .find((output) => portsCompatible(output.type, fieldInput.type));
+        // A dedicated field plugin's output over a transformer's side-motion, freshest within the
+        // preferred class. The reverse-order search alone took whatever motion output happened to
+        // sit last in the node order, which was regularly a post-processing stage's side-motion —
+        // weak where a procedural field is strong, and the state warp it steers is the scene's
+        // only transport of memory.
+        const byInstance = new Map(material.nodes.map((node) => [node.instanceId, node]));
+        const compatible = fieldOutputs.filter((output) =>
+            portsCompatible(output.type, fieldInput.type));
+        const fieldCategory = compatible.filter((output) =>
+            ['field', 'simulator'].includes(byInstance.get(output.instanceId)?.definition.category ?? ''));
+        const field = [...(fieldCategory.length > 0 ? fieldCategory : compatible)].reverse()[0];
         if (!field) {
             return undefined;
         }

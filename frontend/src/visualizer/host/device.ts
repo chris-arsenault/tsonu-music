@@ -408,11 +408,6 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
                 return existing;
             }
 
-            if (existing) {
-                gl.deleteFramebuffer(existing.framebuffer);
-                gl.deleteTexture(existing.texture);
-            }
-
             const texture = gl.createTexture()!;
             gl.bindTexture(gl.TEXTURE_2D, texture);
             // Half-float keeps feedback and simulator state from banding without the bandwidth of
@@ -429,6 +424,26 @@ export function createDevice(canvas: HTMLCanvasElement): Device | undefined {
             gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
             gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+            // A resize used to recreate the texture and lose its contents. The scene state — the
+            // only image that persists between frames — lives in one of these targets, so every
+            // quality-ladder step, window resize, and authoring toggle silently blanked the
+            // picture's whole memory. The old contents are stretched into the new allocation
+            // instead: a one-frame softness against seconds of accumulation.
+            if (existing) {
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, existing.framebuffer);
+                gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebuffer);
+                gl.blitFramebuffer(
+                    0, 0, existing.width, existing.height,
+                    0, 0, clampedWidth, clampedHeight,
+                    gl.COLOR_BUFFER_BIT,
+                    gl.LINEAR,
+                );
+                gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+                gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+                gl.deleteFramebuffer(existing.framebuffer);
+                gl.deleteTexture(existing.texture);
+            }
 
             const target: RenderTarget = { framebuffer, texture, width: clampedWidth, height: clampedHeight };
             targets.set(key, target);
