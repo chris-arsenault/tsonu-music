@@ -275,10 +275,12 @@ describe('catalog integrity', () => {
         expect(flow.inputs.map((port) => [port.name, port.type])).toEqual([
             ['source', 'color-texture'],
             ['field', 'vector-field'],
+            ['palette', 'palette'],
         ]);
         expect(passes[0].inputs).toEqual({
             uSource: 'in.source',
             uField: 'in.field',
+            uPalette: 'in.palette',
         });
     });
 
@@ -459,18 +461,26 @@ describe('scene assembly across the full catalog', () => {
         expect(mapped.length).toBeGreaterThan(0);
     });
 
-    test('a palette producer and its only consumer are drawn together or not at all', () => {
+    test('a palette producer is never drawn without a consumer, nor the mapper without a producer', () => {
         // The mapper cannot be selected without a producer, since the input is required. The reverse
-        // is what the pairing buys: a producer with no mapper is an orphan the prune pass removes,
-        // which costs a build attempt.
+        // is what the pairing buys: a producer no palette port reads is an orphan the prune pass
+        // removes, which costs a build attempt. The flow compositor's optional palette port is a
+        // second legitimate consumer, so the producer no longer implies the mapper specifically.
         for (const theme of THEMES) {
             for (const seed of ['p1', 'p2', 'p3', 'p4', 'p5', 'p6']) {
                 const result = buildScene(seed, theme, { ...base, assets: [] }, profileFor(0));
                 if (!result.ok) continue;
 
                 const ids = result.scene.plugins.map((entry) => entry.id);
-                expect(ids.includes('ProceduralPalette'), `${theme.id}/${seed}`)
-                    .toBe(ids.includes('PaletteMapper'));
+                if (ids.includes('ProceduralPalette')) {
+                    expect(
+                        ids.includes('PaletteMapper') || ids.includes('FlowFieldCompositor'),
+                        `${theme.id}/${seed} palette producer with no consumer`,
+                    ).toBe(true);
+                }
+                if (ids.includes('PaletteMapper')) {
+                    expect(ids.includes('ProceduralPalette'), `${theme.id}/${seed}`).toBe(true);
+                }
             }
         }
     });

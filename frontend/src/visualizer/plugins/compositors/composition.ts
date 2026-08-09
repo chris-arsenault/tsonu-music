@@ -321,15 +321,24 @@ out vec4 fragColor;
 
 uniform sampler2D uSource;
 uniform sampler2D uField;
+uniform sampler2D uPalette;
+uniform float uHasPalette;
 uniform vec2 uResolution;
 uniform float uTime;
 uniform float uPhase;
 uniform float uAmount;
 uniform float uHue;
 uniform float uBreath;
+uniform float uGrip;
 ${GLSL_COMMON}
 
+// The scene's own palette when one is wired; the built-in cosine ramp only as a fallback. The
+// ramp was the only colour this stage could speak, so every scene containing it converged on the
+// same hues — measured, two scenes of different themes both locked at 83° for their full run.
 vec3 flowPalette(float phase) {
+    if (uHasPalette > 0.5) {
+        return texture(uPalette, vec2(fract(phase), 0.5)).rgb;
+    }
     return 0.52 + 0.48 * cos(6.2831853 * (phase + vec3(0.00, 0.31, 0.67)));
 }
 
@@ -373,7 +382,10 @@ void main() {
         + uTime * 0.018
     );
     vec3 palette = flowPalette(paletteIndex);
-    vec3 colouredSource = mix(source.rgb, palette * (0.35 + luminance(source.rgb)), 0.68);
+    // How hard the palette recolours what flows through. This was the constant 0.68: every pixel
+    // of every frame pulled two-thirds of the way toward the stage's own colour scheme, in-graph,
+    // so the recoloured result fed the scene state and the lock compounded.
+    vec3 colouredSource = mix(source.rgb, palette * (0.35 + luminance(source.rgb)), clamp(uGrip, 0.0, 1.0));
     vec3 colour = colouredSource * pulse + palette * ribbons * (0.28 + flow * 0.35);
 
     fragColor = vec4(colour, max(source.a, clamp(ribbons + flow * 0.2, 0.0, 1.0)));
@@ -457,6 +469,9 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
             { name: 'field', type: 'vector-field', required: true },
+            // The scene's palette, when one exists. Without it this stage could only speak its
+            // built-in cosine ramp, and every scene containing it wore the same colours.
+            { name: 'palette', type: 'palette', required: false },
         ],
         outputs: [
             { name: 'color', type: 'color-texture' },
@@ -466,8 +481,9 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
         capabilities: ['field-composition', 'chromatic-output', 'layer-mixing', 'vector-field'],
         fragment: FLOW_FIELD_COMPOSITOR_FRAGMENT,
         motion: { port: 'motion', fragment: FLOW_FIELD_MOTION_FRAGMENT },
-        uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5 },
-        parameters: { amount: 1, hue: 0.2, breath: 0.5 },
+        presenceFlags: ['palette'],
+        uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5, uGrip: 0.55 },
+        parameters: { amount: 1, hue: 0.2, breath: 0.5, grip: 0.55 },
         bindings: [
             {
                 feature: 'bass',
@@ -478,12 +494,31 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
                 curve: 'smooth',
             },
             {
+                // The palette phase turns at a music-set speed instead of tracking the centroid's
+                // level. Bound as a value, `hue` parked wherever the centroid sat — near-constant
+                // on mastered material — and the stage's colour locked for entire runs. Integrated,
+                // the phase keeps moving for as long as the track does: a rotation every half
+                // minute to three minutes.
                 feature: 'spectralCentroid',
+                role: 'complexity',
+                mode: 'rate',
                 parameter: 'hue',
-                outputRange: [0, 1],
+                outputRange: [0.005, 0.035],
                 attack: 0.35,
                 release: 1.1,
                 curve: 'linear',
+                wrap: 1,
+            },
+            {
+                // How hard the palette recolours the flow. Deformation-roled so distribution can
+                // move it and the wander keeps it from sitting at one value.
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'grip',
+                outputRange: [0.3, 0.75],
+                attack: 0.3,
+                release: 1.2,
+                curve: 'smooth',
             },
             {
                 feature: 'rms',

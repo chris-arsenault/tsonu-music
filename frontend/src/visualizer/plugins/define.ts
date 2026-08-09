@@ -67,6 +67,14 @@ export interface SimpleShaderPlugin {
      */
     historyFlags?: string[];
     /**
+     * Optional inputs whose presence the shader needs to know about, as `uHas<Name>` set to 1 or 0.
+     *
+     * An optional sampler that wiring left unwired binds the device's empty texture, and a shader
+     * cannot tell an empty texture from a black one. This is how a plugin offers a real fallback —
+     * a built-in ramp where no palette arrived — instead of silently reading zeros.
+     */
+    presenceFlags?: string[];
+    /**
      * Feeds the strongest live impact into `uImpactCentre`, `uImpactRadius`, and `uImpactEnergy`.
      *
      * Declaring `impact-consumer` is not enough on its own — a plugin has to actually read the bus, and
@@ -244,6 +252,10 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         ...Object.fromEntries((spec.historyFlags ?? []).map((name) => [
                             `u${name.charAt(0).toUpperCase()}${name.slice(1)}IsHistory`,
                             render.previous[name] === undefined ? 0 : 1,
+                        ])),
+                        ...Object.fromEntries((spec.presenceFlags ?? []).map((name) => [
+                            `uHas${name.charAt(0).toUpperCase()}${name.slice(1)}`,
+                            render.inputs[name] === undefined && render.previous[name] === undefined ? 0 : 1,
                         ])),
                         ...(spec.uniforms ?? {}),
                         ...(spec.impactDriven
