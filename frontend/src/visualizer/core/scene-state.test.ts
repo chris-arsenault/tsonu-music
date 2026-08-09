@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { createM1Registry, firstLightScene } from '../plugins/registry';
 import { createSignalTraceSource } from '../plugins/sources/signal-trace';
-import { createTemporalTransform } from '../plugins/transformers/transforms';
 import { compileSceneGraph } from './graph';
 import { layersForGraph } from './layers';
 
@@ -23,33 +22,6 @@ describe('canonical scene state', () => {
         ]);
     });
 
-    test('accepts a material trail beside the canonical state loop', () => {
-        // The canonical form constrains the state, not the material: exactly one previous-frame
-        // read of the combine output, with plugin trails legal beside it. The earlier rule —
-        // exactly one previous-frame image edge in the whole scene — is what made every stage
-        // upstream of the combine a fresh redraw.
-        const scene = firstLightScene(createM1Registry());
-        const echo = createTemporalTransform('echo');
-        const nodes = [...scene.nodes, { instanceId: 'echo', definition: echo }];
-        const edges = scene.edges.map((edge) =>
-            edge.from.instanceId === 'tone' && edge.to.instanceId === 'state'
-                ? { ...edge, to: { instanceId: 'echo', port: 'source' } }
-                : edge);
-
-        const result = compileSceneGraph(nodes, [
-            ...edges,
-            { from: { instanceId: 'echo', port: 'color' }, to: { instanceId: 'state', port: 'source' } },
-            {
-                from: { instanceId: 'echo', port: 'color' },
-                to: { instanceId: 'echo', port: 'history' },
-                feedback: true,
-            },
-        ], scene.present);
-
-        expect(result.ok ? [] : result.errors).toEqual([]);
-        expect(result.ok).toBe(true);
-    });
-
     test('rejects a historical label that does not return the displayed state', () => {
         const scene = firstLightScene(createM1Registry());
         const edges = scene.edges.map((edge) => edge.feedback
@@ -63,7 +35,7 @@ describe('canonical scene state', () => {
 
         expect(result.ok).toBe(false);
         if (result.ok) return;
-        expect(result.errors).toContain('scene requires exactly one previous-frame read of the combine output; found 0');
+        expect(result.errors).toContain('previous-frame image must come from the temporal combine output');
     });
 
     test('rejects a material branch that bypasses the fresh-state input', () => {

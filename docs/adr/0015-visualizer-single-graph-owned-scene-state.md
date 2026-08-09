@@ -1,6 +1,6 @@
 # 0015 — Complete scenes own one explicit recursive image state
 
-- Status: Amended by [0016](./0016-visualizer-canonical-state-with-material-memory.md)
+- Status: Accepted
 - Date: 2026-08-09
 - Supersedes: [0013](./0013-visualizer-uniform-node-state.md)
 - Rejects: [0014](./0014-visualizer-colour-passes-transform-state.md)

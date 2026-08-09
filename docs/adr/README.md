@@ -16,5 +16,4 @@
 | [0012](0012-visualizer-historical-edges.md) | Any edge may read the previous frame; the kernel guarantees memory but no longer transforms it | Accepted | 2026-08-08 |
 | [0013](0013-visualizer-uniform-node-state.md) | Every node output is state; blending is a node; the bound is global | Superseded by [0015](0015-visualizer-single-graph-owned-scene-state.md) | 2026-08-08 |
 | [0014](0014-visualizer-colour-passes-transform-state.md) | A colour pass transforms state; it never generates a frame | Rejected by [0015](0015-visualizer-single-graph-owned-scene-state.md) | 2026-08-09 |
-| [0015](0015-visualizer-single-graph-owned-scene-state.md) | Complete scenes own one explicit recursive image state | Amended by [0016](0016-visualizer-canonical-state-with-material-memory.md) | 2026-08-09 |
-| [0016](0016-visualizer-canonical-state-with-material-memory.md) | The canonical state anchors a scene; bounded material memory composes beneath it | Accepted | 2026-08-09 |
+| [0015](0015-visualizer-single-graph-owned-scene-state.md) | Complete scenes own one explicit recursive image state | Accepted | 2026-08-09 |

@@ -137,20 +137,19 @@ export function analyzeSceneState(
         });
     }
 
-    // Exactly one loop reads the *state* — the combine's previous output entering the warp. Other
-    // previous-frame image edges are material memory: a stage trailing itself, the composed image
-    // folding back through a lossy port. Requiring the state edge to be the only one is what made
-    // every scene's upstream a fresh redraw; the canonical form constrains the state, not the
-    // material.
     const previousImages = edges.filter((edge) => edge.feedback && edgeCarriesImage(nodes, edge));
-    const canonical = previousImages.filter((edge) =>
-        edge.from.instanceId === combine.instanceId && edge.from.port === contract.output);
-    if (canonical.length !== 1) {
-        problems.push({ detail: `scene requires exactly one previous-frame read of the combine output; found ${canonical.length}` });
+    if (previousImages.length !== 1) {
+        problems.push({ detail: `scene requires exactly one previous-frame image edge; found ${previousImages.length}` });
         return { problems };
     }
 
-    const previous = canonical[0];
+    const previous = previousImages[0];
+    if (previous.from.instanceId !== combine.instanceId || previous.from.port !== contract.output) {
+        problems.push({
+            detail: 'previous-frame image must come from the temporal combine output',
+            edge: { from: previous.from, to: previous.to },
+        });
+    }
 
     const warp = nodes.find((node) => node.instanceId === previous.to.instanceId);
     if (!warp?.definition.capabilities.includes('scene-history-warp')) {

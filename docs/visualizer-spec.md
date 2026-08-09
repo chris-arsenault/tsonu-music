@@ -1775,25 +1775,6 @@ Modes:
 
 Cost: low
 
-### `TemporalTransform`
-
-Maintains bounded frame history through an optional `history` port whose `decay` parameter is the
-gain of any cycle closing there (ADR-0016).
-
-Modes:
-
-* Echo
-* Multi-tap delay
-* Slit scan
-* Time slices
-* Directional smear
-* Frame mosaic
-* Delayed mirror
-* Temporal difference
-* Frozen fragments
-
-Cost: medium
-
 ### `EdgeContourTransform`
 
 Modes:
@@ -2224,6 +2205,7 @@ selected as visual material. See ADR-0015.
 * Boid swarm
 * Spring mesh
 * Point cloud
+* Temporal transform
 * Fractal flame
 
 ## Deferred

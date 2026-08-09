@@ -329,7 +329,6 @@ uniform float uPhase;
 uniform float uAmount;
 uniform float uHue;
 uniform float uBreath;
-uniform float uGrip;
 ${GLSL_COMMON}
 
 // The scene's own palette when one is wired; the built-in cosine ramp only as a fallback. The
@@ -382,10 +381,7 @@ void main() {
         + uTime * 0.018
     );
     vec3 palette = flowPalette(paletteIndex);
-    // How hard the palette recolours what flows through. This was the constant 0.68: every pixel
-    // of every frame pulled two-thirds of the way toward the stage's own colour scheme, in-graph,
-    // so the recoloured result fed the scene state and the lock compounded.
-    vec3 colouredSource = mix(source.rgb, palette * (0.35 + luminance(source.rgb)), clamp(uGrip, 0.0, 1.0));
+    vec3 colouredSource = mix(source.rgb, palette * (0.35 + luminance(source.rgb)), 0.68);
     vec3 colour = colouredSource * pulse + palette * ribbons * (0.28 + flow * 0.35);
 
     fragColor = vec4(colour, max(source.a, clamp(ribbons + flow * 0.2, 0.0, 1.0)));
@@ -482,8 +478,8 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
         fragment: FLOW_FIELD_COMPOSITOR_FRAGMENT,
         motion: { port: 'motion', fragment: FLOW_FIELD_MOTION_FRAGMENT },
         presenceFlags: ['palette'],
-        uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5, uGrip: 0.55 },
-        parameters: { amount: 1, hue: 0.2, breath: 0.5, grip: 0.55 },
+        uniforms: { uAmount: 1, uHue: 0.2, uBreath: 0.5 },
+        parameters: { amount: 1, hue: 0.2, breath: 0.5 },
         bindings: [
             {
                 feature: 'bass',
@@ -494,36 +490,12 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
                 curve: 'smooth',
             },
             {
-                // The palette phase turns at a music-set speed instead of tracking the centroid's
-                // level. Bound as a value, `hue` parked wherever the centroid sat — near-constant
-                // on mastered material — and the stage's colour locked for entire runs. Integrated,
-                // the phase keeps moving for as long as the track does.
-                //
-                // Slowly: a rotation every ninety seconds to eight minutes. The first range turned
-                // up to a full rotation in half a minute, and the scene state remembers for
-                // seconds — stamps a quarter-turn apart share the frame, and complementary hues
-                // average to grey. Measured: collision-energy scenes fell from 0.68 to 0.17 mean
-                // saturation. The phase must move slower than the memory forgets.
                 feature: 'spectralCentroid',
-                role: 'complexity',
-                mode: 'rate',
                 parameter: 'hue',
-                outputRange: [0.002, 0.011],
+                outputRange: [0, 1],
                 attack: 0.35,
                 release: 1.1,
                 curve: 'linear',
-                wrap: 1,
-            },
-            {
-                // How hard the palette recolours the flow. Deformation-roled so distribution can
-                // move it and the wander keeps it from sitting at one value.
-                feature: 'lowMid',
-                role: 'deformation',
-                parameter: 'grip',
-                outputRange: [0.3, 0.75],
-                attack: 0.3,
-                release: 1.2,
-                curve: 'smooth',
             },
             {
                 feature: 'rms',
@@ -753,25 +725,18 @@ export function createColorTransform(
 export function createGlowAndScatter(
     mode: typeof GLOW_MODES[number] = 'soft-bloom',
 ): VisualPluginDefinition {
-    // Soft bloom and edge glow scatter evenly: their motion fragment writes a zero vector at every
-    // texel by design. Declaring the port anyway offered the rest of the graph a field that moves
-    // nothing — and the canonical state warp, steered by the freshest motion output, could pick it
-    // and spend the scene warping the state by zero. A field that is identically zero is not a
-    // field; those modes now declare none.
-    const scatters = mode !== 'soft-bloom' && mode !== 'edge-glow';
-
     return defineShaderPlugin({
         id: `GlowAndScatter:${mode}`,
         category: 'postprocess',
         inputs: [{ name: 'source', type: 'color-texture', required: true }],
         outputs: [
             { name: 'color', type: 'color-texture' },
-            ...(scatters ? [{ name: 'motion', type: 'vector-field' as const }] : []),
+            { name: 'motion', type: 'vector-field' },
         ],
         // Optional secondary post-processing: the performance ladder gives this up at level five.
-        capabilities: ['glow', 'secondary-postprocess', ...(scatters ? ['vector-field'] : [])],
+        capabilities: ['glow', 'secondary-postprocess', 'vector-field'],
         fragment: GLOW_FRAGMENT,
-        ...(scatters ? { motion: { port: 'motion', fragment: GLOW_MOTION_FRAGMENT } } : {}),
+        motion: { port: 'motion', fragment: GLOW_MOTION_FRAGMENT },
         uniforms: { uMode: GLOW_MODES.indexOf(mode), uAmount: 0.8, uThreshold: 0.55 },
         parameters: { amount: 0.8, threshold: 0.55 },
         bindings: [
