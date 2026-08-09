@@ -316,9 +316,8 @@ export function createReactionDiffusionView(): VisualPluginDefinition {
         capabilities: ['reaction-diffusion-view', 'vector-field'],
         fragment: REACTION_VIEW_FRAGMENT,
         motion: { port: 'motion', fragment: REACTION_MOTION_FRAGMENT },
-        // The state it reads has its own memory, but the view of it does not: colour is recomputed
-        // from the current state every frame and written over whatever the target held. Compositing
-        // into an aged target leaves the pattern's own history visible behind it (ADR-0014).
+        // The simulation state has its own typed memory, but the colour view is recomputed from the
+        // current state each frame. Displayed image history remains scene-owned.
         blend: 'lighten',
         uniforms: { uContrast: 3 },
         parameters: { contrast: 3 },

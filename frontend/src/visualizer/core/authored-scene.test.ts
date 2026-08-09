@@ -91,6 +91,16 @@ describe('authored scene resolution', () => {
         expect(result.ok).toBe(true);
     });
 
+    test('a draft may resolve for editing but cannot enter playback without scene state', () => {
+        expect(resolveAuthoredScene(document(), REGISTRY).ok).toBe(true);
+
+        const playable = resolveAuthoredScene(document(), REGISTRY, { requireSceneState: true });
+        expect(playable.ok).toBe(false);
+        if (playable.ok) return;
+        expect(playable.problems.map((problem) => problem.detail))
+            .toContain('scene requires exactly one temporal combine; found 0');
+    });
+
     test('refuses a version it does not understand rather than misreading it', () => {
         const result = resolveAuthoredScene({ ...document(), version: 99 }, REGISTRY);
 

@@ -254,6 +254,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
     let layers = layersForGraph(scene.graph);
     let crossfades: readonly Crossfade[] = [];
     runtime.setGraph(scene.graph, instances);
+    let clearSceneHistory = true;
 
     let lostHandled = false;
 
@@ -498,13 +499,16 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * departing image is left in the feedback buffer for its replacement rather than lost.
      */
     const retiringLayers = (): VisualLayer[] => retiring.flatMap((entry) => {
+        if (!entry.active.node.definition.temporalCombine) {
+            return [];
+        }
         const colour = entry.active.node.definition.outputs.find((port) => port.type === 'color-texture');
         const resource = colour && entry.active.node.outputs[colour.name];
         if (!resource) {
             return [];
         }
 
-        return [createLayer(`retiring:${entry.active.instanceId}`, resource, {
+        return [createLayer(resource, resource, {
             order: 1000,
             blendMode: 'screen',
             opacity: retirementOpacity(entry.retirement),
@@ -526,7 +530,11 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         }
 
         const previousInstances = instances;
+        const previousResourceNamespace = scene.graph.resourceNamespace;
         scene = result.scene;
+        if (scene.graph.resourceNamespace !== previousResourceNamespace) {
+            clearSceneHistory = true;
+        }
         // Incremental rebuilds reuse unchanged instances. A genuinely new scene recreates all of them,
         // even when random selection happens to choose some of the same plugin ids.
         const rebuilt = instantiate(
@@ -567,13 +575,21 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
         // activation weight of ten and is in nearly every scene, so it drew that id constantly. The
         // scheduler then read a one-second-old plugin as arbitrarily mature and its minimum plugin
         // age, which exists to stop the graph churning, did nothing.
-        // A timestamp survives only where the same definition holds the same id: that is the same
-        // plugin still running, not a new one inheriting a slot.
+        // A timestamp survives only where the definition and compiled outputs are unchanged: a new
+        // scene may reuse the same instance id while owning a different resource namespace.
         const arriving = new Map(
-            instances.map((entry) => [entry.instanceId, entry.node.definition.id] as const),
+            instances.map((entry) => [entry.instanceId, {
+                definitionId: entry.node.definition.id,
+                outputs: entry.node.outputs,
+            }] as const),
         );
         for (const departing of departingInstances) {
-            if (arriving.get(departing.instanceId) !== departing.node.definition.id) {
+            const replacement = arriving.get(departing.instanceId);
+            const sameResources = replacement
+                && Object.entries(departing.node.outputs)
+                    .every(([port, resource]) => replacement.outputs[port] === resource)
+                && Object.keys(replacement.outputs).length === Object.keys(departing.node.outputs).length;
+            if (replacement?.definitionId !== departing.node.definition.id || !sameResources) {
                 activatedAt.delete(departing.instanceId);
             }
         }
@@ -617,7 +633,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
      * graph being drawn and is no reason to blank the screen.
      */
     const applyAuthored = (document: AuthoredScene): AuthoredProblem[] => {
-        const resolved = resolveAuthoredScene(document, registry);
+        const resolved = resolveAuthoredScene(document, registry, { requireSceneState: true });
         if (!resolved.ok) {
             sceneProblems = resolved.problems;
             return resolved.problems;
@@ -732,7 +748,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     0,
                 );
 
-                return runtime.renderFrame({
+                const stats = runtime.renderFrame({
                     clock: frame.clock,
                     features: frame.features,
                     deltaSeconds: frame.deltaSeconds,
@@ -748,7 +764,7 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                     grade,
                     // A seek or a new track lands on unrelated material; keeping the old image in the
                     // scene's historical slots would drag the previous passage across the new one.
-                    clearHistory: frame.clearTransients,
+                    clearHistory: frame.clearTransients || clearSceneHistory,
                     clearTransients: frame.clearTransients,
                     controls: frame.controls,
                     profile: frame.profile,
@@ -758,6 +774,8 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                         emitting: entry.retirement.emitting,
                     })),
                 });
+                clearSceneHistory = false;
+                return stats;
             },
 
             problems() {
@@ -1080,7 +1098,12 @@ function instantiate(
         const definition = node.definition;
         const existing = reusable.get(node.instanceId);
 
-        if (existing && existing.node.definition.id === definition.id) {
+        if (
+            existing
+            && existing.node.definition.id === definition.id
+            && Object.entries(node.outputs).every(([port, resource]) => existing.node.outputs[port] === resource)
+            && Object.keys(existing.node.outputs).length === Object.keys(node.outputs).length
+        ) {
             kept.add(node.instanceId);
             // Carries state and smoothed parameters across; only the graph position is refreshed.
             return {
@@ -1118,6 +1141,7 @@ function createInstance(
         const instance = definition.create({
             instanceId: node.instanceId,
             seed,
+            outputs: node.outputs,
             registerShader: (source) => device.registerShader(source),
         });
 

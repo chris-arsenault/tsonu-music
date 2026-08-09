@@ -7,9 +7,10 @@
  */
 
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
-import { compileGraph, type CompiledGraph } from './graph';
+import { compileSceneGraph, portsCompatible, type CompiledGraph, type GraphNode } from './graph';
 import {
     DERIVED_JOIN,
+    DERIVED_STATE,
     displacesHistory,
     grammarViolations,
     REDUCED_GRAMMAR,
@@ -25,6 +26,7 @@ import {
     isBranchJoiner,
     isImagePortType,
     unabsorbedOutputs,
+    instanceIdFor,
     wireScene,
     type AssetResource,
     type WiredScene,
@@ -229,6 +231,7 @@ export function settleScene(
         context.assetResources ?? [],
         createRng(`${entropy}:loops`),
         theme.grammar.maximumFeedbackLoops,
+        false,
     );
 
     let wired = rewire();
@@ -276,9 +279,18 @@ export function settleScene(
         // definition made the set smaller than the node count on their own.
         let pruned = false;
         for (let pass = 0; pass < plugins.length; pass += 1) {
-            const contributing = contributingPluginIds(wired);
-            const distinctDefinitions = new Set(wired.nodes.map((node) => node.definition.id)).size;
-            if (contributing.size >= distinctDefinitions) {
+            const stateful = withCanonicalState(wired, entropy, schedulerContext.available);
+            if (!stateful) {
+                return {
+                    ok: false,
+                    failure: { reason: 'compile', detail: 'canonical scene-state nodes are unavailable' },
+                };
+            }
+            const contributing = contributingPluginIds(stateful);
+            const disconnected = wired.nodes
+                .map((node) => node.definition.id)
+                .filter((definitionId) => !contributing.has(definitionId));
+            if (disconnected.length === 0) {
                 break;
             }
 
@@ -307,6 +319,15 @@ export function settleScene(
         }
     }
 
+    const stateful = withCanonicalState(wired, entropy, schedulerContext.available);
+    if (!stateful) {
+        return {
+            ok: false,
+            failure: { reason: 'compile', detail: 'canonical scene-state nodes are unavailable' },
+        };
+    }
+    wired = stateful;
+
     // How the scene is joined, which counts alone cannot express. Checked after the prune above, so a
     // scene that only reaches two branches by keeping a disconnected one is rejected rather than
     // counted.
@@ -321,12 +342,99 @@ export function settleScene(
         };
     }
 
-    const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
+    const compiled = compileSceneGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings, entropy);
     if (!compiled.ok) {
         return { ok: false, failure: { reason: 'compile', detail: compiled.errors.join('; ') } };
     }
 
     return { ok: true, plugins, wired, graph: compiled.graph };
+}
+
+/**
+ * Wraps the fully joined fresh scene in the one graph-owned recursive image state.
+ *
+ * The state nodes are derived rather than selected. This keeps the invariant independent of which
+ * plugin families the scheduler happened to draw and prevents a local plugin self-loop from standing
+ * in for scene memory.
+ */
+function withCanonicalState(
+    material: WiredScene,
+    entropy: string,
+    catalog: readonly VisualPluginDefinition[],
+): WiredScene | undefined {
+    const terminals = unabsorbedOutputs(material);
+    if (terminals.length !== 1) {
+        return undefined;
+    }
+
+    const fieldOutputs = material.nodes.flatMap((node) => node.definition.outputs
+        .filter((output) => isMotionSource(output.type))
+        .map((output) => ({ instanceId: node.instanceId, port: output.name, type: output.type })));
+
+    const warpCandidates = catalog.filter((definition) =>
+        definition.capabilities.includes(DERIVED_STATE)
+        && definition.capabilities.includes('scene-history-warp')
+        && definition.inputs.every((input) =>
+            !input.required
+            || input.type === 'color-texture'
+            || fieldOutputs.some((output) => portsCompatible(output.type, input.type))));
+    const combineCandidates = catalog.filter((definition) =>
+        definition.capabilities.includes(DERIVED_STATE)
+        && definition.temporalCombine !== undefined);
+    if (warpCandidates.length === 0 || combineCandidates.length === 0) {
+        return undefined;
+    }
+
+    const rng = createRng(`${entropy}:scene-state`);
+    const warpDefinition = rng.pick(warpCandidates) ?? warpCandidates[0];
+    const combineDefinition = rng.pick(combineCandidates) ?? combineCandidates[0];
+    const warp: GraphNode = { instanceId: instanceIdFor(warpDefinition, 0), definition: warpDefinition };
+    const combine: GraphNode = {
+        instanceId: instanceIdFor(combineDefinition, 0),
+        definition: combineDefinition,
+    };
+    const contract = combineDefinition.temporalCombine!;
+    const sourceInput = warpDefinition.inputs.find((input) => input.name === 'source');
+    if (!sourceInput) {
+        return undefined;
+    }
+
+    const edges = [
+        ...material.edges,
+        {
+            from: terminals[0],
+            to: { instanceId: combine.instanceId, port: contract.sourceInput },
+        },
+        {
+            from: { instanceId: combine.instanceId, port: contract.output },
+            to: { instanceId: warp.instanceId, port: sourceInput.name },
+            feedback: true,
+        },
+        {
+            from: { instanceId: warp.instanceId, port: 'color' },
+            to: { instanceId: combine.instanceId, port: contract.historyInput },
+        },
+    ];
+
+    const fieldInput = warpDefinition.inputs.find((input) => isMotionSource(input.type));
+    if (fieldInput) {
+        const field = [...fieldOutputs].reverse()
+            .find((output) => portsCompatible(output.type, fieldInput.type));
+        if (!field) {
+            return undefined;
+        }
+        edges.push({
+            from: { instanceId: field.instanceId, port: field.port },
+            to: { instanceId: warp.instanceId, port: fieldInput.name },
+        });
+    }
+
+    return {
+        ...material,
+        nodes: [...material.nodes, warp, combine],
+        edges,
+        present: { instanceId: combine.instanceId, port: contract.output },
+    };
 }
 
 function buildSceneAttempt(
@@ -598,7 +706,11 @@ export function materialBranchCount(scene: WiredScene): number {
     for (const node of scene.nodes) {
         const producesColour = node.definition.outputs.some((port) => port.type === 'color-texture');
 
-        if (producesColour && !colourSinks.has(node.instanceId)) {
+        if (
+            producesColour
+            && !node.definition.capabilities.includes(DERIVED_STATE)
+            && !colourSinks.has(node.instanceId)
+        ) {
             roots.add(node.instanceId);
         }
     }

@@ -1,16 +1,7 @@
-/**
- * The persistence primitive `defineShaderPlugin` gives a compositing producer (ADR-0014).
- */
+/** Current-frame behavior of the generic fullscreen plugin helper. */
 
 import { describe, expect, test } from 'vitest';
-import {
-    DEFAULT_SURVIVAL,
-    SURVIVAL_PARAMETER,
-    character,
-    decayShaderId,
-    defineShaderPlugin,
-    driftShaderId,
-} from './define';
+import { character, defineShaderPlugin } from './define';
 import { silentFeatureBus } from '../core/features';
 import { createImpactBus } from '../core/impact';
 import type { RenderPass } from '../core/passes';
@@ -85,128 +76,35 @@ function registeredShaders(definition: VisualPluginDefinition): string[] {
     return shaders;
 }
 
-describe('a compositing colour producer ages its target', () => {
+describe('a generic shader plugin produces a current-frame value', () => {
     const compositing = plugin({ blend: 'lighten' });
 
-    test('the decay pass runs before the plugin draws', () => {
+    test('one pass draws the plugin output', () => {
         const passes = passesOf(compositing);
 
-        expect(passes).toHaveLength(2);
-        expect(passes[0]).toMatchObject({
-            shader: decayShaderId('Fixture'),
-            output: 'out.color',
-            blend: 'multiply',
-            clear: false,
-        });
-        expect(passes[1]).toMatchObject({ shader: 'Fixture', blend: 'lighten' });
-    });
-
-    test('the decay reads nothing, so it needs no second slot', () => {
-        expect(passesOf(compositing)[0]?.inputs).toBeUndefined();
-    });
-
-    test('the plugin pass cannot clear the memory it is compositing into', () => {
-        const insistent = plugin({ blend: 'lighten', clear: true });
-
-        expect(passesOf(insistent)[1]).toMatchObject({ clear: false });
-    });
-
-    test('survival is an ordinary parameter, so it can be bound', () => {
-        expect(compositing.parameters?.[SURVIVAL_PARAMETER]).toBe(DEFAULT_SURVIVAL);
-    });
-
-    test('a plugin stating its own survival keeps it', () => {
-        const slow = plugin({ blend: 'lighten', parameters: { survival: 0.95 } });
-
-        expect(slow.parameters?.[SURVIVAL_PARAMETER]).toBe(0.95);
-    });
-
-    test('the decay shader is registered alongside the plugin\'s own', () => {
-        expect(registeredShaders(compositing)).toContain(decayShaderId('Fixture'));
-    });
-
-    test('the extra pass is counted, so the performance ladder budgets for it', () => {
-        expect(compositing.cost.renderPasses).toBe(2);
-    });
-});
-
-describe('a retained producer carries its memory along the field', () => {
-    const drifting = plugin({
-        blend: 'lighten',
-        inputs: [{ name: 'field', type: 'vector-field', required: false }],
-    });
-
-    function aged(previous: Record<string, string>, inputs: Record<string, string>) {
-        const instance = drifting.create({ instanceId: 'f', seed: 0.5, registerShader: () => undefined });
-        instance.initialize();
-
-        return instance.render({
-            inputs,
-            outputs: { color: 'out.color' },
-            previous,
-            renderWidth: 64,
-            renderHeight: 64,
-        })[0];
-    }
-
-    test('the ageing pass samples the previous frame through the field', () => {
-        expect(aged({ color: 'out.color' }, { field: 'in.field' })).toMatchObject({
-            shader: driftShaderId('Fixture'),
-            inputs: { uPrevious: 'out.color', uField: 'in.field' },
-            output: 'out.color',
-            blend: 'none',
-            clear: false,
-        });
-    });
-
-    test('the colour output declares the retention that buys the second slot', () => {
-        expect(drifting.outputs.find((port) => port.name === 'color')?.retained).toBe(true);
-    });
-
-    test('a second slot is sampled even with no field, because multiply would age the wrong one', () => {
-        // The multiply decay lets the blender read the destination. On a ping-ponged resource that
-        // is the write slot — the frame before last — so the memory split into two lineages
-        // advancing on alternate frames. With a slot allocated the pass samples the read slot and
-        // writes the write slot, which is a copy when nothing displaces it.
-        expect(aged({ color: 'out.color' }, {})).toMatchObject({
-            shader: driftShaderId('Fixture'),
-            inputs: { uPrevious: 'out.color' },
-            blend: 'none',
-        });
-    });
-
-    test('no second slot planned falls back too, rather than sampling the target it writes', () => {
-        expect(aged({}, { field: 'in.field' })).toMatchObject({ blend: 'multiply' });
-    });
-});
-
-describe('a producer that replaces its target is left alone', () => {
-    const replacing = plugin();
-
-    test('no decay pass, because it would be overwritten in the same frame', () => {
-        const passes = passesOf(replacing);
-
         expect(passes).toHaveLength(1);
-        expect(passes[0]).toMatchObject({ shader: 'Fixture', blend: 'none' });
+        expect(passes[0]).toMatchObject({
+            shader: 'Fixture',
+            output: 'out.color',
+            blend: 'lighten',
+            clear: true,
+        });
     });
 
-    test('no survival parameter, because nothing survives a replacement', () => {
-        expect(replacing.parameters?.[SURVIVAL_PARAMETER]).toBeUndefined();
+    test('only the plugin shader is registered', () => {
+        expect(registeredShaders(compositing)).toEqual(['Fixture']);
     });
 
-    test('no decay shader registered', () => {
-        expect(registeredShaders(replacing)).not.toContain(decayShaderId('Fixture'));
+    test('the cost matches the pass that runs', () => {
+        expect(compositing.cost.renderPasses).toBe(1);
     });
-});
 
-describe('persistence is for colour', () => {
-    test('a compositing pass writing a field gets no decay', () => {
-        const field = plugin({
-            blend: 'add',
-            outputs: [{ name: 'field', type: 'vector-field' }],
+    test('an explicitly non-clearing state pass remains non-clearing', () => {
+        const state = plugin({
+            clear: false,
+            outputs: [{ name: 'field', type: 'reaction-diffusion-state' }],
         });
 
-        expect(passesOf(field)).toHaveLength(1);
-        expect(field.parameters?.[SURVIVAL_PARAMETER]).toBeUndefined();
+        expect(passesOf(state)[0]).toMatchObject({ clear: false });
     });
 });

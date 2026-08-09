@@ -5,7 +5,7 @@
  * scene take its colour from the album palette without any plugin knowing where the palette came from.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON, GLSL_HISTORY } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
 
 const LAYER_MIXER_FRAGMENT = `#version 300 es
@@ -146,54 +146,6 @@ void main() {
     }
 
     fragColor = source * weight;
-}`;
-
-const FEEDBACK_INJECTOR_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform sampler2D uHistory;
-uniform vec2 uResolution;
-uniform float uMode;
-uniform float uAmount;
-uniform float uDecay;
-uniform float uDelta;
-${GLSL_COMMON}
-${GLSL_HISTORY}
-
-void main() {
-    vec4 incoming = texture(uSource, vUv);
-    // uDecay is the fraction surviving one second, so a trail is a duration whatever rate the
-    // display runs at, and the read is bounded. See GLSL_HISTORY and ADR-0012.
-    vec4 previous = history(uHistory, vUv, uDecay, uDelta);
-    float weight = uAmount;
-
-    if (uMode < 0.5) {                       // continuous
-        weight = uAmount;
-    } else if (uMode < 1.5) {                // event driven
-        weight = uAmount * step(0.15, luminance(incoming.rgb));
-    } else if (uMode < 2.5) {                // edge only
-        vec2 texel = 1.0 / uResolution;
-        float centre = luminance(incoming.rgb);
-        float neighbour = luminance(texture(uSource, vUv + texel).rgb);
-        weight = uAmount * clamp(abs(centre - neighbour) * 8.0, 0.0, 1.0);
-    } else if (uMode < 3.5) {                // masked by luminance
-        weight = uAmount * luminance(incoming.rgb);
-    } else if (uMode < 4.5) {                // decaying
-        weight = uAmount * 0.5;
-    } else {                                 // burst
-        weight = uAmount * smoothstep(0.5, 1.0, luminance(incoming.rgb));
-    }
-
-    // Composited, not summed. Each mode above already computes a spatial weight — an onset gate, an
-    // edge detector, a luminance mask — and every one of them is a statement about where new material
-    // belongs, which is exactly a coverage term. Added, those weights made the frame climb wherever
-    // they were nonzero for long enough; used as coverage they place material instead, and the output
-    // never exceeds the brighter of the trail and the source. See the feedback flow transform for why
-    // the operator rather than its coefficient was the thing to change.
-    fragColor = mix(previous, incoming, clamp(weight, 0.0, 1.0));
 }`;
 
 const PALETTE_MAPPER_FRAGMENT = `#version 300 es
@@ -490,10 +442,6 @@ export const MASK_SET_OPERATIONS: readonly typeof MASK_ROUTER_MODES[number][] = 
     'subtraction',
 ];
 
-export const FEEDBACK_INJECTOR_MODES = [
-    'continuous', 'event-driven', 'edge-only', 'masked', 'decaying', 'burst',
-] as const;
-
 export const COLOR_TRANSFORM_MODES = [
     'hue-rotate', 'saturation', 'contrast', 'solarize', 'invert', 'permute', 'duotone', 'quantize', 'luminance',
 ] as const;
@@ -691,59 +639,6 @@ export function createMaskRouter(
         }],
         character: character({ visualDensity: 0.4, geometricOrder: 0.7, dominance: 'supporting' }),
         activationWeight: 1,
-    });
-}
-
-export function createFeedbackInjector(
-    mode: typeof FEEDBACK_INJECTOR_MODES[number] = 'continuous',
-): VisualPluginDefinition {
-    return defineShaderPlugin({
-        id: `FeedbackInjector:${mode}`,
-        category: 'compositor',
-        inputs: [
-            { name: 'source', type: 'color-texture', required: true },
-            // `decay` is the fraction surviving one second, which is the gain of any cycle closing
-            // here (ADR-0013).
-            {
-                name: 'history',
-                type: 'color-texture',
-                required: false,
-                gainParameter: 'decay',
-            },
-        ],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['feedback'],
-        fragment: FEEDBACK_INJECTOR_FRAGMENT,
-        uniforms: { uMode: FEEDBACK_INJECTOR_MODES.indexOf(mode), uAmount: 0.6, uDecay: 0.12 },
-        parameters: { amount: 0.6, decay: 0.12 },
-        bindings: [{
-            feature: 'lowMid',
-            role: 'deformation',
-            // Per second now, not per frame at sixty. The old [0.88, 0.98] was a survival of
-            // 0.0005 to 0.30 over a second once the exponent was applied.
-            parameter: 'decay',
-            // Raised with the combine. A ceiling of 0.35 per second was a trail of under a second,
-            // set when a longer one meant a brighter frame; compositing removes that coupling.
-            outputRange: [0.15, 0.9],
-            attack: 0.3,
-            release: 1,
-            curve: 'smooth',
-        }, {
-            feature: 'rms',
-            role: 'intensity',
-            parameter: 'amount',
-            outputRange: [0.25, 0.85],
-            attack: 0.1,
-            release: 0.5,
-            curve: 'smooth',
-        }],
-        character: character({ persistence: 0.95, visualDensity: 0.6, dominance: 'supporting' }),
-        feedbackPort: 'history',
-        // Accumulating into the target is the point, so it must not be cleared.
-        clear: false,
-        memoryCost: 2,
-        deactivationPolicy: 'handoff-feedback',
-        activationWeight: 1.2,
     });
 }
 

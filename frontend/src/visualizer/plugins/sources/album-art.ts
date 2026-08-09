@@ -196,10 +196,9 @@ function derivation(config: DerivationConfig) {
                 shader: config.shaderId,
                 inputs: { [config.sampler]: art },
                 output: render.outputs[config.outputPort],
-                // Artwork is a texture the plugin transforms, not a frame it generates, and the
-                // replacement leaves nothing of the target for a clear to remove (ADR-0014).
+                // Current-frame transform of the artwork texture.
                 blend: 'none',
-                clear: false,
+                clear: true,
                 uniforms: config.uniforms,
             }];
         },
@@ -271,7 +270,7 @@ export function createAlbumArtSource(): VisualPluginDefinition {
                         inputs: { uArt: art },
                         output: render.outputs.color,
                         blend: 'none',
-                        clear: false,
+                        clear: true,
                         uniforms: { uOpacity: 1, uZoom: 1, uFocal: [0.5, 0.5] },
                     }];
                 },

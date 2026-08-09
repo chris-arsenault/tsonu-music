@@ -376,7 +376,7 @@ describe('mask dimensions', () => {
 
         const flow = graph?.order.find((node) => node.instanceId.startsWith('FeedbackFlowTransform'));
         expect(flow?.inputs.field).toBeDefined();
-        expect(flow?.previous.history).toBeDefined();
+        expect(flow?.previous).toEqual({});
     });
 
     test('a mask is a physics surface particles reflect from', () => {

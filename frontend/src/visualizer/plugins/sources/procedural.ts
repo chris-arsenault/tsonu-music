@@ -518,9 +518,8 @@ export function createProceduralTextureSource(
         capabilities: ['procedural', 'vector-field'],
         fragment: PROCEDURAL_TEXTURE_FRAGMENT,
         motion: { port: 'motion', fragment: PROCEDURAL_TEXTURE_MOTION },
-        // Composited into the aged frame rather than written over it (ADR-0014). Taken as the
-        // brighter of the two, so the target is bounded by the brightest pattern ever drawn into it
-        // and what it holds where the new pattern is darker is the wake of where the pattern was.
+        // The target is cleared first; lighten therefore writes this frame's pattern without owning
+        // a second image history beside the canonical scene state.
         blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,
@@ -567,9 +566,7 @@ export function createParametricCurveSource(
         capabilities: ['procedural', 'parametric-curve', 'vector-field'],
         fragment: PARAMETRIC_CURVE_FRAGMENT,
         motion: { port: 'motion', fragment: PARAMETRIC_CURVE_MOTION },
-        // A curve is thin, so almost every pixel it writes is a pixel it did not write last frame.
-        // Compositing is the whole difference between a curve that redraws itself in a new place and
-        // a curve that leaves the track of where it has been.
+        // Current-frame material. The scene-state recurrence owns the track it leaves over time.
         blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,

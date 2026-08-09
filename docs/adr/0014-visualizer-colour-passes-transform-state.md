@@ -1,6 +1,6 @@
 # 0014 — A colour pass transforms state; it never generates a frame
 
-- Status: Proposed
+- Status: Rejected by [0015](./0015-visualizer-single-graph-owned-scene-state.md)
 - Date: 2026-08-09
 - Amends: [0013](./0013-visualizer-uniform-node-state.md)
 

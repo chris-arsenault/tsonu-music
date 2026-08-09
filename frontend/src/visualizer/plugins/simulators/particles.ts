@@ -6,16 +6,7 @@
  * textures. No texture is used as a substitute for an emitter or a force configuration.
  */
 
-import {
-    character,
-    decayPass,
-    decayShaderSource,
-    defineShaderPlugin,
-    GLSL_COMMON,
-    GLSL_HISTORY,
-    SURVIVAL_BINDING,
-    SURVIVAL_PARAMETER,
-} from '../define';
+import { character } from '../define';
 import type { ParameterBinding } from '../../core/bindings';
 import { resourceIdFor } from '../../core/graph';
 import type {
@@ -238,25 +229,6 @@ void main() {
     fragColor = vec4(vColor, 0.9);
 }`;
 
-const TRAIL_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uSource;
-uniform sampler2D uHistory;
-uniform float uDecay;
-uniform float uAmount;
-uniform float uDelta;
-${GLSL_COMMON}
-${GLSL_HISTORY}
-
-void main() {
-    vec4 previous = history(uHistory, vUv, uDecay, uDelta);
-    vec4 incoming = texture(uSource, vUv) * uAmount;
-    fragColor = max(previous, incoming);
-}`;
-
 export function createParticleEmitter(mode: EmitterMode = 'point'): VisualPluginDefinition {
     const id = `ParticleEmitter:${mode}`;
 
@@ -300,7 +272,8 @@ export function createParticleEmitter(mode: EmitterMode = 'point'): VisualPlugin
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
-            const resource = resourceIdFor(context.instanceId, EMITTER_OUTPUT);
+            const resource = context.outputs?.[EMITTER_OUTPUT]
+                ?? resourceIdFor(context.instanceId, EMITTER_OUTPUT);
 
             return semanticInstance((frame) => {
                 const previous = frame.readValue?.<EmitterList>(frame.inputs.previous) ?? [];
@@ -360,7 +333,8 @@ export function createParticleForceField(mode: ForceMode = 'vortex'): VisualPlug
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
-            const resource = resourceIdFor(context.instanceId, FORCE_OUTPUT);
+            const resource = context.outputs?.[FORCE_OUTPUT]
+                ?? resourceIdFor(context.instanceId, FORCE_OUTPUT);
 
             return semanticInstance((frame) => {
                 const previous = frame.readValue?.<ForceList>(frame.inputs.previous) ?? [];
@@ -443,7 +417,8 @@ export function createParticleCollider(mode: ColliderMode = 'frame'): VisualPlug
         deactivationPolicy: 'immediate',
 
         create(context): VisualPluginInstance {
-            const resource = resourceIdFor(context.instanceId, COLLIDER_OUTPUT);
+            const resource = context.outputs?.[COLLIDER_OUTPUT]
+                ?? resourceIdFor(context.instanceId, COLLIDER_OUTPUT);
 
             return semanticInstance((frame) => {
                 const previous = frame.readValue?.<ColliderList>(frame.inputs.previous) ?? [];
@@ -544,7 +519,8 @@ export function createParticleSimulator(): VisualPluginDefinition {
         deactivationPolicy: 'drain',
 
         create(context): VisualPluginInstance {
-            const resource = resourceIdFor(context.instanceId, STATE_OUTPUT);
+            const resource = context.outputs?.[STATE_OUTPUT]
+                ?? resourceIdFor(context.instanceId, STATE_OUTPUT);
             const world = createParticleWorld(PARTICLE_CAPACITY);
             const emissionCredit = new Map<string, number>();
             const randomState = new Map<string, number>();
@@ -646,8 +622,8 @@ export function createParticleRenderer(
             { name: 'wake', type: 'vector-field', required: false },
         ],
         capabilities: ['particle-rendering', 'vector-field'],
-        // Six passes: mask, decay, colour, wake, and the two debug draws.
-        cost: { gpu: 2, cpu: 1, memory: 1, renderPasses: 6, qualityScalable: true, dominant: false },
+        // Five passes: mask, colour, wake, and the two debug draws.
+        cost: { gpu: 2, cpu: 1, memory: 1, renderPasses: 5, qualityScalable: true, dominant: false },
         character: character({
             visualDensity: 0.6,
             motionEnergy: 0.8,
@@ -662,12 +638,8 @@ export function createParticleRenderer(
             brightness: 1,
             debug: 0,
             wakeScale: 1.6,
-            // Bodies are sparse and fast, so a short memory is the difference between reading as
-            // moving objects and reading as a scatter of dots that changes every frame. Longer than
-            // the catalog default for that reason (ADR-0014).
-            [SURVIVAL_PARAMETER]: 0.75,
         },
-        defaultBindings: [SURVIVAL_BINDING, {
+        defaultBindings: [{
             // How hard a body pulls the image it passes through. Large-scale force, because this is
             // the parameter that decides whether the bodies are drawn over the picture or are
             // moving it.
@@ -730,9 +702,6 @@ export function createParticleRenderer(
                         vertex: PARTICLE_VERTEX,
                         fragment: PARTICLE_WAKE_FRAGMENT,
                     });
-                    for (const source of decayShaderSource(`ParticleRenderer:${mode}`)) {
-                        context.registerShader(source);
-                    }
                 },
 
                 activate() {
@@ -795,15 +764,6 @@ export function createParticleRenderer(
 
                 render(render): RenderPass[] {
                     const passes: RenderPass[] = [
-                        // Bodies are drawn into a target that still holds where they were, so what
-                        // the frame shows is a trail rather than a fresh scatter of discs. Ahead of
-                        // the colour pass, because that is what it composites into (ADR-0014).
-                        ...(render.outputs.color
-                            // Decay, never drift: the renderer's only input is the particle state,
-                            // and it publishes the wake rather than reading one, so there is no
-                            // field here for a memory to travel along.
-                            ? [decayPass(`ParticleRenderer:${mode}`, render.outputs.color)]
-                            : []),
                         {
                             kind: 'geometry',
                             shader: maskShader,
@@ -824,10 +784,8 @@ export function createParticleRenderer(
                             primitive: 'points',
                             vertexCount: count,
                             output: render.outputs.color,
-                            // Taken as the brighter of the body and the decayed trail behind it, so
-                            // the target is bounded by the brightest body ever drawn into it.
                             blend: 'lighten',
-                            clear: false,
+                            clear: true,
                             // No static `uBrightness`: the resolved parameter carries it, and a
                             // pass-level default for a bound parameter is the shape that let two
                             // simulators integrate a fixed sixtieth of a second per frame.
@@ -897,58 +855,6 @@ export function createParticleRenderer(
             };
         },
     };
-}
-
-export function createParticleTrailInjector(): VisualPluginDefinition {
-    return defineShaderPlugin({
-        id: 'ParticleTrailInjector',
-        category: 'compositor',
-        inputs: [
-            { name: 'source', type: 'color-texture', required: true },
-            // `decay` is the fraction surviving one second, which is the gain of any cycle closing
-            // here (ADR-0013).
-            {
-                name: 'history',
-                type: 'color-texture',
-                required: false,
-                gainParameter: 'decay',
-            },
-        ],
-        outputs: [{ name: 'color', type: 'color-texture' }],
-        capabilities: ['feedback', 'particle-trails'],
-        fragment: TRAIL_FRAGMENT,
-        uniforms: { uDecay: 0.05, uAmount: 1 },
-        parameters: { decay: 0.05, amount: 1 },
-        bindings: [
-            {
-                feature: 'lowMid',
-                role: 'deformation',
-                // Per second; the old [0.86, 0.985] was 1e-4 to 0.40 once the per-frame exponent
-                // was applied.
-                parameter: 'decay',
-                outputRange: [0.01, 0.4],
-                attack: 0.35,
-                release: 1.2,
-                curve: 'smooth',
-            },
-            {
-                feature: 'rms',
-                role: 'intensity',
-                parameter: 'amount',
-                outputRange: [0.5, 1],
-                attack: 0.12,
-                release: 0.55,
-                curve: 'smooth',
-            },
-        ],
-        character: character({ persistence: 0.9, visualDensity: 0.6, dominance: 'supporting' }),
-        feedbackPort: 'history',
-        clear: false,
-        memoryCost: 2,
-        deactivationPolicy: 'handoff-feedback',
-        activationWeight: 4,
-        prefersWith: ['ParticleRenderer', 'ParticleSimulator'],
-    });
 }
 
 function semanticInstance(update: VisualPluginInstance['update']): VisualPluginInstance {

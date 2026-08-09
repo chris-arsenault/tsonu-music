@@ -7,7 +7,7 @@
  */
 
 import type { ParameterBinding } from '../core/bindings';
-import type { RenderPass, ResourceId } from '../core/passes';
+import { previousTexture, type RenderPass } from '../core/passes';
 import { impactAge, strongestImpact } from '../core/impact';
 import { historyDepthFraction } from '../core/performance';
 import type {
@@ -63,7 +63,7 @@ export interface SimpleShaderPlugin {
      * forward edge or a loop, and only the CPU side knows which. Without this the shader has to
      * assume, and `LayerMixer` assumed history: it raised its base weight to the frame delta on
      * every port, which is a survival, and 631 of its 643 source ports across 200 scenes carry a
-     * forward edge with nothing accumulating on it at all (ADR-0014).
+     * forward edge with nothing accumulating on it at all.
      */
     historyFlags?: string[];
     /**
@@ -100,167 +100,6 @@ export interface SimpleShaderPlugin {
 }
 
 /**
- * Persistence for a colour target, costing no memory (ADR-0014).
- *
- * A target can be decayed without being sampled. A fullscreen quad of `survival^Δt` drawn with
- * `multiply` leaves `dst · survival^Δt` behind, because the fixed-function blender reads the
- * destination — no texture fetch, so no second slot and no ping-pong. That is what lets every colour
- * producer in the catalog hold a memory without doubling the frame's target memory.
- *
- * Run ahead of a producer's own passes, it turns a pass that would have overwritten the frame into
- * one that adds to what is already there. The pair is bounded on its own: with a `lighten` combine
- * the target never exceeds the brightest contribution ever made to it, whatever the survival. The
- * bound needs no help from `core/loop-gain.ts`, and would get none — this loop closes through the
- * blender rather than through an edge, so `graphCycles` cannot see it.
- *
- * The rate is per second and corrected by `uDelta`, so a trail lasts the same wall-clock time at
- * thirty frames a second as at a hundred and forty-four.
- */
-export const SURVIVAL_PARAMETER = 'survival';
-
-/**
- * The input port a producer is displaced by, and the one its memory drifts along.
- *
- * Named rather than searched for by type: a plugin may read several fields, and the one its own
- * material moves with is the one its memory should move with too.
- */
-export const FIELD_INPUT = 'field';
-
-/** Fraction of a colour target surviving one second, when a plugin states no preference. */
-export const DEFAULT_SURVIVAL = 0.6;
-
-/**
- * How long the memory is, driven by how much new material is arriving.
- *
- * Inverted on purpose. A dense passage overwrites the frame quickly whatever the survival is, so
- * holding a long memory through one buries the picture; a sparse one has nothing to show but what it
- * remembers. Bound this way the trail lengthens as the track thins out, which is when there is room
- * for it — and the length of the memory becomes something the music moves rather than a constant.
- *
- * The ceiling is 0.9 a second, comfortably below the 1 at which the decay stops being a decay.
- */
-export const SURVIVAL_BINDING: ParameterBinding = {
-    feature: 'spectralFlux',
-    role: 'intensity',
-    parameter: SURVIVAL_PARAMETER,
-    outputRange: [0.9, 0.35],
-    attack: 0.8,
-    release: 2.5,
-    curve: 'smooth',
-};
-
-const DECAY_FRAGMENT = `#version 300 es
-precision highp float;
-out vec4 fragColor;
-
-uniform float uDelta;
-uniform float uSurvival;
-
-void main() {
-    // Drawn with 'multiply', so what lands in the target is its own contents times this.
-    float survival = uDelta > 0.0 ? pow(clamp(uSurvival, 0.0, 1.0), uDelta) : 1.0;
-
-    fragColor = vec4(survival);
-}`;
-
-/**
- * The same ageing, with the memory carried along the field instead of held in place.
- *
- * Decaying a target leaves a trail where the material was. Advecting it makes the trail flow, which
- * is the difference between a shape that moves across its own wake and a picture that goes somewhere.
- * It costs a texture read, so it costs the second slot a `retained` output asks for, and it is only
- * worth that where a field is wired.
- *
- * Read from behind: a field is a velocity in UV per second, so material travelling along `+field`
- * arrives from `uv − field·Δt`. That is the same sign convention `GLSL_RESAMPLE_MOTION` states, where
- * a transform reads at `source` and writes at `uv`.
- */
-const DRIFT_FRAGMENT = `#version 300 es
-precision highp float;
-in vec2 vUv;
-out vec4 fragColor;
-
-uniform sampler2D uPrevious;
-uniform sampler2D uField;
-uniform float uDelta;
-uniform float uSurvival;
-uniform float uPerturb;
-
-void main() {
-    float survival = uDelta > 0.0 ? pow(clamp(uSurvival, 0.0, 1.0), uDelta) : 1.0;
-    vec2 velocity = texture(uField, clamp(vUv, 0.0, 1.0)).xy;
-    vec2 source = clamp(vUv - velocity * uPerturb * uDelta, 0.0, 1.0);
-
-    fragColor = texture(uPrevious, source) * survival;
-}`;
-
-/** The decay shader a plugin registers alongside its own. */
-export function decayShaderId(pluginId: string): string {
-    return `${pluginId}:decay`;
-}
-
-/** The drift shader, used in place of the decay where a previous frame is available. */
-export function driftShaderId(pluginId: string): string {
-    return `${pluginId}:drift`;
-}
-
-/** Both ageing shaders. Registered together, because which one runs is decided per frame. */
-export function decayShaderSource(pluginId: string): { id: string; vertex: string; fragment: string }[] {
-    return [
-        { id: decayShaderId(pluginId), vertex: QUAD_VERTEX_SHADER, fragment: DECAY_FRAGMENT },
-        { id: driftShaderId(pluginId), vertex: QUAD_VERTEX_SHADER, fragment: DRIFT_FRAGMENT },
-    ];
-}
-
-/**
- * The pass that ages a colour target, to run before anything writes into it this frame.
- *
- * `uSurvival` arrives from the plugin's own `survival` parameter, which the runtime merges into
- * every pass of the node — so binding it makes the memory itself follow the music.
- */
-export function decayPass(
-    pluginId: string,
-    output: ResourceId,
-    /** The previous frame, when the output is `retained` and the plan gave it a second slot. */
-    previous?: ResourceId,
-    /** The field to carry the memory along. Absent, the drift is the identity and only ages. */
-    field?: ResourceId,
-): RenderPass {
-    // The multiply decay is only correct on a single-buffered target.
-    //
-    // It carries no inputs and lets the blender read the destination, which is the target itself —
-    // right when there is one texture, wrong the moment the plan gives the resource two. A
-    // ping-ponged write slot holds the frame before last, so multiplying it aged a different image
-    // from the one presented and split the memory into two lineages advancing on alternate frames,
-    // each decayed by one frame's delta while being updated every other frame. Measured after the
-    // retention work landed: 49 of 362 decay passes, in 23% of scenes.
-    //
-    // So the choice is on the slot, not on the field. With a second slot the pass samples the read
-    // slot and writes the write slot, which is a copy when nothing displaces it — an unwired uField
-    // reads the device's empty texture, the velocity is zero, and the sample is taken at vUv.
-    if (!previous) {
-        return {
-            kind: 'fullscreen',
-            shader: decayShaderId(pluginId),
-            output,
-            blend: 'multiply',
-            clear: false,
-        };
-    }
-
-    return {
-        kind: 'fullscreen',
-        shader: driftShaderId(pluginId),
-        inputs: field ? { uPrevious: previous, uField: field } : { uPrevious: previous },
-        output,
-        // Replaces the write slot, which holds the frame before last. What is being preserved is the
-        // read slot, and this pass is what carries it across.
-        blend: 'none',
-        clear: false,
-    };
-}
-
-/**
  * Builds a definition for a plugin that is one fullscreen pass.
  *
  * Emits no passes when a required input is missing, so an incompletely wired scene degrades to a gap
@@ -269,25 +108,6 @@ export function decayPass(
 export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefinition {
     const shaderId = spec.id;
     const motionShaderId = `${spec.id}:motion`;
-
-    // A plugin that composites into a colour target needs that target to have been aged first, or
-    // the accumulation has no upper bound to converge to. A plugin that replaces its target does
-    // not: it is already a transform of whatever it read, and a decay ahead of it would be
-    // overwritten in the same frame. The declared blend says which of the two this is, so no plugin
-    // has to opt in.
-    // The first output, and only if it carries colour: that is the one the plugin's own pass writes,
-    // so a plugin whose primary product is a field is untouched by any of this even when it also
-    // publishes a colour port.
-    const primaryOutput = spec.outputs[0];
-    const colourOutput = primaryOutput?.type === 'color-texture' ? primaryOutput : undefined;
-    const persists = colourOutput !== undefined && (spec.blend ?? 'none') !== 'none';
-    const parameters = persists
-        ? { [SURVIVAL_PARAMETER]: DEFAULT_SURVIVAL, ...spec.parameters }
-        : spec.parameters;
-    const statesSurvival = spec.bindings?.some((binding) => binding.parameter === SURVIVAL_PARAMETER);
-    const bindings = persists && !statesSurvival
-        ? [SURVIVAL_BINDING, ...(spec.bindings ?? [])]
-        : spec.bindings;
 
     return {
         id: spec.id,
@@ -304,9 +124,6 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             name: output.name,
             type: output.type,
             required: false,
-            // The colour a compositing producer accumulates into is the one thing worth a second
-            // slot: it is the only output whose previous frame this plugin reads (ADR-0014).
-            ...(persists && output === colourOutput ? { retained: true } : {}),
         })),
         capabilities: spec.capabilities,
         cost: {
@@ -314,9 +131,8 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             cpu: 0,
             memory: spec.memoryCost ?? 1,
             // Publishing the displacement costs a second pass, and the cost accounting has to know
-            // or the performance controller budgets for a plugin that is not the one running. Ageing
-            // the colour target costs a third.
-            renderPasses: (spec.motion ? 2 : 1) + (persists ? 1 : 0),
+            // or the performance controller budgets for a plugin that is not the one running.
+            renderPasses: spec.motion ? 2 : 1,
             qualityScalable: true,
             dominant: spec.dominant ?? false,
         },
@@ -329,8 +145,8 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             incompatibleWith: spec.incompatibleWith,
             prefersWith: spec.prefersWith,
         },
-        parameters,
-        defaultBindings: bindings,
+        parameters: spec.parameters,
+        defaultBindings: spec.bindings,
         deactivationPolicy: spec.deactivationPolicy ?? 'fade',
 
         create(context): VisualPluginInstance {
@@ -356,11 +172,6 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         });
                     }
 
-                    if (persists) {
-                        for (const source of decayShaderSource(spec.id)) {
-                            context.registerShader(source);
-                        }
-                    }
                 },
 
                 activate() {
@@ -405,7 +216,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                 },
 
                 render(render): RenderPass[] {
-                    const inputs: Record<string, ResourceId> = {};
+                    const inputs: Record<string, NonNullable<RenderPass['inputs']>[string]> = {};
 
                     for (const input of spec.inputs) {
                         const sampler = input.sampler ?? defaultSampler(input.name);
@@ -415,10 +226,11 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         // compiler recorded `previous` for any historical edge, the render plan
                         // allocated the second slot, and the plugin then ignored both unless the port
                         // happened to carry the name it had declared.
-                        const resource = render.previous[input.name] ?? render.inputs[input.name];
+                        const previous = render.previous[input.name];
+                        const resource = previous ?? render.inputs[input.name];
 
                         if (resource) {
-                            inputs[sampler] = resource;
+                            inputs[sampler] = previous ? previousTexture(resource) : resource;
                         } else if (input.required) {
                             return [];
                         }
@@ -448,20 +260,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                             : {}),
                     };
 
-                    const colourTarget = colourOutput && render.outputs[colourOutput.name];
                     const passes: RenderPass[] = [];
-
-                    // Ahead of the plugin's own pass, so what it composites into is the aged frame
-                    // rather than a fresh one. A compositing pass over a target nobody ages is an
-                    // accumulation with no upper bound; over a target somebody clears, it is a redraw.
-                    if (persists && colourTarget) {
-                        passes.push(decayPass(
-                            spec.id,
-                            colourTarget,
-                            render.previous[colourOutput.name],
-                            render.inputs[FIELD_INPUT],
-                        ));
-                    }
 
                     passes.push({
                         kind: 'fullscreen',
@@ -469,12 +268,9 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
                         inputs,
                         output: render.outputs[spec.outputs[0]?.name],
                         blend: spec.blend ?? 'none',
-                        // No colour pass clears (ADR-0014). For a compositing one the target is the
-                        // memory it is adding to; for a replacing one the flag changes no pixel,
-                        // since a fullscreen quad with blend 'none' overwrites the target whether or
-                        // not it was cleared first. A pass writing a field or a mask keeps the flag,
-                        // because those are recomputed each frame by design.
-                        clear: colourOutput ? false : spec.clear ?? true,
+                        // Plugin outputs are current-frame values. Image history exists only in the
+                        // canonical scene-state resource, so targets never inherit stale pixels.
+                        clear: spec.clear ?? true,
                         uniforms,
                     });
 

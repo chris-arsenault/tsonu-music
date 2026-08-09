@@ -20,6 +20,7 @@ import type { ParameterBinding } from './bindings';
 import { COMPOSITE_BINDINGS, COMPOSITE_PARAMETERS } from './composite-grade';
 import {
     compileGraph,
+    compileSceneGraph,
     type CompileProblem,
     type CompiledGraph,
     type GraphNode,
@@ -236,6 +237,7 @@ export function edgeIdFor(
 export function resolveAuthoredScene(
     document: AuthoredScene,
     registry: PluginRegistry,
+    options: { requireSceneState?: boolean } = {},
 ): AuthoredResolution {
     if (document.version !== AUTHORED_SCENE_VERSION) {
         return {
@@ -330,7 +332,9 @@ export function resolveAuthoredScene(
         unsatisfied: [],
     };
 
-    const compiled = compileGraph(nodes, edges, wired.present, wired.assetBindings);
+    const compiled = options.requireSceneState
+        ? compileSceneGraph(nodes, edges, wired.present, wired.assetBindings, document.entropy)
+        : compileGraph(nodes, edges, wired.present, wired.assetBindings);
 
     if (!compiled.ok) {
         return {

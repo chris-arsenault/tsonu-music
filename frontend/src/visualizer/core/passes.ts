@@ -31,6 +31,16 @@ import type { PortType } from './plugin';
 
 export type ResourceId = string;
 
+/** A sampler read whose temporal version survives plugin pass construction. */
+export interface TextureRead {
+    resource: ResourceId;
+    frame: 'current' | 'previous';
+}
+
+export function previousTexture(resource: ResourceId): TextureRead {
+    return { resource, frame: 'previous' };
+}
+
 export type Primitive =
     | 'points'
     | 'lines'
@@ -41,7 +51,8 @@ export type Primitive =
 interface PassCommon {
     shader: ShaderId;
     /** Sampler uniform name to the resource bound to it. */
-    inputs?: Readonly<Record<string, ResourceId>>;
+    /** Plain resource ids are current-frame reads; historical reads must carry their frame. */
+    inputs?: Readonly<Record<string, ResourceId | TextureRead>>;
     uniforms?: Readonly<Record<string, UniformValue>>;
     /** Where the pass draws. Omitted means the graph's output for this plugin. */
     output?: ResourceId;
@@ -93,7 +104,7 @@ export function passInputs(passes: readonly RenderPass[]): ResourceId[] {
 
     for (const pass of passes) {
         for (const resource of Object.values(pass.inputs ?? {})) {
-            inputs.add(resource);
+            inputs.add(typeof resource === 'string' ? resource : resource.resource);
         }
     }
 

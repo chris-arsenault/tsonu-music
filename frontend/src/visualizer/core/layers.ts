@@ -90,6 +90,10 @@ export function blendForCharacter(character: SelectionCharacter): BlendMode {
  * editor can draw the real stack instead of a copy that might disagree with it.
  */
 export function layersForGraph(graph: CompiledGraph): VisualLayer[] {
+    if (graph.state && graph.present) {
+        return [createLayer(graph.state.stateResource, graph.present, { order: 0 })];
+    }
+
     const consumed = new Set<ResourceId>();
     for (const node of graph.order) {
         for (const resource of Object.values(node.inputs)) {

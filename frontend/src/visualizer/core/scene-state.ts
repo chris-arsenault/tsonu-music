@@ -1,0 +1,209 @@
+/** Pure validation for the one graph-owned recursive image state. */
+
+import type { CompileProblem, GraphNode, RenderGraphEdge } from './graph';
+import { DERIVED_STATE } from './grammar';
+import { isImagePortType } from './plugin';
+
+export interface CompiledSceneState {
+    combineInstanceId: string;
+    warpInstanceId: string;
+    stateResource: string;
+    materialRoots: string[];
+}
+
+export interface SceneStateAnalysis {
+    problems: CompileProblem[];
+    state?: CompiledSceneState;
+}
+
+function edgeCarriesImage(nodes: readonly GraphNode[], edge: RenderGraphEdge): boolean {
+    const sink = nodes.find((node) => node.instanceId === edge.to.instanceId);
+    const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+    return port !== undefined && isImagePortType(port.type);
+}
+
+function reachable(
+    start: string,
+    target: string,
+    edges: readonly RenderGraphEdge[],
+): boolean {
+    const outgoing = new Map<string, string[]>();
+    for (const edge of edges.filter((candidate) => !candidate.feedback)) {
+        const entries = outgoing.get(edge.from.instanceId) ?? [];
+        entries.push(edge.to.instanceId);
+        outgoing.set(edge.from.instanceId, entries);
+    }
+
+    const queue = [start];
+    const seen = new Set(queue);
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        if (current === target) {
+            return true;
+        }
+        for (const next of outgoing.get(current) ?? []) {
+            if (!seen.has(next)) {
+                seen.add(next);
+                queue.push(next);
+            }
+        }
+    }
+
+    return false;
+}
+
+function ancestorsOf(
+    target: string,
+    edges: readonly RenderGraphEdge[],
+): Set<string> {
+    const incoming = new Map<string, string[]>();
+    for (const edge of edges.filter((candidate) => !candidate.feedback)) {
+        const entries = incoming.get(edge.to.instanceId) ?? [];
+        entries.push(edge.from.instanceId);
+        incoming.set(edge.to.instanceId, entries);
+    }
+
+    const ancestors = new Set<string>([target]);
+    const queue = [target];
+    while (queue.length > 0) {
+        const current = queue.shift()!;
+        for (const previous of incoming.get(current) ?? []) {
+            if (!ancestors.has(previous)) {
+                ancestors.add(previous);
+                queue.push(previous);
+            }
+        }
+    }
+
+    return ancestors;
+}
+
+/**
+ * Validates the canonical form rather than accepting any graph containing a historical label.
+ *
+ * Exactly one combine owns the displayed state. Its output is read on the previous frame by a
+ * spatial warp, that warp reaches the combine's history input, and all fresh material reaches the
+ * combine's source input. This is the property the former edge-count checks approximated.
+ */
+export function analyzeSceneState(
+    nodes: readonly GraphNode[],
+    edges: readonly RenderGraphEdge[],
+    present?: { instanceId: string; port: string },
+): SceneStateAnalysis {
+    if (nodes.length === 0) {
+        return { problems: [] };
+    }
+
+    const problems: CompileProblem[] = [];
+    const combines = nodes.filter((node) => node.definition.temporalCombine !== undefined);
+    if (combines.length !== 1) {
+        problems.push({ detail: `scene requires exactly one temporal combine; found ${combines.length}` });
+        return { problems };
+    }
+
+    const combine = combines[0];
+    const contract = combine.definition.temporalCombine!;
+    const stateResource = `${combine.instanceId}.${contract.output}`;
+
+    if (!present || present.instanceId !== combine.instanceId || present.port !== contract.output) {
+        problems.push({
+            detail: `scene must present ${stateResource}`,
+            instanceId: combine.instanceId,
+            port: contract.output,
+        });
+    }
+
+    const sourceEdge = edges.find((edge) =>
+        !edge.feedback
+        && edge.to.instanceId === combine.instanceId
+        && edge.to.port === contract.sourceInput);
+    const historyEdge = edges.find((edge) =>
+        !edge.feedback
+        && edge.to.instanceId === combine.instanceId
+        && edge.to.port === contract.historyInput);
+
+    if (!sourceEdge) {
+        problems.push({
+            detail: 'temporal combine has no fresh-material input',
+            instanceId: combine.instanceId,
+            port: contract.sourceInput,
+        });
+    }
+    if (!historyEdge) {
+        problems.push({
+            detail: 'temporal combine has no transformed-history input',
+            instanceId: combine.instanceId,
+            port: contract.historyInput,
+        });
+    }
+
+    const previousImages = edges.filter((edge) => edge.feedback && edgeCarriesImage(nodes, edge));
+    if (previousImages.length !== 1) {
+        problems.push({ detail: `scene requires exactly one previous-frame image edge; found ${previousImages.length}` });
+        return { problems };
+    }
+
+    const previous = previousImages[0];
+    if (previous.from.instanceId !== combine.instanceId || previous.from.port !== contract.output) {
+        problems.push({
+            detail: 'previous-frame image must come from the temporal combine output',
+            edge: { from: previous.from, to: previous.to },
+        });
+    }
+
+    const warp = nodes.find((node) => node.instanceId === previous.to.instanceId);
+    if (!warp?.definition.capabilities.includes('scene-history-warp')) {
+        problems.push({
+            detail: 'previous-frame image must enter the scene history warp',
+            edge: { from: previous.from, to: previous.to },
+        });
+    }
+
+    if (historyEdge && !reachable(previous.to.instanceId, historyEdge.from.instanceId, edges)) {
+        problems.push({
+            detail: 'previous-frame image does not return through the history input',
+            edge: { from: previous.from, to: previous.to },
+        });
+    }
+
+    const freshAncestors = sourceEdge ? ancestorsOf(sourceEdge.from.instanceId, edges) : new Set<string>();
+    const forwardImageSources = new Set(
+        edges
+            .filter((edge) => {
+                const sink = nodes.find((node) => node.instanceId === edge.to.instanceId);
+                return !edge.feedback
+                    && edgeCarriesImage(nodes, edge)
+                    && !sink?.definition.capabilities.includes(DERIVED_STATE);
+            })
+            .map((edge) => edge.from.instanceId),
+    );
+    const materialRoots = nodes
+        .filter((node) =>
+            !node.definition.capabilities.includes(DERIVED_STATE)
+            && node.definition.outputs.some((output) => output.type === 'color-texture')
+            && !forwardImageSources.has(node.instanceId))
+        .map((node) => node.instanceId);
+
+    for (const root of materialRoots) {
+        if (!freshAncestors.has(root)) {
+            problems.push({
+                detail: `visible material root ${root} bypasses the scene state`,
+                instanceId: root,
+            });
+        }
+    }
+
+    if (problems.length > 0 || !warp) {
+        return { problems };
+    }
+
+    return {
+        problems,
+        state: {
+            combineInstanceId: combine.instanceId,
+            warpInstanceId: warp.instanceId,
+            stateResource,
+            materialRoots,
+        },
+    };
+}

@@ -1417,12 +1417,6 @@ Modes:
 
 Cost: low–medium
 
-### `ParticleTrailInjector`
-
-Feeds particle motion into feedback or a dedicated trail texture.
-
-Cost: low–medium
-
 ### `BoidSwarmSimulator`
 
 Agent behavior:
@@ -1781,24 +1775,6 @@ Modes:
 
 Cost: low
 
-### `TemporalTransform`
-
-Maintains bounded frame history.
-
-Modes:
-
-* Echo
-* Multi-tap delay
-* Slit scan
-* Time slices
-* Directional smear
-* Frame mosaic
-* Delayed mirror
-* Temporal difference
-* Frozen fragments
-
-Cost: medium
-
 ### `EdgeContourTransform`
 
 Modes:
@@ -1899,21 +1875,6 @@ Operations:
 * Threshold
 * Edge-only
 * Distance falloff
-
-Cost: low
-
-### `FeedbackInjector`
-
-Controls how a layer enters feedback.
-
-Modes:
-
-* Continuous
-* Event-driven
-* Edge-only
-* Masked
-* Decaying
-* Burst injection
 
 Cost: low
 
@@ -2205,7 +2166,6 @@ neither mutates nor rebuilds, and the quality ladder does not suppress plugins.
 * `ParticleEmitter`
 * `ParticleForceField`
 * `ParticleRenderer`
-* `ParticleTrailInjector`
 * `ReactionDiffusionSimulator`
 * `WaveFieldSimulator`
 * `ImpactCascadeSimulator`
@@ -2225,11 +2185,18 @@ neither mutates nor rebuilds, and the quality ladder does not suppress plugins.
 * `FlowFieldCompositor`
 * `LayerMixer`
 * `MaskRouter`
-* `FeedbackInjector`
 * `PaletteMapper`
 * `ColorTransform`
 * `GlowAndScatter`
 * `ToneMapper`
+
+### Derived scene state
+
+* `SceneHistoryWarp`
+* `SceneStateCombine`
+
+These nodes appear once in every complete scene and are assembled by the scene builder rather than
+selected as visual material. See ADR-0015.
 
 ## Secondary scope
 
@@ -2255,6 +2222,9 @@ neither mutates nor rebuilds, and the quality ladder does not suppress plugins.
 ---
 
 # 25. Example Compositions
+
+Each material graph below feeds the single `SceneHistoryWarp` and `SceneStateCombine` recurrence
+before presentation; the common derived suffix is omitted from the lists.
 
 ## Procedural Signal
 
@@ -2295,7 +2265,6 @@ ProceduralTextureSource
 ParticleSimulator
 + MaskParticleEmitter
 + ProceduralVectorField
-+ ParticleTrailInjector
 + FeedbackFlowTransform
 + AlbumArtPalette
 ```
@@ -2307,7 +2276,7 @@ AlbumArtSource
 + MaskSignedDistanceField
 + MaskEffectStencil
 + CoordinateWarpTransform
-+ FeedbackInjector
++ FeedbackFlowTransform
 + ColorTransform
 ```
 
@@ -2328,7 +2297,6 @@ ImpactCascadeSimulator
 + MaskBoundaryField
 + AudioImpulseField
 + ShockwaveTransform
-+ FeedbackInjector
 + GlowAndScatter
 ```
 

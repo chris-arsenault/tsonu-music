@@ -110,22 +110,8 @@ export interface PluginPort {
      *
      * Absent means one: the input passes through undiminished, which is correct for a warp resampling
      * its source and is exactly why a warp alone cannot be the lossy element in a loop.
-     */
+    */
     gainParameter?: string;
-    /**
-     * This output's previous frame is read back by the plugin that wrote it (ADR-0014).
-     *
-     * A decay drawn with `multiply` ages a target without sampling it, which is what makes every
-     * producer's memory free. What it cannot do is *move* that memory: displacing an image means
-     * reading its neighbours, and reading means a second slot. An output marked this way gets one,
-     * and the plugin is handed the previous frame in `render.previous` under this port's name.
-     *
-     * Honoured only for a node with something wired into it, because a displacement by a field
-     * nothing produced is the identity and would buy a full-resolution buffer to copy a texture to
-     * itself. On a colour output at 1080p the slot costs 16 MB, so this is roughly 23 MB a scene
-     * rather than the 181 MB that retaining every colour resource would take.
-     */
-    retained?: boolean;
 }
 
 export interface PluginCost {
@@ -147,6 +133,24 @@ export interface SelectionCharacter {
     persistence: number;
     brightness: number;
     dominance: 'supporting' | 'primary' | 'either';
+}
+
+/** Arithmetic used by the graph-owned scene-state transition. */
+export type TemporalCombineOperator = 'max';
+
+/**
+ * Identifies the one node that combines warped history with fresh scene material.
+ *
+ * This is definition metadata rather than a capability string because the compiler needs the
+ * participating ports and the operator's actual arithmetic to validate the recursive path.
+ */
+export interface TemporalCombineContract {
+    operator: TemporalCombineOperator;
+    historyInput: string;
+    sourceInput: string;
+    output: string;
+    historyWeightParameter: string;
+    sourceWeightParameter: string;
 }
 
 export interface ActivationRules {
@@ -239,6 +243,8 @@ export interface RenderContext {
 export interface PluginCreateContext {
     instanceId: string;
     seed: number;
+    /** Compiled resource ids for this instance's output ports. */
+    outputs?: Readonly<Record<string, ResourceId>>;
     /** Registers a shader program. Called at initialization, never per frame. */
     registerShader(source: ShaderSource): void;
 }
@@ -285,6 +291,8 @@ export interface VisualPluginDefinition {
     /** Bindings the plugin ships with. The scheduler may replace them. */
     defaultBindings?: ParameterBinding[];
     deactivationPolicy?: DeactivationPolicy;
+    /** Present only on the graph-owned scene-state combine. */
+    temporalCombine?: TemporalCombineContract;
 
     create(context: PluginCreateContext): VisualPluginInstance;
 }
@@ -374,15 +382,6 @@ export function validateDefinition(definition: VisualPluginDefinition): string[]
     for (const binding of definition.defaultBindings ?? []) {
         if (definition.parameters?.[binding.parameter] === undefined) {
             problems.push(`binding targets undeclared parameter ${binding.parameter}`);
-        }
-    }
-
-    // A retained output is delivered in `render.previous`, which is keyed by port name and otherwise
-    // holds inputs. Sharing a name would hand a plugin its own last frame where it asked for an
-    // upstream one, silently and only in the scenes where the retention took effect.
-    for (const output of definition.outputs) {
-        if (output.retained && definition.inputs.some((input) => input.name === output.name)) {
-            problems.push(`retained output ${output.name} collides with an input of the same name`);
         }
     }
 

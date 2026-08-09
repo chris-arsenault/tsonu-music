@@ -1,15 +1,8 @@
-/**
- * `FeedbackFlowTransform` (spec section 19.8) — the foundational feedback transformer.
- *
- * Samples its own previous frame through a coordinate warp and mixes it with incoming material. This
- * is the plugin that makes trails, tunnels, and vortices possible, and the reason the graph supports
- * declared feedback edges at all.
- */
+/** Spatial image warps that publish the corresponding motion field. */
 
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
-import { GLSL_HISTORY } from '../define';
 import { SPATIAL_FEEDBACK } from '../../core/grammar';
 
 export type FeedbackFlowMode =
@@ -54,7 +47,7 @@ export function feedbackModeIndex(mode: FeedbackFlowMode): number {
 /**
  * The nine warps, shared by the colour pass and the pass that publishes them.
  *
- * Both answer the same question — where does this pixel read its history from — and one of them then
+ * Both answer the same question — where does this pixel read its source from — and one of them then
  * samples while the other reports the displacement. Sharing the function is what stops them drifting
  * apart, which two copies of nine branches would guarantee eventually.
  */
@@ -96,19 +89,14 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
-uniform sampler2D uHistory;
 /** Steers the vector-field mode. Unbound and unread by the other eight. */
 uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uMode;
 uniform float uStrength;
-uniform float uDecay;
-/** How hard this frame's material enters the loop. Independent of uDecay — see main(). */
-uniform float uInject;
 uniform float uRotation;
 uniform vec2 uDrift;
 uniform float uDelta;
-${GLSL_HISTORY}
 
 /** Frames a second the strength constant is tuned against. */
 const float REFERENCE_RATE = 60.0;
@@ -117,8 +105,6 @@ ${WARP_BODY}
 
 void main() {
     // uStrength describes what one frame does, so it is corrected for the frame this actually is.
-    // Without it the same scene drifted at different rates on different hardware. Decay is no longer
-    // corrected here: it is a per-second figure that history() raises to the frame's own delta.
     float step = uStrength * max(uDelta, 0.0) * REFERENCE_RATE;
 
     vec2 sampleUv;
@@ -132,56 +118,7 @@ void main() {
         sampleUv = warp(vUv, uMode, step);
     }
 
-    // Attenuated and bounded, through the one helper every historical read uses. uDecay is the
-    // fraction surviving a second, so a trail is a duration rather than a frame count.
-    vec4 previous = history(uHistory, sampleUv, uDecay, uDelta);
-    vec4 incoming = texture(uSource, vUv);
-
-    // New material is drawn *over* the trail, not added to it.
-    //
-    // Two combines came before this one and both were wrong in the same place — the choice of
-    // operator, which neither of them examined.
-    //
-    // The first was convex: incoming times one-minus-survival, so the two coefficients summed to one.
-    // The weights of a convex blend sum to one however many frames it runs, so the steady state held
-    // exactly one copy of the source, warped into a smear and no further. A motion blur, from the
-    // part of the catalog most obviously meant to make tunnels.
-    //
-    // The second freed the coefficient and kept the sum, which converges to
-    // incoming / (1 - perFrameSurvival) — at a survival of 0.4 per second and an injection of 0.5,
-    // thirty-three copies. The grade can pull down about eight, so the frame went white. Measured on
-    // the render harness: scenes either saturated or had memory too short to compound, and the band
-    // between them is narrow, which is why so few looked like anything.
-    //
-    // The bound was then going to be a tuned ceiling on that steady state. It did not need to be: a
-    // sum is only one operator, and it is the one operator here that is expansive. This composites
-    // instead, so the output never exceeds the brighter of the two inputs — which means the trail can
-    // last as long as uDecay says without the picture climbing anywhere at all. Memory length and
-    // brightness stop being the same knob.
-    //
-    // Where new material lands the result is that material, so the loop has a fixed point rather than
-    // a ramp. Where none lands the result is the decayed previous frame, sampled from a warped
-    // coordinate, which is exactly the transport this family exists to produce.
-    //
-    // The particle trail injector and the temporal transform already close their loops this way,
-    // with max and with mix. They were the two that could safely hold a long trail, and nothing in
-    // the code said so.
-    // Taken as the brighter of the two, not as a blend between them.
-    //
-    // Compositing fixed the saturation and left a subtler version of the same mistake: a blend
-    // toward the incoming frame spends the history to make room for it. At an injection of 0.57
-    // against a source that fills the frame, 57 percent of the trail is replaced every frame — a
-    // time constant of twenty milliseconds, against the one-and-a-half seconds uDecay was set for.
-    // Measured on the harness as correlation surviving about a second, and visible as memory that
-    // exists where the source happens to be dark and is erased everywhere it is bright.
-    //
-    // Under max the two are independent. How long the trail lasts is uDecay and nothing else; how
-    // brightly new material writes is uInject and nothing else; and the result still cannot exceed
-    // the brighter input, so the bound survives. New material appears at full strength on the frame
-    // it is drawn rather than fading in over several, and the trail behind it decays on its own
-    // clock. That is the combine the particle trail injector has always used, which is the second
-    // reason it was one of the two that could hold a long trail.
-    fragColor = max(previous, incoming * uInject);
+    fragColor = texture(uSource, clamp(sampleUv, 0.0, 1.0));
 }`;
 
 /**
@@ -202,12 +139,10 @@ in vec2 vUv;
 out vec4 fragColor;
 
 uniform sampler2D uSource;
-uniform sampler2D uHistory;
 uniform sampler2D uField;
 uniform vec2 uResolution;
 uniform float uMode;
 uniform float uStrength;
-uniform float uDecay;
 uniform float uRotation;
 uniform vec2 uDrift;
 uniform float uDelta;
@@ -241,15 +176,6 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         category: 'transformer',
         inputs: [
             { name: 'source', type: 'color-texture', required: true },
-            // Fed by a historical edge, and the lossy element of whatever cycle that edge closes:
-            // `decay` is the fraction of the trail surviving one second, so it is exactly the gain
-            // `core/loop-gain.ts` multiplies around the loop (ADR-0013).
-            {
-                name: 'history',
-                type: 'color-texture',
-                required: false,
-                gainParameter: 'decay',
-            },
             // Only the vector-field mode declares a field, so the other eight are not wired to one
             // they would ignore. Required, because without it this mode is a passthrough.
             ...(mode === 'vector-field'
@@ -266,9 +192,8 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         // Every mode of this plugin resamples the history through a warp — zoom, rotate, translate,
         // spiral, pinch, vortex, drift — so a loop closed here accumulates motion rather than only
         // brightness. That is what `requireSpatialLoop` is asking for.
-        capabilities: ['feedback', SPATIAL_FEEDBACK],
-        // Two passes: the loop, and the affine it publishes.
-        cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: 2, qualityScalable: true, dominant: false },
+        capabilities: ['spatial-warp', SPATIAL_FEEDBACK],
+        cost: { gpu: 1, cpu: 0, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.6,
             motionEnergy: 0.7,
@@ -279,9 +204,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
             dominance: 'supporting',
         },
         activationRules: { activationWeight: 1.5, minimumDuration: 12, prefersWith: ['PaletteMapper'] },
-        // `decay` is the fraction of a trail surviving one second. It was 0.94 per frame at sixty,
-        // which is 0.024 over a second.
-        parameters: { strength: 0.02, decay: 0.5, inject: 0.5, rotation: 0.15 },
+        parameters: { strength: 0.02, rotation: 0.15 },
         defaultBindings: [
             {
                 // Bass drives large-scale expansion, per the section 20 mapping table.
@@ -291,34 +214,6 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 outputRange: [0.004, 0.05],
                 attack: 0.08,
                 release: 0.4,
-                curve: 'smooth',
-            },
-            {
-                // Trail length, as the fraction surviving one second. The ceiling was 0.4 — a time
-                // constant of about a second — set while the combine was a sum, where a longer trail
-                // meant a brighter frame and eventually a white one. Compositing decouples the two,
-                // so this can reach the several seconds a compounding warp needs: 0.9 per second is a
-                // time constant near ten, which is where a two percent per-frame displacement turns
-                // into a tunnel rather than a smudge.
-                feature: 'rms',
-                role: 'intensity',
-                parameter: 'decay',
-                outputRange: [0.15, 0.9],
-                attack: 0.25,
-                release: 0.9,
-                curve: 'smooth',
-            },
-            {
-                // How brightly new material writes against the trail. It does not decide how long the
-                // trail lasts — under max the two are independent, which is the whole point of the
-                // operator. Near one so the present is not dimmer than its own history, which would
-                // read as the scene being lit from the past.
-                feature: 'rms',
-                role: 'intensity',
-                parameter: 'inject',
-                outputRange: [0.7, 1.1],
-                attack: 0.12,
-                release: 0.5,
                 curve: 'smooth',
             },
             {
@@ -333,7 +228,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 curve: 'smooth',
             },
         ],
-        deactivationPolicy: 'handoff-feedback',
+        deactivationPolicy: 'fade',
 
         create(context): VisualPluginInstance {
             let drift: [number, number] = [0, 0];
@@ -371,16 +266,11 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
 
                     const inputs = {
                         uSource: source,
-                        // Falls back to the incoming frame when no feedback edge is wired, so the
-                        // plugin degrades to a passthrough rather than sampling nothing.
-                        uHistory: render.previous.history ?? source,
                         ...(field ? { uField: field } : {}),
                     };
                     const uniforms = {
                         uMode: feedbackModeIndex(mode),
                         uStrength: 0.02,
-                        uDecay: 0.5,
-                        uInject: 0.5,
                         uRotation: 0.15,
                         uDrift: drift,
                     };
@@ -391,7 +281,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         inputs,
                         output: render.outputs.color,
                         blend: 'none',
-                        clear: false,
+                        clear: true,
                         uniforms,
                     }];
 
@@ -414,7 +304,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 },
 
                 deactivate() {
-                    // Handoff: the accumulated image stays in the feedback buffer for a replacement.
+                    // Stateless transform.
                 },
 
                 destroy() {

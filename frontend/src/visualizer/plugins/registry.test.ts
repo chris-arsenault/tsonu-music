@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { createM1Registry, firstLightScene, m1Definitions } from './registry';
-import { compileGraph } from '../core/graph';
+import { compileSceneGraph } from '../core/graph';
 import { validateDefinition } from '../core/plugin';
 import { countPasses, isGeometryPass } from '../core/passes';
 import { SIGNAL_TRACE_MODES, traceVertices } from './sources/signal-trace';
@@ -121,43 +121,47 @@ describe('first light scene', () => {
 
     test('compiles', () => {
         const scene = firstLightScene(registry);
-        const result = compileGraph(scene.nodes, scene.edges, scene.present);
+        const result = compileSceneGraph(scene.nodes, scene.edges, scene.present);
 
         expect(result.ok).toBe(true);
     });
 
-    test('orders source before transform before output', () => {
+    test('orders fresh material and transformed history before the state combine', () => {
         const scene = firstLightScene(registry);
-        const result = compileGraph(scene.nodes, scene.edges, scene.present);
+        const result = compileSceneGraph(scene.nodes, scene.edges, scene.present);
         if (!result.ok) throw new Error(result.errors.join('; '));
 
-        expect(result.graph.order.map((node) => node.instanceId)).toEqual(['trace', 'feedback', 'tone']);
+        const order = result.graph.order.map((node) => node.instanceId);
+        expect(order.indexOf('trace')).toBeLessThan(order.indexOf('tone'));
+        expect(order.indexOf('tone')).toBeLessThan(order.indexOf('state'));
+        expect(order.indexOf('history')).toBeLessThan(order.indexOf('state'));
     });
 
     test('declares exactly one ping-pong resource for its feedback loop', () => {
         const scene = firstLightScene(registry);
-        const result = compileGraph(scene.nodes, scene.edges, scene.present);
+        const result = compileSceneGraph(scene.nodes, scene.edges, scene.present);
         if (!result.ok) throw new Error(result.errors.join('; '));
 
-        expect(result.graph.pingPong).toEqual(['feedback.color']);
+        expect(result.graph.pingPong).toEqual(['state.color']);
     });
 
-    test('presents the tone mapper output', () => {
+    test('presents the canonical state output', () => {
         const scene = firstLightScene(registry);
-        const result = compileGraph(scene.nodes, scene.edges, scene.present);
+        const result = compileSceneGraph(scene.nodes, scene.edges, scene.present);
         if (!result.ok) throw new Error(result.errors.join('; '));
 
-        expect(result.graph.present).toBe('tone.color');
+        expect(result.graph.present).toBe('state.color');
     });
 
-    test('the feedback read resolves to a previous-frame input, not a forward one', () => {
+    test('only the history warp reads the previous scene state', () => {
         const scene = firstLightScene(registry);
-        const result = compileGraph(scene.nodes, scene.edges, scene.present);
+        const result = compileSceneGraph(scene.nodes, scene.edges, scene.present);
         if (!result.ok) throw new Error(result.errors.join('; '));
 
-        const feedback = result.graph.order[1];
-        expect(feedback.previous).toEqual({ history: 'feedback.color' });
-        expect(feedback.inputs).toEqual({ source: 'trace.color' });
+        const history = result.graph.order.find((node) => node.instanceId === 'history')!;
+        const state = result.graph.order.find((node) => node.instanceId === 'state')!;
+        expect(history.previous).toEqual({ source: 'state.color' });
+        expect(state.inputs).toEqual({ source: 'tone.color', history: 'history.color' });
     });
 
     test('missing a plugin fails loudly rather than silently omitting it', () => {
@@ -281,14 +285,9 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        // The motion pass appears only when something asked for the port, so a scene that does not
-        // read the trace's motion does not pay for it. The other two are the decay that ages the
-        // colour target and the trace composited into it (ADR-0014).
-        expect(countPasses(colourOnly)).toBe(2);
-        expect(isGeometryPass(colourOnly[0])).toBe(false);
-        expect(colourOnly[0]).toMatchObject({ output: 'trace.color', blend: 'multiply', clear: false });
-        expect(isGeometryPass(colourOnly[1])).toBe(true);
-        expect(colourOnly[1]).toMatchObject({ output: 'trace.color', blend: 'lighten', clear: false });
+        expect(countPasses(colourOnly)).toBe(1);
+        expect(isGeometryPass(colourOnly[0])).toBe(true);
+        expect(colourOnly[0]).toMatchObject({ output: 'trace.color', blend: 'lighten', clear: true });
 
         const withMotion = instance.render({
             inputs: {},
@@ -298,11 +297,11 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        expect(countPasses(withMotion)).toBe(3);
-        expect(withMotion[2].output).toBe('trace.motion');
+        expect(countPasses(withMotion)).toBe(2);
+        expect(withMotion[1].output).toBe('trace.motion');
     });
 
-    test('the feedback transform reads its previous frame when one is wired', () => {
+    test('the feedback-flow family is a current-frame spatial warp', () => {
         const definition = createM1Registry().get('FeedbackFlowTransform:vortex')!;
         const instance = definition.create(createContext('feedback').context);
         instance.initialize();
@@ -315,12 +314,11 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        expect(passes[0].inputs).toEqual({ uSource: 'trace.color', uHistory: 'feedback.color' });
-        // Feedback must not clear its target, or there is nothing to accumulate into.
-        expect(passes[0].clear).toBe(false);
+        expect(passes[0].inputs).toEqual({ uSource: 'trace.color' });
+        expect(passes[0].clear).toBe(true);
     });
 
-    test('the feedback transform degrades to a passthrough with no history wired', () => {
+    test('the spatial warp has no implicit history fallback', () => {
         const definition = createM1Registry().get('FeedbackFlowTransform:zoom')!;
         const instance = definition.create(createContext('feedback').context);
 
@@ -332,7 +330,7 @@ describe('plugin render contracts', () => {
             renderHeight: 360,
         });
 
-        expect(passes[0].inputs).toEqual({ uSource: 'trace.color', uHistory: 'trace.color' });
+        expect(passes[0].inputs).toEqual({ uSource: 'trace.color' });
     });
 
     test('a plugin with an unsatisfied required input emits no passes', () => {

@@ -151,35 +151,23 @@ A derived texture always wins over the raw asset it came from.
 
 ## Composition and persistence
 
-The compositor owns a stage the graph does not reach. Layers composite into an offscreen target
-rather than onto the canvas, blending by a mode chosen from each plugin's declared character:
-bright sparse material adds, bright material screens, dense material composites over so it can
-occlude.
+Every material branch joins inside the graph before the scene state. `SceneHistoryWarp` reads the
+previous `SceneStateCombine` output, spatially resamples it, and returns it to the combine beside the
+fresh material. The combine output is the only active layer presented by the host. Ordinary colour
+plugins redraw current-frame intermediate values and own no image history of their own.
 
-Every spatial field the scene produced — procedural, audio-driven, or mask-derived — is then summed
-into one motion field, additively and weighted by the contributor count, so several fields compound
-into one drag rather than one winning.
+The state resource is ping-ponged because its historical edge explicitly reads the previous slot.
+Its survival is per second, so trail length is independent of refresh rate. A frozen clock holds the
+transition; a seek, track change, or genuinely new scene clears the new scene's historical slots.
+Outgoing scenes keep separate resource keys while they crossfade.
 
-The kernel owns an accumulation buffer. Each frame it is gathered through that motion field, decayed,
-and combined with the new composite as a leaky integrator: survival and injection are complements, so
-a static image converges to exactly itself and a trail comes from the warp rather than from a
-build-up. A small absolute amount is subtracted per second as well, so an abandoned trail reaches
-true black instead of leaving a haze. How strongly a scene accumulates comes from its theme's
-persistence character and its layers' feedback participation, floored so no scene is completely
-static and capped where trails would stop being motion and start being lag. Survival is expressed per
-second, so trail length is a duration rather than a frame count, and it is also the image's response
-time. A frozen clock holds the accumulation exactly; a seek or track change clears it.
-
-The accumulation is graded onto the canvas last, and that is the only stage that compresses.
+The composed scene state is graded onto the canvas last, and that is the only stage that compresses.
 Luminance is rolled off and the colour rescaled by the same factor, rather than each channel being
 compressed on its own — per-channel compression pulls the brightest channel down hardest, which
 desaturates exactly the material that was most saturated. `ToneMapper` still runs inside the graph,
 but it cannot be the final word, because everything after it can still add light.
 
-`FeedbackFlowTransform`, `FeedbackInjector`, and `ParticleTrailInjector` shape this loop rather than
-being the only thing that creates one. See
-[ADR-0007](./adr/0007-visualizer-kernel-persistence.md) and
-[ADR-0008](./adr/0008-visualizer-motion-field-bus.md).
+See [ADR-0015](./adr/0015-visualizer-single-graph-owned-scene-state.md).
 
 ## Scenes
 

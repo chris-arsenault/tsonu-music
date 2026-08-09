@@ -19,13 +19,13 @@ import {
     invalidateTempo,
     observeOnset,
 } from './core/analysis';
-import { compileGraph } from './core/graph';
+import { compileGraph, compileSceneGraph } from './core/graph';
 import { wireScene, assetResourceId, type AssetResource } from './core/wiring';
 import { buildScene } from './core/scene-builder';
 import { profileFor, QUALITY_LADDER, advancePerformance, createPerformanceState } from './core/performance';
 import { selectTier, collectFaults, type VisualizerFault } from './core/fallback';
 import { createPluginRegistry } from './core/plugin';
-import { allDefinitions } from './plugins/registry';
+import { allDefinitions, firstLightScene } from './plugins/registry';
 import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, ORGANIC_FLOW_THEME } from './plugins/themes';
 import { availableAssetIds, albumArtAssetFrom, maskAssetFrom } from './core/assets';
 import { advanceCascade, seedCascade } from './plugins/simulators/impact-cascade';
@@ -299,10 +299,10 @@ describe('section 26: masks drive particles, collision, containment, distortion,
         ], ASSET_RESOURCES)).toBe(true);
     });
 
-    test('feedback, through an injector fed by masked material', () => {
+    test('spatial transformation of masked material', () => {
         expect(sceneCompiles([
             'ProceduralTextureSource:rings', 'MaskSignedDistanceField', 'MaskEffectStencil',
-            'FeedbackInjector:masked',
+            'FeedbackFlowTransform:rotate',
         ], ASSET_RESOURCES)).toBe(true);
     });
 });
@@ -485,12 +485,12 @@ describe('section 26: plugin outputs and graph connections are typed and validat
     });
 
     test('a declared feedback cycle is accepted and ping-ponged', () => {
-        const wired = wireScene(['SignalTraceSource:circular', 'FeedbackFlowTransform:vortex'].map(plugin));
-        const compiled = compileGraph(wired.nodes, wired.edges, wired.present);
+        const wired = firstLightScene(createPluginRegistry(CATALOG));
+        const compiled = compileSceneGraph(wired.nodes, wired.edges, wired.present);
 
         expect(compiled.ok).toBe(true);
         if (!compiled.ok) return;
-        expect(compiled.graph.pingPong).toHaveLength(1);
+        expect(compiled.graph.pingPong).toEqual(['state.color']);
     });
 });
 

@@ -12,12 +12,8 @@ import type {
 } from '../../core/plugin';
 import type { GeometryUpload, RenderPass } from '../../core/passes';
 import {
-    decayPass,
-    decayShaderSource,
     GLSL_COMMON,
     GLSL_PERTURB_VERTEX,
-    SURVIVAL_BINDING,
-    SURVIVAL_PARAMETER,
 } from '../define';
 
 export type SignalTraceMode =
@@ -235,13 +231,13 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
         // every frame no matter what else was happening.
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false, retained: true },
+            { name: 'color', type: 'color-texture', required: false },
             // What the waveform is doing to the shape, which is the thing this plugin knows and
             // nothing else in the graph can see.
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['waveform-geometry', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.35,
             motionEnergy: 0.6,
@@ -268,13 +264,8 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             // returns to the same level. Of 448 bindings in the catalog, 21 were integrated and none
             // of them was on a source's appearance.
             hue: 0,
-            // A waveform is redrawn from the same buffer every frame. Without a memory it can only
-            // ever be where the signal is now; with one, the trace of where it has been is the
-            // surface the rest of the scene has something to push around (ADR-0014).
-            [SURVIVAL_PARAMETER]: 0.7,
         },
         defaultBindings: [
-            SURVIVAL_BINDING,
             {
                 // How far the wired field pushes the trace.
                 feature: 'lowMid',
@@ -365,9 +356,6 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         vertex: MOTION_VERTEX,
                         fragment: MOTION_FRAGMENT,
                     });
-                    for (const source of decayShaderSource('SignalTraceSource')) {
-                        context.registerShader(source);
-                    }
                 },
 
                 activate() {
@@ -436,15 +424,6 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
 
                     const passes: RenderPass[] = [];
 
-                    if (render.outputs.color) {
-                        passes.push(decayPass(
-                            'SignalTraceSource',
-                            render.outputs.color,
-                            render.previous.color,
-                            render.inputs.field,
-                        ));
-                    }
-
                     passes.push({
                         kind: 'geometry',
                         shader: SHADER_ID,
@@ -454,7 +433,7 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         vertexCount,
                         output: render.outputs.color,
                         blend: 'lighten',
-                        clear: false,
+                        clear: true,
                         uniforms: {
                             uThickness: 2,
                             uBrightness: 1.4,

@@ -8,12 +8,8 @@
 
 import {
     character,
-    decayPass,
-    decayShaderSource,
     GLSL_COMMON,
     GLSL_PERTURB_VERTEX,
-    SURVIVAL_BINDING,
-    SURVIVAL_PARAMETER,
 } from '../define';
 import type { RenderContext } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
@@ -270,23 +266,17 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         category: 'source',
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            // Retained, so the spectrum's memory is carried along whatever field is pushing the
-            // spectrum itself rather than sitting still while the bands move over it (ADR-0014).
-            { name: 'color', type: 'color-texture', required: false, retained: true },
+            { name: 'color', type: 'color-texture', required: false },
             // How fast each band is rising, which is what this plugin knows about the music that
             // nothing downstream of it can see.
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['spectrum-geometry', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
-        // A spectrum redrawn every frame into a cleared target is the thin spectrogram that sits
-        // behind a scene interacting with nothing. What it holds between frames is the whole of
-        // what makes it a shape rather than a readout (ADR-0014).
-        parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2, [SURVIVAL_PARAMETER]: 0.7 },
+        parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2 },
         defaultBindings: [
-            SURVIVAL_BINDING,
             {
                 feature: 'rms',
                 role: 'intensity',
@@ -341,9 +331,6 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
-                    for (const source of decayShaderSource('SpectrumGeometrySource')) {
-                        context.registerShader(source);
-                    }
                 },
 
                 activate() {
@@ -402,15 +389,6 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
 
                     const passes: RenderPass[] = [];
 
-                    if (render.outputs.color) {
-                        passes.push(decayPass(
-                            'SpectrumGeometrySource',
-                            render.outputs.color,
-                            render.previous.color,
-                            render.inputs.field,
-                        ));
-                    }
-
                     passes.push({
                         kind: 'geometry',
                         shader: SPECTRUM_SHADER,
@@ -419,11 +397,8 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         primitive: mode === 'cell-matrix' ? 'points' : 'line-strip',
                         vertexCount: count,
                         output: render.outputs.color,
-                        // Over the decayed frame rather than into a wiped one: where a band was a
-                        // second ago stays visible under where it is now, which is what makes a
-                        // spectrum a surface instead of a line that moves.
                         blend: 'lighten',
-                        clear: false,
+                        clear: true,
                         uniforms: { uBrightness: 1.3, uPerturb: 0.12, uHue: 0 },
                     });
 
@@ -493,12 +468,12 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         category: 'source',
         inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
-            { name: 'color', type: 'color-texture', required: false, retained: true },
+            { name: 'color', type: 'color-texture', required: false },
             // A burst expanding from where something struck, at a rate the glyph's own radius gives.
             { name: 'motion', type: 'vector-field', required: false },
         ],
         capabilities: ['transient-geometry', 'impact-consumer', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
         character: character({
             motionEnergy: 0.85,
             visualDensity: 0.3,
@@ -507,10 +482,8 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
             dominance: 'supporting',
         }),
         activationRules: { activationWeight: 1.5, minimumDuration: 6 },
-        // A glyph lives 0.7 seconds. Short survival, so what it leaves is a mark of where the hit
-        // was rather than a smear that outlasts several of them.
-        parameters: { scale: 1, wakeScale: 1.5, [SURVIVAL_PARAMETER]: 0.4 },
-        defaultBindings: [SURVIVAL_BINDING, {
+        parameters: { scale: 1, wakeScale: 1.5 },
+        defaultBindings: [{
             // Onset strength already sets a glyph's brightness; peak level sets how far it reaches.
             feature: 'peak',
             parameter: 'scale',
@@ -552,9 +525,6 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
                     });
-                    for (const source of decayShaderSource('TransientGlyphSource')) {
-                        context.registerShader(source);
-                    }
                 },
 
                 activate() {
@@ -648,15 +618,6 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
 
                     const passes: RenderPass[] = [];
 
-                    if (render.outputs.color) {
-                        passes.push(decayPass(
-                            'TransientGlyphSource',
-                            render.outputs.color,
-                            render.previous.color,
-                            render.inputs.field,
-                        ));
-                    }
-
                     passes.push({
                         kind: 'geometry',
                         shader: GLYPH_SHADER,
@@ -666,7 +627,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         vertexCount: count,
                         output: render.outputs.color,
                         blend: 'lighten',
-                        clear: false,
+                        clear: true,
                         uniforms: { uPerturb: 0.12, uHue: 0 },
                     });
 

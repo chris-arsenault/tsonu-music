@@ -26,8 +26,6 @@ import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
 import { isMotionSource } from '../core/fields';
-import { isPresentationCategory, portTypes, redrawViolations } from '../core/redraw';
-import { TEMPORAL_MODES } from './transformers/transforms';
 import type { FrameContext } from '../core/plugin';
 
 const CATALOG = allDefinitions();
@@ -127,12 +125,12 @@ describe('catalog integrity', () => {
             'ProceduralVectorField', 'AudioImpulseField', 'MaskSignedDistanceField',
             'MaskContainmentField', 'ImageLuminanceField',
             'ParticleSimulator', 'ParticleEmitter', 'ParticleForceField', 'ParticleRenderer',
-            'ParticleTrailInjector', 'ReactionDiffusionSimulator', 'WaveFieldSimulator',
+            'ReactionDiffusionSimulator', 'WaveFieldSimulator',
             'ImpactCascadeSimulator',
             'FeedbackFlowTransform', 'SymmetryTransform', 'CoordinateWarpTransform',
             'DomainWarpTransform', 'TilingTransform', 'EdgeContourTransform', 'ShockwaveTransform',
-            'LayerMixer', 'MaskRouter', 'FeedbackInjector', 'PaletteMapper', 'ColorTransform',
-            'GlowAndScatter', 'ToneMapper',
+            'LayerMixer', 'MaskRouter', 'PaletteMapper', 'ColorTransform',
+            'GlowAndScatter', 'ToneMapper', 'SceneHistoryWarp', 'SceneStateCombine',
         ];
 
         for (const family of families) {
@@ -189,9 +187,7 @@ describe('catalog integrity', () => {
             if (definition.inputs.some((port) => isValuePortType(port.type))) {
                 // A value renderer with nothing to draw still emits passes, because its outputs are
                 // its own and would otherwise hold the last frame it managed forever. What it must
-                // not do is draw: a geometry pass with no vertices, or the decay that ages a colour
-                // target it is no longer contributing to (ADR-0014). Colour is faded rather than
-                // wiped, so a starved renderer trails off instead of vanishing between frames.
+                // not do is draw: a geometry pass with no vertices.
                 expect(
                     passes.every((pass) => pass.kind === 'geometry'
                         ? pass.vertexCount === 0
@@ -220,41 +216,25 @@ describe('catalog integrity', () => {
         }
     });
 
-    test('no colour pass redraws the frame', () => {
-        // ADR-0014. Two ways to fail, both decidable from the pass descriptor: clearing a colour
-        // target destroys what it held, and replacing one while reading no colour generates a frame
-        // out of time and audio rather than transforming an existing image. Presentation stages are
-        // exempt, having no state to preserve.
-        //
-        // Measured when this rule was written: 99 clears and 29 generates across 202 definitions.
-        // Written as a catalog-wide check rather than a note against each offender, so a producer
-        // added later cannot reintroduce a redraw by omission.
+    test('no ordinary colour pass accumulates into an uncleared destination', () => {
         const offenders: string[] = [];
         const checked: string[] = [];
 
         for (const definition of CATALOG) {
-            if (isPresentationCategory(definition.category)) {
-                continue;
-            }
-
-            const types = {
-                ...portTypes(definition.inputs, Object.fromEntries(
-                    definition.inputs.map((port) => [port.name, `in.${port.name}`]))),
-                ...portTypes(definition.outputs, Object.fromEntries(
-                    definition.outputs.map((port) => [port.name, `out.${port.name}`]))),
-            };
-
             const passes = renderWithAllInputs(definition);
-            if (passes.some((pass) => pass.output !== undefined && types[pass.output] === 'color-texture')) {
+            const colorOutputs = new Set(definition.outputs
+                .filter((port) => port.type === 'color-texture')
+                .map((port) => `out.${port.name}`));
+            for (const [index, pass] of passes.entries()) {
+                if (!pass.output || !colorOutputs.has(pass.output)) continue;
                 checked.push(definition.id);
-            }
-
-            for (const finding of redrawViolations(passes, types)) {
-                offenders.push(`${definition.id} pass ${finding.pass} ${finding.violation}`);
+                if (pass.clear === false && (pass.blend ?? 'none') !== 'none') {
+                    offenders.push(`${definition.id} pass ${index} blends into an uncleared colour target`);
+                }
             }
         }
 
-        expect(offenders, 'colour passes that redraw the frame').toEqual([]);
+        expect(offenders, 'hidden colour accumulation').toEqual([]);
 
         // A plugin that emits no passes under this fixture is not evidence of anything, so the rule
         // is only as good as how many producers it actually reached. Asserted rather than assumed:
@@ -576,14 +556,14 @@ describe('spec section 25 example compositions', () => {
             name: 'Sparse Particles',
             plugins: [
                 'ProceduralVectorField:curl', 'ParticleEmitter:region', 'ParticleForceField:vortex',
-                'ParticleSimulator', 'ParticleRenderer:sparks', 'ParticleTrailInjector',
+                'ParticleSimulator', 'ParticleRenderer:sparks',
             ],
         },
         {
             name: 'Rorschach Without Particles',
             plugins: [
                 'AlbumArtSource', 'MaskSignedDistanceField', 'MaskEffectStencil',
-                'CoordinateWarpTransform:twirl', 'FeedbackInjector:continuous', 'ColorTransform:duotone',
+                'CoordinateWarpTransform:twirl', 'FeedbackFlowTransform:rotate', 'ColorTransform:duotone',
             ],
         },
         {
@@ -735,31 +715,19 @@ describe('scenes accumulate and move', () => {
         expect(dark / scenes, `${dark} of ${scenes} terminate on a darkening operator`).toBeLessThan(0.15);
     });
 
-    test('a family that names a feedback stage always gets one', () => {
-        for (const theme of [ORGANIC_FLOW_THEME, COLLISION_ENERGY_THEME]) {
+    test('every family gets the same graph-owned state contract', () => {
+        for (const theme of THEMES) {
             const scenes = scenesFor(theme);
             expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
 
             for (const scene of scenes) {
-                const feedback = scene.plugins.filter((definition) =>
-                    definition.capabilities.includes('feedback'));
-
-                expect(feedback.length, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
+                expect(scene.graph.state, `${theme.id}/${scene.entropy}`).toBeDefined();
+                expect(scene.graph.present).toBe(scene.graph.state!.stateResource);
             }
         }
     });
 
-    test('a family that budgets several loops gets several, and one that budgets one does not', () => {
-        // `closeLoop` stripped every loop a plugin nominated and installed one composed-image loop in
-        // their place, so a scene came out with exactly one image loop — measured, 200 of 200 — while
-        // three of the four grammars permit five. The function's own closing comment already argued
-        // against that and applied the argument only to the path where no candidate was legal: a
-        // chain of stages each keeping its own trail is a legitimate composition, and what those
-        // scenes lack is not fewer loops but one that folds the composed image back.
-        //
-        // "Not fewer loops but one more" is an addition and it was written as a replacement. With the
-        // local trails gone every stage but one resamples material drawn fresh this frame, which is
-        // invertible: the picture returns exactly when the parameter does.
+    test('every family has exactly one previous-frame image edge', () => {
         const loopsIn = (wired: WiredScene) => wired.edges.filter((edge) => {
             if (!edge.feedback) return false;
             const sink = wired.nodes.find((node) => node.instanceId === edge.to.instanceId);
@@ -771,18 +739,8 @@ describe('scenes accumulate and move', () => {
             const scenes = scenesFor(theme);
             expect(scenes.length, `${theme.id} builds`).toBeGreaterThan(10);
 
-            const counts = scenes.map((scene) => loopsIn(scene.wired));
-            const ceiling = theme.grammar.maximumFeedbackLoops;
-
-            // Nothing exceeds what the family declared, which is what makes the ceiling meaningful.
-            expect(Math.max(...counts), `${theme.id} exceeds its ceiling of ${ceiling}`)
-                .toBeLessThanOrEqual(ceiling);
-
-            // And a family with room for more than one actually uses it.
-            if (ceiling > 1) {
-                expect(Math.max(...counts), `${theme.id} never keeps more than one loop`)
-                    .toBeGreaterThan(1);
-            }
+            expect(scenes.map((scene) => loopsIn(scene.wired)), theme.id)
+                .toEqual(scenes.map(() => 1));
         }
     });
 
@@ -825,8 +783,8 @@ describe('scenes accumulate and move', () => {
         // distinction between families was partly that one of them stayed still.
         //
         // That distinction is no longer assembly's to make. Almost every transform publishes the
-        // displacement it applies (ADR-0012), and every colour producer now takes a field it can be
-        // displaced by (ADR-0014), so a field exists in every scene and something always reads it.
+        // displacement it applies (ADR-0012), and every colour producer takes a field it can be
+        // displaced by, so a field exists in every scene and something always reads it.
         // Measured across sixty entropies per family: 236 of 236 scenes consume motion, and the
         // undragged geometric-signal scene no longer occurs at any seed.
         //
@@ -854,82 +812,5 @@ describe('scenes accumulate and move', () => {
                 expect(persistence, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
             }
         }
-    });
-});
-
-/**
- * `TemporalTransform` (spec section 19.8, section 24 secondary scope).
- *
- * The first plugin to keep frames, and therefore the first consumer of `historyDepth` — a value the
- * quality ladder has always computed and threaded through `FrameContext` that nothing read.
- */
-describe('temporal transform', () => {
-    const temporal = (mode: typeof TEMPORAL_MODES[number]) =>
-        CATALOG.find((definition) => definition.id === `TemporalTransform:${mode}`)!;
-
-    /** Renders one pass at a given ladder profile and reports the depth uniform it emitted. */
-    function depthAt(historyDepth: number): number {
-        const definition = temporal('echo');
-        const instance = definition.create(createContext().context);
-        instance.initialize();
-        instance.activate({
-            clock: { trackId: 't', playbackTime: 0, duration: 1, state: 'playing', generation: 1 },
-            parameters: definition.parameters ?? {},
-        });
-        instance.update(frame({ historyDepth }).frame);
-
-        const passes = instance.render({
-            inputs: { source: 'in.source' },
-            outputs: { color: 'out.color' },
-            previous: { history: 'prev.history' },
-            renderWidth: 640,
-            renderHeight: 360,
-        });
-
-        return passes[0].uniforms!.uDepth as number;
-    }
-
-    test('every mode section 19.8 lists is registered', () => {
-        expect(TEMPORAL_MODES).toHaveLength(9);
-        for (const mode of TEMPORAL_MODES) {
-            expect(temporal(mode), mode).toBeDefined();
-        }
-    });
-
-    test('the quality ladder reduces how much history is kept', () => {
-        // The rung that drops history depth now changes what a plugin does, rather than reducing a
-        // number nothing consumed.
-        const full = QUALITY_LADDER[0].historyDepth;
-        const floor = QUALITY_LADDER[QUALITY_LADDER.length - 1].historyDepth;
-
-        expect(depthAt(full)).toBe(1);
-        expect(depthAt(floor)).toBeLessThan(depthAt(full));
-        expect(depthAt(floor)).toBeGreaterThan(0);
-    });
-
-    test('a port an edge was drawn into historically reads the previous frame', () => {
-        const definition = temporal('delayed-mirror');
-        const instance = definition.create(createContext().context);
-        instance.initialize();
-        instance.update(frame().frame);
-
-        // A present `previous` entry is the whole condition (ADR-0013): the compiler records one only
-        // for an edge wiring actually drew as historical, so the plugin no longer has to have
-        // declared which of its ports is allowed to be that edge's sink.
-        const passes = instance.render({
-            inputs: { source: 'in.source', history: 'in.history' },
-            outputs: { color: 'out.color' },
-            previous: { history: 'prev.history' },
-            renderWidth: 640,
-            renderHeight: 360,
-        });
-
-        expect(passes[0].inputs?.uHistory).toBe('prev.history');
-        expect(passes[0].inputs?.uSource).toBe('in.source');
-        expect(passes[0].clear).toBe(false);
-    });
-
-    test('it leaves gracefully, since it holds frames', () => {
-        expect(temporal('slit-scan').deactivationPolicy).toBe('freeze-and-dissolve');
     });
 });

@@ -1,6 +1,6 @@
 # 0007 — The kernel owns an accumulation buffer rather than leaving persistence to plugins
 
-- Status: Accepted
+- Status: Superseded by [0013](./0013-visualizer-uniform-node-state.md) and [0015](./0015-visualizer-single-graph-owned-scene-state.md)
 - Date: 2026-07-25
 
 ## Context

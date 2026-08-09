@@ -10,6 +10,7 @@
 
 import type { PluginPort, PortType, VisualPluginDefinition } from './plugin';
 import type { ResourceId } from './passes';
+import { analyzeSceneState, type CompiledSceneState } from './scene-state';
 
 export interface GraphNode {
     instanceId: string;
@@ -43,6 +44,10 @@ export interface CompiledGraph {
     pingPong: ResourceId[];
     /** The resource presented to the canvas. */
     present: ResourceId | undefined;
+    /** Present on complete visualizer scenes, absent from low-level fragment compilation. */
+    state?: CompiledSceneState;
+    /** Stable for incremental rebuilds, distinct for genuinely new scenes. */
+    resourceNamespace?: string;
 }
 
 export interface ResourceDescriptor {
@@ -109,6 +114,7 @@ export function compileGraph(
      * a node, so it takes no place in execution order — but it does satisfy a required input.
      */
     assetBindings: readonly { instanceId: string; port: string; resource: ResourceId }[] = [],
+    resourceNamespace = '',
 ): CompileResult {
     const problems: CompileProblem[] = [];
     const byInstance = new Map<string, GraphNode>();
@@ -127,7 +133,7 @@ export function compileGraph(
     for (const node of nodes) {
         for (const port of node.definition.outputs) {
             resources.push({
-                id: resourceIdFor(node.instanceId, port.name),
+                id: scopedResourceId(resourceNamespace, node.instanceId, port.name),
                 type: port.type,
                 producedBy: node.instanceId,
                 port: port.name,
@@ -154,44 +160,17 @@ export function compileGraph(
         return failed(problems);
     }
 
-    /**
-     * Outputs whose producer reads them back, so the second slot is theirs (ADR-0014).
-     *
-     * Only for a node something is wired into. A producer with nothing feeding it is displaced by a
-     * field that does not exist, and the drift would resolve to copying the texture to itself at the
-     * cost of a full-resolution buffer.
-     */
-    const wiredInto = new Set([
-        ...edges.map((edge) => edge.to.instanceId),
-        ...assetBindings.map((binding) => binding.instanceId),
-    ]);
-    const retained = ordered.flatMap((node) => (wiredInto.has(node.instanceId)
-        ? node.definition.outputs
-            .filter((port) => port.retained)
-            .map((port) => resourceIdFor(node.instanceId, port.name))
-        : []));
-
     const pingPong = [
         ...new Set([
             ...edges
                 .filter((edge) => edge.feedback)
-                .map((edge) => resourceIdFor(edge.from.instanceId, edge.from.port)),
-            ...retained,
+                .map((edge) => scopedResourceId(resourceNamespace, edge.from.instanceId, edge.from.port)),
         ]),
     ];
-
-    const retainedResources = new Set(retained);
 
     const compiled = ordered.map((node): CompiledNode => {
         const inputs: Record<string, ResourceId> = {};
         const previous: Record<string, ResourceId> = {};
-
-        for (const port of node.definition.outputs) {
-            const resource = resourceIdFor(node.instanceId, port.name);
-            if (retainedResources.has(resource)) {
-                previous[port.name] = resource;
-            }
-        }
 
         for (const binding of assetBindings) {
             if (binding.instanceId === node.instanceId) {
@@ -204,7 +183,7 @@ export function compileGraph(
                 continue;
             }
 
-            const resource = resourceIdFor(edge.from.instanceId, edge.from.port);
+            const resource = scopedResourceId(resourceNamespace, edge.from.instanceId, edge.from.port);
             if (edge.feedback) {
                 previous[edge.to.port] = resource;
             } else {
@@ -214,7 +193,7 @@ export function compileGraph(
 
         const outputs: Record<string, ResourceId> = {};
         for (const port of node.definition.outputs) {
-            outputs[port.name] = resourceIdFor(node.instanceId, port.name);
+            outputs[port.name] = scopedResourceId(resourceNamespace, node.instanceId, port.name);
         }
 
         return { instanceId: node.instanceId, definition: node.definition, inputs, outputs, previous };
@@ -229,7 +208,59 @@ export function compileGraph(
         }]);
     }
 
-    return { ok: true, graph: { order: compiled, resources, pingPong, present } };
+    return {
+        ok: true,
+        graph: {
+            order: compiled,
+            resources,
+            pingPong,
+            present,
+            ...(resourceNamespace ? { resourceNamespace } : {}),
+        },
+    };
+}
+
+/** Compiles a complete renderable scene and enforces its graph-owned recursive image state. */
+export function compileSceneGraph(
+    nodes: readonly GraphNode[],
+    edges: readonly RenderGraphEdge[],
+    presentFrom?: { instanceId: string; port: string },
+    assetBindings: readonly { instanceId: string; port: string; resource: ResourceId }[] = [],
+    resourceNamespace = '',
+): CompileResult {
+    const compiled = compileGraph(nodes, edges, presentFrom, assetBindings, resourceNamespace);
+    if (!compiled.ok) {
+        return compiled;
+    }
+
+    const analysis = analyzeSceneState(nodes, edges, presentFrom);
+    if (analysis.problems.length > 0 || !analysis.state) {
+        return failed(analysis.problems.length > 0
+            ? analysis.problems
+            : [{ detail: 'scene has no graph-owned image state' }]);
+    }
+
+    const combine = compiled.graph.order.find((node) => node.instanceId === analysis.state!.combineInstanceId);
+    const stateResource = combine?.outputs[
+        nodes.find((node) => node.instanceId === analysis.state!.combineInstanceId)!
+            .definition.temporalCombine!.output
+    ];
+    if (!stateResource) {
+        return failed([{ detail: 'scene state output did not compile' }]);
+    }
+
+    return {
+        ok: true,
+        graph: {
+            ...compiled.graph,
+            state: { ...analysis.state, stateResource },
+        },
+    };
+}
+
+function scopedResourceId(namespace: string, instanceId: string, port: string): ResourceId {
+    const resource = resourceIdFor(instanceId, port);
+    return namespace ? `scene:${namespace}/${resource}` : resource;
 }
 
 function failed(problems: CompileProblem[]): CompileResult {

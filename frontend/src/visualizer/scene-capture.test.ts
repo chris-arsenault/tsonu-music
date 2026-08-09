@@ -61,7 +61,7 @@ describe('capturing a generated scene', () => {
 
     test('a captured scene resolves to the graph it was captured from', () => {
         for (const { themeId, scene } of SCENES) {
-            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY);
+            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY, { requireSceneState: true });
 
             expect(
                 resolved.ok,
@@ -79,7 +79,7 @@ describe('capturing a generated scene', () => {
 
     test('every node keeps the inputs it was compiled with, including asset-fed ones', () => {
         for (const { themeId, scene } of SCENES) {
-            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY);
+            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY, { requireSceneState: true });
             if (!resolved.ok) continue;
 
             for (const original of scene.graph.order) {
@@ -94,7 +94,7 @@ describe('capturing a generated scene', () => {
 
     test('the distributed bindings survive the round trip', () => {
         for (const { themeId, scene } of SCENES) {
-            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY);
+            const resolved = resolveAuthoredScene(captureScene(scene), REGISTRY, { requireSceneState: true });
             if (!resolved.ok) continue;
 
             for (const original of scene.bindings) {

@@ -7,6 +7,7 @@
 
 import { clamp01 } from './bindings';
 import {
+    DERIVED_STATE,
     declaresCapability,
     displacesHistory,
     grammarViolations,
@@ -96,6 +97,10 @@ export function ineligibleReason(
     context: SchedulerContext,
 ): string | undefined {
     const { theme } = context;
+
+    if (definition.capabilities.includes(DERIVED_STATE)) {
+        return 'derived by scene builder';
+    }
 
     if (theme.excludedPlugins?.includes(definition.id)) {
         return 'excluded by theme';

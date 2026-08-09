@@ -51,7 +51,6 @@ import {
     createParticleForceField,
     createParticleRenderer,
     createParticleSimulator,
-    createParticleTrailInjector,
     EMITTER_MODES,
     COLLIDER_MODES,
     FORCE_MODES,
@@ -71,29 +70,27 @@ import {
     createEdgeContourTransform,
     createShockwaveTransform,
     createSymmetryTransform,
-    createTemporalTransform,
     createTilingTransform,
     DOMAIN_WARP_MODES,
     EDGE_CONTOUR_MODES,
     SHOCKWAVE_MODES,
     SYMMETRY_MODES,
-    TEMPORAL_MODES,
     TILING_MODES,
 } from './transformers/transforms';
 import {
     COLOR_TRANSFORM_MODES,
     createColorTransform,
-    createFeedbackInjector,
     createFlowFieldCompositor,
     createGlowAndScatter,
     createLayerMixer,
     createMaskRouter,
     createPaletteMapper,
-    FEEDBACK_INJECTOR_MODES,
     GLOW_MODES,
     LAYER_MIXER_MODES,
     MASK_ROUTER_MODES,
 } from './compositors/composition';
+import { SCENE_HISTORY_MODES, createSceneHistoryWarp } from './transformers/scene-history';
+import { createSceneStateCombine } from './compositors/scene-state';
 
 /** Signal-derived and procedural plugins, available whether or not any asset is loaded. */
 export function m1Definitions(): VisualPluginDefinition[] {
@@ -150,7 +147,6 @@ export function simulatorDefinitions(): VisualPluginDefinition[] {
         ...FORCE_MODES.map(createParticleForceField),
         ...COLLIDER_MODES.map(createParticleCollider),
         ...PARTICLE_RENDER_MODES.map(createParticleRenderer),
-        createParticleTrailInjector(),
         createReactionDiffusionSimulator(),
         createReactionDiffusionView(),
         createWaveFieldSimulator(),
@@ -168,8 +164,6 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
         ...TILING_MODES.map(createTilingTransform),
         ...EDGE_CONTOUR_MODES.map(createEdgeContourTransform),
         ...SHOCKWAVE_MODES.map(createShockwaveTransform),
-        // Spec section 24 secondary scope, and the first consumer of the ladder's history depth.
-        ...TEMPORAL_MODES.map(createTemporalTransform),
         // The drag, which the kernel used to own (ADR-0012) and which no longer carries its own
         // combine (ADR-0013).
         createFieldAdvectTransform(),
@@ -182,10 +176,17 @@ export function compositorDefinitions(): VisualPluginDefinition[] {
         createFlowFieldCompositor(),
         ...LAYER_MIXER_MODES.map(createLayerMixer),
         ...MASK_ROUTER_MODES.map(createMaskRouter),
-        ...FEEDBACK_INJECTOR_MODES.map(createFeedbackInjector),
         createPaletteMapper(),
         ...COLOR_TRANSFORM_MODES.map(createColorTransform),
         ...GLOW_MODES.map(createGlowAndScatter),
+    ];
+}
+
+/** Builder-owned nodes, registered so captures and the Lab editor resolve the graph exactly. */
+export function derivedStateDefinitions(): VisualPluginDefinition[] {
+    return [
+        ...SCENE_HISTORY_MODES.map(createSceneHistoryWarp),
+        createSceneStateCombine(),
     ];
 }
 
@@ -198,6 +199,7 @@ export function allDefinitions(): VisualPluginDefinition[] {
         ...simulatorDefinitions(),
         ...transformerDefinitions(),
         ...compositorDefinitions(),
+        ...derivedStateDefinitions(),
     ];
 }
 
@@ -212,8 +214,7 @@ export interface SceneDefinition {
 }
 
 /**
- * Trace into feedback into tone mapping — the smallest scene that exercises geometry passes, a
- * declared feedback loop, and the output stage together.
+ * Trace through tone mapping into the canonical scene-state pair.
  *
  * The renderer assembles scenes through the scheduler rather than using this. It is kept as a fixed
  * reference scene: a hand-checked graph that must keep compiling, so a change to the plugin contract or
@@ -221,26 +222,28 @@ export interface SceneDefinition {
  */
 export function firstLightScene(registry: PluginRegistry): SceneDefinition {
     const trace = required(registry, 'SignalTraceSource:circular');
-    const feedback = required(registry, 'FeedbackFlowTransform:vortex');
     const toneMapper = required(registry, 'ToneMapper');
+    const history = required(registry, 'SceneHistoryWarp:spiral');
+    const state = required(registry, 'SceneStateCombine');
 
     return {
         nodes: [
             { instanceId: 'trace', definition: trace },
-            { instanceId: 'feedback', definition: feedback },
             { instanceId: 'tone', definition: toneMapper },
+            { instanceId: 'history', definition: history },
+            { instanceId: 'state', definition: state },
         ],
         edges: [
-            { from: { instanceId: 'trace', port: 'color' }, to: { instanceId: 'feedback', port: 'source' } },
+            { from: { instanceId: 'trace', port: 'color' }, to: { instanceId: 'tone', port: 'source' } },
+            { from: { instanceId: 'tone', port: 'color' }, to: { instanceId: 'state', port: 'source' } },
             {
-                // Declared feedback: the transform reads its own previous frame.
-                from: { instanceId: 'feedback', port: 'color' },
-                to: { instanceId: 'feedback', port: 'history' },
+                from: { instanceId: 'state', port: 'color' },
+                to: { instanceId: 'history', port: 'source' },
                 feedback: true,
             },
-            { from: { instanceId: 'feedback', port: 'color' }, to: { instanceId: 'tone', port: 'source' } },
+            { from: { instanceId: 'history', port: 'color' }, to: { instanceId: 'state', port: 'history' } },
         ],
-        present: { instanceId: 'tone', port: 'color' },
+        present: { instanceId: 'state', port: 'color' },
     };
 }
 

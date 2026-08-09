@@ -1,6 +1,6 @@
 # 0013 — Every node output is state; blending is a node; the bound is global
 
-- Status: Accepted
+- Status: Superseded by [0015](./0015-visualizer-single-graph-owned-scene-state.md)
 - Date: 2026-08-08
 - Supersedes: [0007](./0007-visualizer-kernel-persistence.md)
 - Amends: [0012](./0012-visualizer-historical-edges.md)

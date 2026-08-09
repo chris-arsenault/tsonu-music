@@ -321,6 +321,8 @@ export function wireScene(
      * their edges rather than drawing them.
      */
     maximumImageLoops = 1,
+    /** False for material assembly; the scene builder adds the one canonical image state itself. */
+    nominateImageHistory = true,
 ): WiredScene {
     // Derived joins sort after every category, not with the compositors they otherwise resemble.
     // Placed by category they ran before the post-processing stages, and each of those takes one
@@ -398,7 +400,8 @@ export function wireScene(
             // so they can chain, and every one after the first reads the list the one before it
             // built. Preferring history there would break the chain into a row of nodes each reading
             // its own last frame.
-            const nominated = isFeedbackPort(port)
+            const nominated = nominateImageHistory
+                && isFeedbackPort(port)
                 && isImagePortType(port.type)
                 && ownOutputFor(node.definition, port);
 
@@ -460,7 +463,7 @@ export function wireScene(
 
             // A feedback port with nothing upstream reads this plugin's own previous frame.
             const own = ownOutputFor(node.definition, port);
-            if (own && isFeedbackPort(port)) {
+            if (own && isFeedbackPort(port) && (nominateImageHistory || !isImagePortType(port.type))) {
                 edges.push({
                     from: { instanceId: node.instanceId, port: own.name },
                     to: { instanceId: node.instanceId, port: port.name },
@@ -495,7 +498,7 @@ export function wireScene(
         // output, so where a scene remembers is drawn below like any other wiring choice.
     }
 
-    if (rng) {
+    if (rng && nominateImageHistory) {
         closeLoop(edges, nodes, rng, maximumImageLoops);
     }
 
@@ -558,14 +561,6 @@ export function isBranchJoiner(definition: VisualPluginDefinition): boolean {
         && colourInputs.every((port) => port.required)
         && definition.outputs.some((port) => port.type === 'color-texture')
         && !ANNIHILATING_MODES.includes(definition.id.split(':')[1] ?? '');
-}
-
-/** Whether any host asset could satisfy this port, for the dependency ordering below. */
-function findAsset(
-    assets: readonly AssetResource[],
-    port: PluginPort,
-): AssetResource | undefined {
-    return assets.find((asset) => portsCompatible(asset.type, port.type));
 }
 
 /**

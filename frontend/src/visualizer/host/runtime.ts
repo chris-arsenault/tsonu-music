@@ -208,7 +208,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
         stats: RuntimeStats,
         parameters: Readonly<Record<string, number>>,
         deltaSeconds: number,
-        writtenThisFrame: Set<ResourceId>,
     ): void {
         const program = device.useProgram(pass.shader);
         if (!program) {
@@ -232,28 +231,12 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
 
         let unit = 0;
         const bound = new Set<string>();
-        for (const [sampler, resource] of Object.entries(pass.inputs ?? {})) {
-            // A resource read through a feedback edge resolves to the previous frame's slot.
-            // A resource already produced this frame is read as it stands now, even when this node
-            // also declares a feedback edge onto it.
-            //
-            // The test was purely "does this node read this resource through a feedback edge", which
-            // is ambiguous the moment a plugin has more than one pass: the particle simulator writes
-            // its state and then bins that state in a second pass, and because `state` is also its
-            // feedback port the binning pass was handed the previous frame's slot. Contact then
-            // resolved against positions two frames old — further out of date, at these speeds, than
-            // one whole contact diameter — so bodies were being pushed apart from where their
-            // neighbours used to be.
-            // The exception is for a plugin reading a resource *it* wrote earlier this frame, which
-            // is the particle simulator binning the state its first pass produced. Restricted to
-            // this node's own outputs: once a loop may close to any producer (ADR-0012), an upstream
-            // node's resource is written before this one runs, and the unrestricted test silently
-            // turned every such historical read into a forward one — the loop would compile, run,
-            // and simply not be a loop.
-            const ownOutput = Object.values(node.outputs).includes(resource);
-            const isPrevious = Object.values(node.previous).includes(resource)
-                && !(ownOutput && writtenThisFrame.has(resource));
-            const texture = resolveTexture(plan, resource, isPrevious);
+        for (const [sampler, input] of Object.entries(pass.inputs ?? {})) {
+            // Temporal identity belongs to this sampler read. Inferring it from the node or resource
+            // made one resource impossible to read as both current and previous, and changed a
+            // historical read into a current one merely because some pass had already written it.
+            const resource = typeof input === 'string' ? input : input.resource;
+            const texture = resolveTexture(plan, resource, typeof input !== 'string' && input.frame === 'previous');
             if (texture) {
                 device.bindTexture(program, sampler, texture, unit);
                 bound.add(sampler);
@@ -288,10 +271,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             device.drawGeometry(program, pass.geometry, pass.primitive, pass.vertexCount);
         } else {
             device.drawFullscreen();
-        }
-
-        if (outputResource) {
-            writtenThisFrame.add(outputResource);
         }
 
         stats.passesExecuted += 1;
@@ -346,7 +325,11 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Before anything reads a historical slot, so a seek cannot carry the previous passage
             // into the first frame of the new one.
             if (frame.clearHistory) {
-                clearHistorySlots(device, plan);
+                clearHistorySlots(
+                    device,
+                    plan,
+                    frame.clearTransients ? planningGraph.pingPong : graph.pingPong,
+                );
             }
 
             // Semantic values describe this frame's authored graph. Keeping a value from a previous
@@ -391,9 +374,6 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
             // Then whatever those leave stranded. Suppressing a particle renderer used to leave its
             // simulator running into a buffer nobody reads: a full simulation pass every frame
             // producing no pixels, since a particle buffer is never a colour texture.
-            /** Resources produced so far this frame, so a later pass reads them as they now stand. */
-            const writtenThisFrame = new Set<ResourceId>();
-
             const dead = unreachableInstances(
                 graph.order,
                 skipped,
@@ -454,7 +434,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                 });
 
                 for (const pass of passes) {
-                    executePass(pass, node, plan, stats, renderedParameters, deltaSeconds, writtenThisFrame);
+                    executePass(pass, node, plan, stats, renderedParameters, deltaSeconds);
                 }
             }
 
@@ -497,7 +477,7 @@ export function createRuntime(device: Device, presentShaderId: string): Runtime 
                     renderWidth: plan.width,
                     renderHeight: plan.height,
                 })) {
-                    executePass(pass, active.node, plan, stats, renderedParameters, deltaSeconds, writtenThisFrame);
+                    executePass(pass, active.node, plan, stats, renderedParameters, deltaSeconds);
                 }
             }
 
@@ -715,9 +695,14 @@ function composite(
  * the new one indefinitely. That used to be one texture and is now however many resources the scene
  * reads historically, so the clear follows the plan instead of a constant.
  */
-function clearHistorySlots(device: Device, plan: RenderPlan): void {
+function clearHistorySlots(
+    device: Device,
+    plan: RenderPlan,
+    resources: readonly ResourceId[],
+): void {
+    const historical = new Set(resources);
     for (const entry of plan.targets) {
-        if (entry.slot === undefined) {
+        if (entry.slot === undefined || !historical.has(entry.resource)) {
             continue;
         }
 

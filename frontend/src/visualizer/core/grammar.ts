@@ -146,7 +146,7 @@ export function countByCategory(
         // counting those against the compositor budget makes the budget describe two different things
         // and, when the ceiling was raised to fit them, had assembly draw the extra compositors up
         // front and crowd the fields out of the scene size.
-        if (isDerivedJoin(definition)) {
+        if (isDerivedJoin(definition) || isDerivedState(definition)) {
             continue;
         }
 
@@ -196,8 +196,15 @@ export const SPATIAL_FEEDBACK = 'spatial-feedback';
  */
 export const DERIVED_JOIN = 'derived-join';
 
+/** Nodes the builder derives for the canonical recursive image state. */
+export const DERIVED_STATE = 'derived-state';
+
 export function isDerivedJoin(definition: VisualPluginDefinition): boolean {
     return definition.capabilities.includes(DERIVED_JOIN);
+}
+
+export function isDerivedState(definition: VisualPluginDefinition): boolean {
+    return definition.capabilities.includes(DERIVED_STATE);
 }
 
 export function displacesHistory(definition: VisualPluginDefinition): boolean {
