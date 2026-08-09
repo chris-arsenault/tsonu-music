@@ -996,6 +996,23 @@ export function createRenderer(canvas: HTMLCanvasElement, options: RendererOptio
                 if (!assetResources.some((entry) => entry.resource === resource)) {
                     assetResources = [...assetResources, { resource, type }];
                 }
+
+                // The artwork also enters as a stencil. Typed only as colour it could never reach a
+                // mask port — `mask-texture` admits masks and distance fields, so every stencil in
+                // every scene was one of the twenty-six bundled shapes and the reported "the only
+                // stencil is ever the tree of life" was structural. A mask consumer reads a single
+                // channel, which for artwork is its red channel: a real per-track shape. Favored,
+                // so the one asset the current track supplies outweighs any single bundled mask.
+                if (kind === 'album-art') {
+                    const stencil = assetResourceId(`${assetId}#stencil`);
+                    device.uploadAssetTexture(stencil, image);
+                    if (!assetResources.some((entry) => entry.resource === stencil)) {
+                        assetResources = [
+                            ...assetResources,
+                            { resource: stencil, type: 'mask-texture', favored: true },
+                        ];
+                    }
+                }
             },
 
             availableAssets() {

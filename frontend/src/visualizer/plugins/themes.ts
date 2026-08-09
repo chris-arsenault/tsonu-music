@@ -89,6 +89,17 @@ export const IMAGE_DREAM_THEME: VisualTheme = {
         geometricOrder: 0.4,
         brightness: 0.5,
     },
+    // The comment above `satisfiableThemes` has said "image dream needs album-art sources" since
+    // the theme existed, and nothing enforced it: the album-art plugins entered the draw at weight
+    // one or two against a catalog of ~150 definitions, so the theme named after the artwork
+    // showed it as often as chance — which, reported, was never. Preference is a weight, not a
+    // guarantee: a track with no artwork still builds, because the plugins' own requiredAssets
+    // gate keeps them out of the draw when nothing is loaded.
+    preferredPlugins: [
+        { pluginId: 'AlbumArtSource', weight: 20 },
+        { pluginId: 'AlbumArtEdges', weight: 12 },
+        { pluginId: 'ImageLuminanceField', weight: 10 },
+    ],
     mutationPolicy: { ...DEFAULT_MUTATION_POLICY, intervalSeconds: 7 },
     colorPolicy: { source: 'album-palette', strength: 0.9 },
 };

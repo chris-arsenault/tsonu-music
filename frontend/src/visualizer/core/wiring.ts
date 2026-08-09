@@ -82,6 +82,12 @@ export function assignInstanceIds(
 export interface AssetResource {
     resource: string;
     type: PluginPort['type'];
+    /**
+     * Weighted up when the scene draws an asset of this type. The artwork's stencil derivation
+     * carries this: one track-specific shape against twenty-six bundled masks was a lottery the
+     * artwork effectively never won, and it is the one asset the current track actually supplies.
+     */
+    favored?: boolean;
 }
 
 /** Resource id for a bound asset, distinguishable from a plugin output. */
@@ -379,7 +385,12 @@ export function wireScene(
     for (const asset of assets) {
         if (!assetChoice.has(asset.type)) {
             const compatible = assets.filter((candidate) => candidate.type === asset.type);
-            assetChoice.set(asset.type, compatible[rng ? rng.int(compatible.length) : 0]);
+            // A favored asset carries the weight of ten ordinary ones: the artwork's stencil
+            // stays likelier than any single bundled mask without becoming the only answer.
+            const chosen = rng
+                ? rng.weighted(compatible, (candidate) => (candidate.favored ? 10 : 1))
+                : compatible[0];
+            assetChoice.set(asset.type, chosen ?? compatible[0]);
         }
     }
 
