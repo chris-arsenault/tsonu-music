@@ -163,8 +163,16 @@ describe('a retained producer carries its memory along the field', () => {
         expect(drifting.outputs.find((port) => port.name === 'color')?.retained).toBe(true);
     });
 
-    test('no field wired falls back to the decay, which costs no memory', () => {
-        expect(aged({ color: 'out.color' }, {})).toMatchObject({ blend: 'multiply' });
+    test('a second slot is sampled even with no field, because multiply would age the wrong one', () => {
+        // The multiply decay lets the blender read the destination. On a ping-ponged resource that
+        // is the write slot — the frame before last — so the memory split into two lineages
+        // advancing on alternate frames. With a slot allocated the pass samples the read slot and
+        // writes the write slot, which is a copy when nothing displaces it.
+        expect(aged({ color: 'out.color' }, {})).toMatchObject({
+            shader: driftShaderId('Fixture'),
+            inputs: { uPrevious: 'out.color' },
+            blend: 'none',
+        });
     });
 
     test('no second slot planned falls back too, rather than sampling the target it writes', () => {

@@ -223,10 +223,22 @@ export function decayPass(
     output: ResourceId,
     /** The previous frame, when the output is `retained` and the plan gave it a second slot. */
     previous?: ResourceId,
-    /** The field to carry the memory along. Absent, the drift would be the identity. */
+    /** The field to carry the memory along. Absent, the drift is the identity and only ages. */
     field?: ResourceId,
 ): RenderPass {
-    if (!previous || !field) {
+    // The multiply decay is only correct on a single-buffered target.
+    //
+    // It carries no inputs and lets the blender read the destination, which is the target itself —
+    // right when there is one texture, wrong the moment the plan gives the resource two. A
+    // ping-ponged write slot holds the frame before last, so multiplying it aged a different image
+    // from the one presented and split the memory into two lineages advancing on alternate frames,
+    // each decayed by one frame's delta while being updated every other frame. Measured after the
+    // retention work landed: 49 of 362 decay passes, in 23% of scenes.
+    //
+    // So the choice is on the slot, not on the field. With a second slot the pass samples the read
+    // slot and writes the write slot, which is a copy when nothing displaces it — an unwired uField
+    // reads the device's empty texture, the velocity is zero, and the sample is taken at vUv.
+    if (!previous) {
         return {
             kind: 'fullscreen',
             shader: decayShaderId(pluginId),
@@ -239,7 +251,7 @@ export function decayPass(
     return {
         kind: 'fullscreen',
         shader: driftShaderId(pluginId),
-        inputs: { uPrevious: previous, uField: field },
+        inputs: field ? { uPrevious: previous, uField: field } : { uPrevious: previous },
         output,
         // Replaces the write slot, which holds the frame before last. What is being preserved is the
         // read slot, and this pass is what carries it across.
