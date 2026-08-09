@@ -10,6 +10,7 @@
 
 import type { PluginPort, PortType, VisualPluginDefinition } from './plugin';
 import type { ResourceId } from './passes';
+import { divergentCycles } from './loop-gain';
 import { analyzeSceneState, type CompiledSceneState } from './scene-state';
 
 export interface GraphNode {
@@ -238,6 +239,18 @@ export function compileSceneGraph(
         return failed(analysis.problems.length > 0
             ? analysis.problems
             : [{ detail: 'scene has no graph-owned image state' }]);
+    }
+
+    // Every image cycle in a complete scene converges, whoever wired it. The drawn loop is checked
+    // where it is drawn, but nominated trails kept without a draw, authored documents, and the
+    // canonical state itself reached the compiler with no gain check at all — an authored graph
+    // with a unity-gain image cycle compiled silently and grew without bound, showing as a frame
+    // driven to white rather than as an error naming the cycle.
+    const divergent = divergentCycles(nodes, edges);
+    if (divergent.length > 0) {
+        return failed(divergent.map((cycle) => ({
+            detail: `image cycle ${cycle.path.join(' -> ')} has gain ${cycle.gain.toFixed(2)}; below 1 converges`,
+        })));
     }
 
     const combine = compiled.graph.order.find((node) => node.instanceId === analysis.state!.combineInstanceId);

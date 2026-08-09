@@ -124,9 +124,22 @@ export interface GrammarViolation {
         // layer and so never meeting the transforms or the loop the rest of the scene is made of.
         | 'too-many-terminals'
         | 'no-spatial-loop'
-        | 'too-few-plugins';
+        | 'too-few-plugins'
+        // Two or more mixers whose output can be black where an operand is bright: chained, they
+        // converge on nothing.
+        | 'too-many-annihilating';
     detail: string;
 }
+
+/**
+ * Mixer modes whose output can be black where an operand is bright.
+ *
+ * `multiply` drives toward zero, `darken` keeps the darker operand, `difference` cancels wherever
+ * the two agree, `normal` replaces the base outright, and `contrast` hard-switches between them per
+ * pixel. One is a character choice; the grammar caps the drawn set at one, and derived joins never
+ * use them at all.
+ */
+export const ANNIHILATING_MODES: readonly string[] = ['multiply', 'darken', 'difference', 'normal', 'contrast'];
 
 export function countByCategory(
     definitions: readonly VisualPluginDefinition[],
@@ -299,6 +312,22 @@ export function grammarViolations(
         violations.push({
             kind: 'too-few-feedback',
             detail: 'no plugin can be the lossy element of a loop',
+        });
+    }
+
+    // One annihilating mixer is a character choice; two are a funnel to black. Each of these modes
+    // can output black where an operand is bright, and they chain — the second one darkens what the
+    // first already darkened, and the pair converges on nothing. Measured before derived joins
+    // excluded them: 156 of 300 scenes held two or more in series, and "goes to only black within
+    // half a second" was the reported result. The join path is already guarded; this closes the
+    // same permit for the drawn set.
+    const annihilating = definitions.filter((definition) =>
+        definition.id.startsWith('LayerMixer:')
+        && ANNIHILATING_MODES.includes(definition.id.split(':')[1] ?? '')).length;
+    if (annihilating > 1) {
+        violations.push({
+            kind: 'too-many-annihilating',
+            detail: `${annihilating} annihilating mixers can chain to black; the ceiling is 1`,
         });
     }
 
