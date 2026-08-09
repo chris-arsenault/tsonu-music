@@ -239,20 +239,14 @@ function closeLoop(
         ...nominated.slice(0, Math.max(0, maximumImageLoops - 1)),
     ];
 
+    // Forward-fed ports are candidates too. Closing there displaces the forward edge and leaves
+    // its producer as a second terminal — which the settle loop's next join round absorbs, the
+    // same way it converges every other leftover branch. A version of this skipped any occupied
+    // port on the reasoning that the orphan was fatal; that quietly made `LayerMixer.source` —
+    // required, therefore always forward-fed, and the one port whose gain was designed to carry
+    // the composed-image loop — unreachable for every drawn loop, and the mixer-carried fold-back
+    // went extinct while the machinery for it sat live.
     for (const { node: sink, input } of orderLoopSinks(nodes, rng)) {
-        // A port already carrying a forward edge is not a candidate. Closing there replaces real
-        // structure: the displaced producer becomes a second terminal, and under the one-terminal
-        // invariant the join and the loop draw then feed each other a new orphan every round until
-        // the candidate is abandoned. A loop closes where a port is free for it — an optional
-        // history input, or one whose only occupant is the self-loop nomination it replaces.
-        const forwardOccupied = kept.some((edge) =>
-            !edge.feedback
-            && edge.to.instanceId === sink.instanceId
-            && edge.to.port === input.name);
-        if (forwardOccupied) {
-            continue;
-        }
-
         const candidates = nodes.flatMap((node) => node.definition.outputs
             .filter((output) => !output.internal && portsCompatible(output.type, input.type))
             .map((output) => ({ instanceId: node.instanceId, port: output.name })));

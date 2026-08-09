@@ -285,6 +285,17 @@ export function settleScene(
         // definition made the set smaller than the node count on their own.
         let pruned = false;
         for (let pass = 0; pass < plugins.length; pass += 1) {
+            // A drawn loop that displaced a forward edge leaves the displaced producer as a second
+            // terminal. That is material for the next round's join to absorb, not a failure —
+            // treating it as fatal here is what made closing a loop on any forward-fed port
+            // impossible, and the forward-fed ports include `LayerMixer.source`, the one port whose
+            // gain was designed to carry the composed-image loop. The candidate still fails if the
+            // rounds run out with the scene unconverged.
+            if (unabsorbedOutputs(wired).length !== 1) {
+                pruned = true;
+                break;
+            }
+
             const stateful = withCanonicalState(wired, entropy, schedulerContext.available);
             if (!stateful) {
                 return {

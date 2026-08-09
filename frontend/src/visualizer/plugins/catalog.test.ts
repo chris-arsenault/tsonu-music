@@ -24,6 +24,8 @@ import { COLLISION_ENERGY, GEOMETRIC_SIGNAL, ORGANIC_FLOW, satisfiesGrammar } fr
 import { COLLISION_ENERGY_THEME, GEOMETRIC_SIGNAL_THEME, IMAGE_DREAM_THEME, ORGANIC_FLOW_THEME, THEMES } from './themes';
 import { createImpactBus, type ImpactEvent } from '../core/impact';
 import { advanceCascade, CASCADE_MODES, seedCascade } from './simulators/impact-cascade';
+import { previousTexture } from '../core/passes';
+import { TEMPORAL_MODES } from './transformers/transforms';
 import { availableAssetIds, albumArtAssetFrom } from '../core/assets';
 import { isMotionSource } from '../core/fields';
 import type { FrameContext } from '../core/plugin';
@@ -828,5 +830,81 @@ describe('scenes accumulate and move', () => {
                 expect(persistence, `${theme.id}/${scene.entropy}`).toBeGreaterThan(0);
             }
         }
+    });
+});
+
+/**
+ * `TemporalTransform` (spec section 19.8).
+ *
+ * The first plugin to keep frames, and therefore the first consumer of `historyDepth`. This block
+ * was deleted when the plugin was deregistered by the graph-owned-state change; the plugin came
+ * back and its coverage comes back with it, updated to the sampler-level temporal identity that
+ * change introduced: a historical input is a `previousTexture` read, not a raw resource id.
+ */
+describe('temporal transform', () => {
+    const temporal = (mode: typeof TEMPORAL_MODES[number]) =>
+        CATALOG.find((definition) => definition.id === `TemporalTransform:${mode}`)!;
+
+    /** Renders one pass at a given ladder profile and reports the depth uniform it emitted. */
+    function depthAt(historyDepth: number): number {
+        const definition = temporal('echo');
+        const instance = definition.create(createContext().context);
+        instance.initialize();
+        instance.activate({
+            clock: { trackId: 't', playbackTime: 0, duration: 1, state: 'playing', generation: 1 },
+            parameters: definition.parameters ?? {},
+        });
+        instance.update(frame({ historyDepth }).frame);
+
+        const passes = instance.render({
+            inputs: { source: 'in.source' },
+            outputs: { color: 'out.color' },
+            previous: { history: 'prev.history' },
+            renderWidth: 640,
+            renderHeight: 360,
+        });
+
+        return passes[0].uniforms!.uDepth as number;
+    }
+
+    test('every mode section 19.8 lists is registered', () => {
+        expect(TEMPORAL_MODES).toHaveLength(9);
+        for (const mode of TEMPORAL_MODES) {
+            expect(temporal(mode), mode).toBeDefined();
+        }
+    });
+
+    test('the quality ladder reduces how much history is kept', () => {
+        const full = QUALITY_LADDER[0].historyDepth;
+        const floor = QUALITY_LADDER[QUALITY_LADDER.length - 1].historyDepth;
+
+        expect(depthAt(full)).toBe(1);
+        expect(depthAt(floor)).toBeLessThan(depthAt(full));
+        expect(depthAt(floor)).toBeGreaterThan(0);
+    });
+
+    test('a port an edge was drawn into historically reads the previous frame', () => {
+        const definition = temporal('delayed-mirror');
+        const instance = definition.create(createContext().context);
+        instance.initialize();
+        instance.update(frame().frame);
+
+        // A present `previous` entry is the whole condition: the compiler records one only for an
+        // edge wiring actually drew as historical.
+        const passes = instance.render({
+            inputs: { source: 'in.source', history: 'in.history' },
+            outputs: { color: 'out.color' },
+            previous: { history: 'prev.history' },
+            renderWidth: 640,
+            renderHeight: 360,
+        });
+
+        expect(passes[0].inputs?.uHistory).toEqual(previousTexture('prev.history'));
+        expect(passes[0].inputs?.uSource).toBe('in.source');
+        expect(passes[0].clear).toBe(false);
+    });
+
+    test('it leaves gracefully, since it holds frames', () => {
+        expect(temporal('slit-scan').deactivationPolicy).toBe('freeze-and-dissolve');
     });
 });

@@ -153,8 +153,11 @@ A derived texture always wins over the raw asset it came from.
 
 Every material branch joins inside the graph before the scene state. `SceneHistoryWarp` reads the
 previous `SceneStateCombine` output, spatially resamples it, and returns it to the combine beside the
-fresh material. The combine output is the only active layer presented by the host. Ordinary colour
-plugins redraw current-frame intermediate values and own no image history of their own.
+fresh material. The combine output is the only active layer presented by the host. The combine's
+arithmetic is drawn per scene from an operator family — stamp, screen, or max (ADR-0016). Beneath
+the state, material memory is legal and bounded: plugins may keep self-loop trails and wiring may
+fold the composed image back through a lossy port, with every image cycle required to converge at
+its gain ceiling before the scene compiles.
 
 The state resource is ping-ponged because its historical edge explicitly reads the previous slot.
 Its survival is per second, so trail length is independent of refresh rate. A frozen clock holds the
