@@ -10,7 +10,7 @@
  * kernel type rather than private to this file.
  */
 
-import { character } from '../define';
+import { character, GLSL_PERTURB_VERTEX } from '../define';
 import type { ImpactEvent } from '../../core/impact';
 import type { RenderPass } from '../../core/passes';
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
@@ -67,10 +67,13 @@ in vec2 aPosition;
 in float aEnergy;
 out float vEnergy;
 uniform float uPointSize;
+${GLSL_PERTURB_VERTEX}
 void main() {
     vEnergy = aEnergy;
     gl_PointSize = uPointSize * (0.5 + aEnergy * 2.0);
-    gl_Position = vec4(aPosition, 0.0, 1.0);
+    // Displaced by a wired field like every other producer, so a cascade can be blown around by the
+    // scene rather than only by its own solver.
+    gl_Position = vec4(perturbedPosition(aPosition), 0.0, 1.0);
 }`;
 
 const CASCADE_FRAGMENT = `#version 300 es
@@ -324,7 +327,7 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
         id: `ImpactCascadeSimulator:${mode}`,
         version: 1,
         category: 'simulator',
-        inputs: [],
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
             { name: 'color', type: 'color-texture', required: false },
             // Velocities the simulation already holds, so this needs no derivation at all.
@@ -473,12 +476,13 @@ export function createImpactCascadeSimulator(mode: CascadeMode = 'orbital-collap
                         kind: 'geometry',
                         shader: CASCADE_SHADER,
                         geometry: CASCADE_GEOMETRY,
+                        inputs: render.inputs.field ? { uField: render.inputs.field } : {},
                         primitive: 'points',
                         vertexCount: count,
                         output: render.outputs.color,
                         blend: 'add',
                         clear: true,
-                        uniforms: { uPointSize: 3.5, uBrightness: 1.4 },
+                        uniforms: { uPointSize: 3.5, uBrightness: 1.4, uPerturb: 0.12 },
                     }];
 
                     if (render.outputs.motion) {

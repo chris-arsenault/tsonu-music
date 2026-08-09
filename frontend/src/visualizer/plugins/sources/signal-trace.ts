@@ -11,6 +11,7 @@ import type {
     VisualPluginInstance,
 } from '../../core/plugin';
 import type { GeometryUpload, RenderPass } from '../../core/passes';
+import { GLSL_COMMON, GLSL_PERTURB_VERTEX } from '../define';
 
 export type SignalTraceMode =
     | 'oscilloscope'
@@ -82,21 +83,44 @@ const VERTEX = `#version 300 es
 in vec2 aPosition;
 in float aIntensity;
 out float vIntensity;
+out vec2 vTracePosition;
 uniform float uThickness;
+${GLSL_PERTURB_VERTEX}
 void main() {
     vIntensity = aIntensity;
     gl_PointSize = uThickness;
-    gl_Position = vec4(aPosition, 0.0, 1.0);
+
+    // Displaced by whatever field is wired in, per vertex. Sampling in the vertex stage rather than
+    // reading the field back to the CPU: the trace is a few hundred points and the field is already
+    // on the GPU. Unwired, the sampler reads the device's empty texture and this is the identity.
+    vec2 placed = perturbedPosition(aPosition);
+
+    vTracePosition = placed;
+    gl_Position = vec4(placed, 0.0, 1.0);
 }`;
 
 const FRAGMENT = `#version 300 es
 precision highp float;
 in float vIntensity;
+in vec2 vTracePosition;
 out vec4 fragColor;
 uniform float uBrightness;
+uniform float uHue;
+${GLSL_COMMON}
 void main() {
     float energy = clamp(vIntensity * uBrightness, 0.0, 1.0);
-    fragColor = vec4(vec3(energy), energy);
+
+    // Chromatic, not grey.
+    //
+    // This wrote vec3(energy) — white lines — as 58 other plugins in the catalog still do. Colour
+    // then only ever arrived if a palette mapper happened to land downstream, which is about a third
+    // of scenes; in the rest the trace was white on black whatever the music was doing. The hue runs
+    // along the trace and is bound, so the line reads as a coloured object rather than a monochrome
+    // overlay, and a palette mapper downstream still has something coherent to remap.
+    float along = atan(vTracePosition.y, vTracePosition.x) / 6.2831853 + 0.5;
+    vec3 tint = hsv2rgb(vec3(fract(uHue + along * 0.35), 0.75, 1.0));
+
+    fragColor = vec4(tint * energy, energy);
 }`;
 
 /**
@@ -198,7 +222,11 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
         id: `SignalTraceSource:${mode}`,
         version: 1,
         category: 'source',
-        inputs: [],
+        // The port that lets the rest of the scene act on this one. A mask boundary, a curl field, a
+        // warp's published displacement — anything producing a field can now push the trace around,
+        // where before nothing in the graph could reach it and it was redrawn at the same coordinates
+        // every frame no matter what else was happening.
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
             { name: 'color', type: 'color-texture', required: false },
             // What the waveform is doing to the shape, which is the thing this plugin knows and
@@ -222,8 +250,44 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             activationWeight: 7,
             minimumDuration: 8,
         },
-        parameters: { amplitude: 0.6, thickness: 2, brightness: 1.4, wakeScale: 1.2 },
+        parameters: {
+            amplitude: 0.6,
+            thickness: 2,
+            brightness: 1.4,
+            wakeScale: 1.2,
+            perturb: 0.12,
+            // Driven by a rate binding rather than a value one, so it is integrated by the kernel and
+            // walks instead of tracking a band and returning to the same colour whenever that band
+            // returns to the same level. Of 448 bindings in the catalog, 21 were integrated and none
+            // of them was on a source's appearance.
+            hue: 0,
+        },
         defaultBindings: [
+            {
+                // How far the wired field pushes the trace.
+                feature: 'lowMid',
+                role: 'deformation',
+                parameter: 'perturb',
+                outputRange: [0.02, 0.35],
+                attack: 0.15,
+                release: 0.7,
+                curve: 'smooth',
+            },
+            {
+                // Integrated, so the colour walks and does not come back. A value binding here would
+                // make the hue a function of the current band, which returns to the same colour every
+                // time the band returns to the same level — the periodicity that reads as the picture
+                // bouncing in place rather than going anywhere.
+                feature: 'mid',
+                mode: 'rate',
+                role: 'complexity',
+                parameter: 'hue',
+                outputRange: [0.01, 0.12],
+                attack: 0.3,
+                release: 1.2,
+                curve: 'smooth',
+                wrap: 1,
+            },
             {
                 feature: 'rmsExcite',
                 role: 'intensity',
@@ -348,10 +412,18 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         return [];
                     }
 
+                    // The field the vertex shader displaces by, when the scene wired one. Absent, the
+                    // device binds its empty texture and the displacement is the identity.
+                    const inputs: Record<string, string> = {};
+                    if (render.inputs.field) {
+                        inputs.uField = render.inputs.field;
+                    }
+
                     const passes: RenderPass[] = [{
                         kind: 'geometry',
                         shader: SHADER_ID,
                         geometry: GEOMETRY_ID,
+                        inputs,
                         primitive: mode === 'lissajous' ? 'points' : 'line-strip',
                         vertexCount,
                         output: render.outputs.color,
@@ -360,6 +432,8 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
                         uniforms: {
                             uThickness: 2,
                             uBrightness: 1.4,
+                            uPerturb: 0.12,
+                            uHue: 0,
                         },
                     }];
 

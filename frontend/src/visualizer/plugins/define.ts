@@ -361,10 +361,69 @@ vec4 resampleMotion(vec2 uv, vec2 source) {
 }
 `;
 
+/**
+ * Lets a producer be displaced by a field, which is what makes it able to interact with anything.
+ *
+ * Measured before this existed: 45 of 46 colour sources and every colour-producing simulator declared
+ * no image or field input at all. A node with no inputs cannot be perturbed, cannot be warped, cannot
+ * be the sink of a historical edge, and cannot participate in a loop — the only thing the graph can do
+ * with it is draw it and composite it. That is why a waveform trace and a mask could sit in the same
+ * scene as separate layers with no way to affect one another however the wiring was arranged, and why
+ * the same trace was redrawn in the same place every frame no matter what the rest of the scene did.
+ *
+ * The field is optional everywhere. An unwired sampler reads the empty texture the device binds for
+ * exactly this case, which is zero, so the displacement is the identity and a source with nothing
+ * wired to it behaves as it always did.
+ */
+export const GLSL_PERTURB = `
+uniform sampler2D uField;
+/** UV displaced per unit of field magnitude. Zero is the identity. */
+uniform float uPerturb;
+
+vec2 perturbed(vec2 uv) {
+    vec2 field = texture(uField, clamp(uv, 0.0, 1.0)).xy;
+
+    return clamp(uv + field * uPerturb, 0.0, 1.0);
+}
+`;
+
+/**
+ * The same displacement for a geometry pass, applied in the vertex shader.
+ *
+ * Sampling the field per vertex rather than reading it back to the CPU: a trace is a few hundred
+ * vertices and the field is already on the GPU, so a texture fetch in the vertex stage is the cheap
+ * way round. Positions are clip space, which spans two units against UV's one.
+ */
+export const GLSL_PERTURB_VERTEX = `
+uniform sampler2D uField;
+uniform float uPerturb;
+
+vec2 perturbedPosition(vec2 position) {
+    vec2 uv = position * 0.5 + 0.5;
+    vec2 field = texture(uField, clamp(uv, 0.0, 1.0)).xy;
+
+    return position + field * uPerturb * 2.0;
+}
+`;
+
 /** GLSL helpers shared across the catalog, prepended where needed. */
 export const GLSL_COMMON = `
 float hash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+/**
+ * Hue, saturation and value to linear RGB.
+ *
+ * Absent until now, which is most of why 59 plugins in the catalog write vec3(x) and are therefore
+ * monochrome: without a way to turn a scalar into a colour, a shader computing one intensity has
+ * nothing to do with it but write it to all three channels. Colour then only arrives if a palette
+ * mapper happens to land downstream, which is about a third of scenes.
+ */
+vec3 hsv2rgb(vec3 hsv) {
+    vec3 wrapped = clamp(abs(mod(hsv.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+
+    return hsv.z * mix(vec3(1.0), wrapped, hsv.y);
 }
 
 float valueNoise(vec2 p) {

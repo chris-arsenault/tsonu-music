@@ -5,8 +5,30 @@
  * the reduced grammar falls back to when everything else has been given up.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON, GLSL_PERTURB } from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
+
+/**
+ * The port and the parameter that let a source be pushed around by the rest of the scene.
+ *
+ * Declared once because it is the same on every producer: optional, so a source with nothing wired to
+ * it renders exactly as before, and bound to a band so the amount of displacement follows the music
+ * rather than sitting at a constant. Shared rather than repeated so the next producer added cannot
+ * quietly be another closed one.
+ */
+export const PERTURB_INPUT = { name: 'field', type: 'vector-field' as const, required: false };
+
+export const PERTURB_UNIFORMS = { uPerturb: 0.12 };
+export const PERTURB_PARAMETERS = { perturb: 0.12 };
+export const PERTURB_BINDING = {
+    feature: 'lowMid',
+    role: 'deformation' as const,
+    parameter: 'perturb',
+    outputRange: [0.02, 0.35] as [number, number],
+    attack: 0.15,
+    release: 0.7,
+    curve: 'smooth' as const,
+};
 
 const PROCEDURAL_TEXTURE_FRAGMENT = `#version 300 es
 precision highp float;
@@ -21,9 +43,12 @@ uniform float uMode;
 uniform float uScale;
 uniform float uContrast;
 ${GLSL_COMMON}
+${GLSL_PERTURB}
 
 void main() {
-    vec2 p = (vUv - 0.5) * uScale;
+    // Sampled through the field, so anything producing one can push this texture around instead of
+    // it being redrawn at the same coordinates every frame.
+    vec2 p = (perturbed(vUv) - 0.5) * uScale;
     float value;
 
     if (uMode < 0.5) {                       // oscillator stripes
@@ -140,10 +165,11 @@ uniform float uMode;
 uniform float uThickness;
 uniform float uFrequency;
 ${GLSL_COMMON}
+${GLSL_PERTURB}
 ${PARAMETRIC_CURVE_BODY}
 
 void main() {
-    vec2 p = (vUv - 0.5) * 2.0;
+    vec2 p = (perturbed(vUv) - 0.5) * 2.0;
     p.x *= uResolution.x / max(uResolution.y, 1.0);
 
     float distance = curveDistance(p);
@@ -165,6 +191,7 @@ uniform float uMorph;
 uniform float uRepeat;
 uniform float uEnergy;
 ${GLSL_COMMON}
+${GLSL_PERTURB}
 
 float circle(vec2 p, float r) { return length(p) - r; }
 
@@ -186,7 +213,7 @@ float smoothUnion(float a, float b, float k) {
 }
 
 void main() {
-    vec2 p = (vUv - 0.5) * 2.0;
+    vec2 p = (perturbed(vUv) - 0.5) * 2.0;
     p.x *= uResolution.x / max(uResolution.y, 1.0);
     float pulse = 1.0 + 0.06 * sin(uTime * 0.8 + uPhase) + 0.12 * uEnergy;
     p = rotate(p / pulse, uTime * 0.035 + uEnergy * 0.08);
@@ -483,7 +510,7 @@ export function createProceduralTextureSource(
     return defineShaderPlugin({
         id: `ProceduralTextureSource:${mode}`,
         category: 'source',
-        inputs: [],
+        inputs: [PERTURB_INPUT],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
@@ -492,6 +519,7 @@ export function createProceduralTextureSource(
         fragment: PROCEDURAL_TEXTURE_FRAGMENT,
         motion: { port: 'motion', fragment: PROCEDURAL_TEXTURE_MOTION },
         uniforms: {
+            ...PERTURB_UNIFORMS,
             uMode: PROCEDURAL_TEXTURE_MODES.indexOf(mode),
             uScale: 2,
             uContrast: 1.2,
@@ -527,7 +555,7 @@ export function createParametricCurveSource(
     return defineShaderPlugin({
         id: `ParametricCurveSource:${mode}`,
         category: 'source',
-        inputs: [],
+        inputs: [PERTURB_INPUT],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
@@ -535,9 +563,15 @@ export function createParametricCurveSource(
         capabilities: ['procedural', 'parametric-curve', 'vector-field'],
         fragment: PARAMETRIC_CURVE_FRAGMENT,
         motion: { port: 'motion', fragment: PARAMETRIC_CURVE_MOTION },
-        uniforms: { uMode: PARAMETRIC_CURVE_MODES.indexOf(mode), uThickness: 0.02, uFrequency: 7 },
-        parameters: { thickness: 0.02, frequency: 7 },
+        uniforms: {
+            ...PERTURB_UNIFORMS,
+            uMode: PARAMETRIC_CURVE_MODES.indexOf(mode),
+            uThickness: 0.02,
+            uFrequency: 7,
+        },
+        parameters: { ...PERTURB_PARAMETERS, thickness: 0.02, frequency: 7 },
         bindings: [
+            PERTURB_BINDING,
             {
                 feature: 'rmsExcite',
                 role: 'intensity',
@@ -569,7 +603,7 @@ export function createSdfShapeSource(
     return defineShaderPlugin({
         id: `SDFShapeSource:${mode}`,
         category: 'source',
-        inputs: [],
+        inputs: [PERTURB_INPUT],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
@@ -577,9 +611,16 @@ export function createSdfShapeSource(
         capabilities: ['procedural', 'sdf', 'vector-field'],
         fragment: SDF_SHAPE_FRAGMENT,
         motion: { port: 'motion', fragment: SDF_SHAPE_MOTION },
-        uniforms: { uMode: SDF_SHAPE_MODES.indexOf(mode), uMorph: 0.5, uRepeat: 1, uEnergy: 0.35 },
-        parameters: { morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
+        uniforms: {
+            ...PERTURB_UNIFORMS,
+            uMode: SDF_SHAPE_MODES.indexOf(mode),
+            uMorph: 0.5,
+            uRepeat: 1,
+            uEnergy: 0.35,
+        },
+        parameters: { ...PERTURB_PARAMETERS, morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
         bindings: [
+            PERTURB_BINDING,
             {
                 feature: 'subBass',
                 role: 'large-scale-force',

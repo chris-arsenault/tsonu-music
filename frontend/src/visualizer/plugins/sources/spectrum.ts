@@ -6,8 +6,19 @@
  * neither duplicates any analysis.
  */
 
-import { character } from '../define';
+import { character, GLSL_COMMON, GLSL_PERTURB_VERTEX } from '../define';
+import type { RenderContext } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
+
+/**
+ * The field sampler a geometry pass displaces by, when the scene wired one.
+ *
+ * Empty when it did not, which is the case the device's empty-sampler binding already covers — the
+ * displacement reads zero and the source draws exactly where it always did.
+ */
+function fieldInput(render: RenderContext): Record<string, string> {
+    return render.inputs.field ? { uField: render.inputs.field } : {};
+}
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import { impactAge, type ImpactEvent } from '../../core/impact';
 
@@ -77,40 +88,62 @@ const SPECTRUM_VERTEX = `#version 300 es
 in vec2 aPosition;
 in float aMagnitude;
 out float vMagnitude;
+out vec2 vPlaced;
+${GLSL_PERTURB_VERTEX}
 void main() {
     vMagnitude = aMagnitude;
     // The cell-matrix mode draws this buffer as points, and GLSL ES 3.00 leaves an unwritten point
     // size unspecified — the mode rendered at whatever the driver happened to have. Scaled by
     // magnitude so a loud bin reads as a larger cell, since that mode has no size parameter of its own.
     gl_PointSize = 2.0 + aMagnitude * 6.0;
-    gl_Position = vec4(aPosition, 0.0, 1.0);
+
+    vec2 placed = perturbedPosition(aPosition);
+    vPlaced = placed;
+    gl_Position = vec4(placed, 0.0, 1.0);
 }`;
 
 const SPECTRUM_FRAGMENT = `#version 300 es
 precision highp float;
 in float vMagnitude;
+in vec2 vPlaced;
 out vec4 fragColor;
 uniform float uBrightness;
+uniform float uHue;
+${GLSL_COMMON}
 void main() {
     float energy = clamp(vMagnitude * uBrightness, 0.0, 1.0);
-    fragColor = vec4(vec3(energy), energy);
+    // Coloured by bin rather than written to all three channels, so a spectrum reads as a spectrum
+    // instead of a white comb waiting for a palette mapper that lands in about a third of scenes.
+    vec3 tint = hsv2rgb(vec3(fract(uHue + (vPlaced.x * 0.5 + 0.5) * 0.6), 0.7, 1.0));
+
+    fragColor = vec4(tint * energy, energy);
 }`;
 
 const GLYPH_VERTEX = `#version 300 es
 in vec2 aPosition;
 in float aStrength;
 out float vStrength;
+out vec2 vPlaced;
+${GLSL_PERTURB_VERTEX}
 void main() {
     vStrength = aStrength;
-    gl_Position = vec4(aPosition, 0.0, 1.0);
+
+    vec2 placed = perturbedPosition(aPosition);
+    vPlaced = placed;
+    gl_Position = vec4(placed, 0.0, 1.0);
 }`;
 
 const GLYPH_FRAGMENT = `#version 300 es
 precision highp float;
 in float vStrength;
+in vec2 vPlaced;
 out vec4 fragColor;
+uniform float uHue;
+${GLSL_COMMON}
 void main() {
-    fragColor = vec4(vec3(vStrength), vStrength);
+    vec3 tint = hsv2rgb(vec3(fract(uHue + length(vPlaced) * 0.4), 0.8, 1.0));
+
+    fragColor = vec4(tint * vStrength, vStrength);
 }`;
 
 export type SpectrumMode =
@@ -227,7 +260,7 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
         id: `SpectrumGeometrySource:${mode}`,
         version: 1,
         category: 'source',
-        inputs: [],
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
             { name: 'color', type: 'color-texture', required: false },
             // How fast each band is rising, which is what this plugin knows about the music that
@@ -354,12 +387,13 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         kind: 'geometry',
                         shader: SPECTRUM_SHADER,
                         geometry: SPECTRUM_GEOMETRY,
+                        inputs: fieldInput(render),
                         primitive: mode === 'cell-matrix' ? 'points' : 'line-strip',
                         vertexCount: count,
                         output: render.outputs.color,
                         blend: 'add',
                         clear: true,
-                        uniforms: { uBrightness: 1.3 },
+                        uniforms: { uBrightness: 1.3, uPerturb: 0.12, uHue: 0 },
                     }];
 
                     if (render.outputs.motion) {
@@ -426,7 +460,7 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
         id: `TransientGlyphSource:${mode}`,
         version: 1,
         category: 'source',
-        inputs: [],
+        inputs: [{ name: 'field', type: 'vector-field', required: false }],
         outputs: [
             { name: 'color', type: 'color-texture', required: false },
             // A burst expanding from where something struck, at a rate the glyph's own radius gives.
@@ -580,11 +614,13 @@ export function createTransientGlyphSource(mode: GlyphMode = 'expanding-rings'):
                         kind: 'geometry',
                         shader: GLYPH_SHADER,
                         geometry: GLYPH_GEOMETRY,
+                        inputs: fieldInput(render),
                         primitive: 'lines',
                         vertexCount: count,
                         output: render.outputs.color,
                         blend: 'add',
                         clear: true,
+                        uniforms: { uPerturb: 0.12, uHue: 0 },
                     }];
 
                     if (render.outputs.motion) {

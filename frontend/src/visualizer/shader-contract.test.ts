@@ -14,6 +14,8 @@ import { describe, expect, test } from 'vitest';
 import { allDefinitions } from './plugins/registry';
 import { GLSL_HISTORY } from './plugins/define';
 import { portGain } from './core/loop-gain';
+import { isMotionSource } from './core/fields';
+import { isImagePortType } from './core/plugin';
 import { parameterUniformName } from './core/parameters';
 import type { VisualPluginDefinition } from './core/plugin';
 
@@ -384,6 +386,34 @@ describe('every declared loop gain is a per-second survival', () => {
                 expect(inverted, `${definition.id}: ${match?.[0] ?? ''}`).toBe(false);
             }
         }
+    });
+
+    /**
+     * Every colour producer can be acted on by the rest of the scene.
+     *
+     * Measured before this held: 45 of 46 colour sources and all 6 colour-producing simulators
+     * declared no image or field input whatsoever. A node with no inputs cannot be perturbed, warped,
+     * or made the sink of a historical edge — the only thing a graph can do with it is draw it and
+     * composite it somewhere. That is why a waveform trace and a mask could sit in one scene as two
+     * layers with no way to affect each other however the wiring was arranged, and why the same trace
+     * was redrawn at the same coordinates every frame regardless of what else was happening.
+     *
+     * The port is optional everywhere, so a producer with nothing wired to it behaves as it did.
+     * What the test forbids is a producer that *cannot* be reached at all.
+     */
+    test('every colour producer takes a field it can be displaced by', () => {
+        const closed = CATALOG.filter((definition) => {
+            const producesColour = definition.outputs.some((port) => port.type === 'color-texture');
+            if (!producesColour || definition.category === 'transformer'
+                || definition.category === 'compositor' || definition.category === 'postprocess') {
+                return false;
+            }
+
+            return !definition.inputs.some((port) =>
+                isMotionSource(port.type) || isImagePortType(port.type));
+        });
+
+        expect(closed.map((definition) => definition.id)).toEqual([]);
     });
 
     test('no shader injects the complement of its own survival', () => {
