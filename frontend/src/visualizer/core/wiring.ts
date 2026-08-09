@@ -269,20 +269,14 @@ function closeLoop(
         return;
     }
 
-    // No candidate was legal, so the scene keeps at most the first loop a port nominated.
+    // No candidate was legal, so every nominated self-loop stays.
     //
-    // Falling out of the search used to leave every nominated self-loop in place — one per plugin
-    // declaring a `history` port, which in a chain of feedback-capable stages is four or five. Each is
-    // a node trailing its own output, and none of them folds the composed image back, so the scene
-    // gets several small local smears and no transport. The grammar budgets for one loop and this is
-    // the path that quietly returned more.
-    const nominated = edges.filter(isImageLoop);
-    if (nominated.length > 1) {
-        const first = nominated[0];
-        const survivors = edges.filter((edge) => !isImageLoop(edge) || edge === first);
-        edges.length = 0;
-        edges.push(...survivors);
-    }
+    // A previous version of this collapsed them to one, on the reasoning that the grammar budgets for
+    // a single loop. That was wrong about what makes a scene good: a chain of stages each keeping its
+    // own trail is a legitimate composition and was one of the few the eye actually liked. What those
+    // scenes lack is not fewer loops, it is one loop that folds the *composed* image back rather than
+    // each node trailing itself — a different requirement, and adding it by deletion removed a
+    // composition instead of adding a property.
 }
 
 export function wireScene(

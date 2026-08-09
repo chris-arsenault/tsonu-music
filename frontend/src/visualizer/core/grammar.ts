@@ -388,7 +388,11 @@ export const ORGANIC_FLOW: SceneGrammar = {
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
-    maximumFeedbackLoops: 1,
+    // Several loops are a composition, not an excess. A chain of stages each keeping its own trail
+    // is one of the few shapes that reads as interesting, and a ceiling of one forbade it — the
+    // count was standing in for a property it does not measure, which is whether anything folds the
+    // *composed* image back rather than each node trailing itself.
+    maximumFeedbackLoops: 5,
     minimumFeedbackLoops: 1,
     requireSpatialLoop: true,
     maximumSymmetryTransforms: 1,
@@ -448,7 +452,11 @@ export const COLLISION_ENERGY: SceneGrammar = {
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 2,
-    maximumFeedbackLoops: 1,
+    // Several loops are a composition, not an excess. A chain of stages each keeping its own trail
+    // is one of the few shapes that reads as interesting, and a ceiling of one forbade it — the
+    // count was standing in for a property it does not measure, which is whether anything folds the
+    // *composed* image back rather than each node trailing itself.
+    maximumFeedbackLoops: 5,
     minimumFeedbackLoops: 1,
     requireSpatialLoop: true,
     maximumSymmetryTransforms: 0,
@@ -478,7 +486,11 @@ export const IMAGE_DREAM: SceneGrammar = {
     postprocessCount: [1, 3],
     maximumDominantPlugins: 1,
     maximumHighCostPlugins: 1,
-    maximumFeedbackLoops: 1,
+    // Several loops are a composition, not an excess. A chain of stages each keeping its own trail
+    // is one of the few shapes that reads as interesting, and a ceiling of one forbade it — the
+    // count was standing in for a property it does not measure, which is whether anything folds the
+    // *composed* image back rather than each node trailing itself.
+    maximumFeedbackLoops: 5,
     minimumFeedbackLoops: 1,
     requireSpatialLoop: true,
     maximumSymmetryTransforms: 1,
