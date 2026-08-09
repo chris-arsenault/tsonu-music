@@ -33,7 +33,7 @@ import {
 } from '../core/passes';
 import type { QualityProfile } from '../core/performance';
 import { isMotionSource } from '../core/fields';
-import type { ScenePalette } from '../core/palette';
+import { presentStops, type ScenePalette } from '../core/palette';
 import { liveKeys, planTargets, withRetiringNodes, type RenderPlan } from '../core/render-plan';
 import type { VisualPluginInstance } from '../core/plugin';
 import type { Device, RenderTarget } from './device';
@@ -669,16 +669,27 @@ function composite(
 
         // One entry of the scene's scheme per branch, so simultaneously presented branches are
         // chromatically distinct by construction rather than by spacing a hue offset and hoping.
-        const entry = frame.palette.entries[index % frame.palette.entries.length];
+        //
+        // There is only ever one branch here now, and this index is therefore always zero. Requiring
+        // a scene to converge to a single unabsorbed terminal was a separate and correct repair —
+        // branches that arrive at the composite unjoined have passed through nothing the scene is
+        // made of — but it left this line selecting entry zero of four in every scene ever built,
+        // measured 200/200 and 300/300. Three quarters of every scheme was unreachable, and the frame
+        // was pulled toward a single three-stop ramp by uTint at 0.55 to 0.9. That is the reported
+        // mono-hue.
+        //
+        // So the composite presents the scheme rather than a quarter of it: the stops of every entry
+        // in order, traversed by luminance. Branch identity is not lost, it moved — the branches are
+        // joined inside the graph now, and what reaches here is one image carrying all of them.
+        const stops = presentStops(frame.palette);
 
         device.beginPass(target, index === 0 ? 'none' : step.blendMode, index === 0);
         device.bindTexture(program, 'uSource', source.texture, 0);
         device.setUniforms(program, {
             uOpacity: step.opacity,
             uResolution: [plan.width, plan.height],
-            uShadow: entry.shadow,
-            uMid: entry.mid,
-            uHighlight: entry.highlight,
+            uStops: stops.flat(),
+            uStopCount: stops.length,
             uTint: frame.grade.tint,
             uChromatic: 1,
         });

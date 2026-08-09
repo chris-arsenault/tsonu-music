@@ -136,10 +136,16 @@ out vec4 fragColor;
 uniform sampler2D uSource;
 uniform vec2 uResolution;
 uniform float uOpacity;
-/** This branch's three stops, from the scene's colour scheme. */
-uniform vec3 uShadow;
-uniform vec3 uMid;
-uniform vec3 uHighlight;
+/**
+ * The scene's whole colour scheme, three stops per entry, shadow to highlight within each.
+ *
+ * Three uniforms stood here — one entry's shadow, mid and highlight — because the composite drew one
+ * entry per branch. Only one branch ever reaches it, so three quarters of every scheme was
+ * unreachable and every frame was a single three-stop ramp.
+ */
+const int MAX_STOPS = 24;
+uniform vec3 uStops[MAX_STOPS];
+uniform int uStopCount;
 /** How far material is pulled toward its branch colour, against keeping its own. */
 uniform float uTint;
 /** Zero when the layer is presented raw, as when a single resource is being inspected. */
@@ -154,11 +160,12 @@ void main() {
     vec3 colour = source.rgb;
     float light = clamp(luminance(colour), 0.0, 1.0);
 
-    // rampAt(): shadow through the branch hue to a warm highlight. Neither end is neutral, so the
-    // hue survives into the darks and the lights instead of washing out at both.
-    vec3 ramp = light < 0.5
-        ? mix(uShadow, uMid, light * 2.0)
-        : mix(uMid, uHighlight, (light - 0.5) * 2.0);
+    // Luminance traversing the whole scheme rather than one entry of it. Neither end is neutral, so
+    // the hue survives into the darks and the lights instead of washing out at both.
+    int count = max(uStopCount, 2);
+    float position = light * float(count - 1);
+    int lower = int(clamp(floor(position), 0.0, float(count - 2)));
+    vec3 ramp = mix(uStops[lower], uStops[lower + 1], clamp(position - float(lower), 0.0, 1.0));
 
     // Gated, not scaled. Unlit pixels must stay unlit — painting them leaves a coloured fog with no
     // structure in it — but the ramp already encodes brightness across its three stops, so scaling it

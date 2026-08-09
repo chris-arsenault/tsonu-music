@@ -45,6 +45,19 @@ export interface ScenePalette {
 }
 
 /**
+ * The scheme as one ordered ramp, for the composite to traverse by luminance.
+ *
+ * The composite took one entry per presented branch, which was right while a scene arrived at it as
+ * several branches. Requiring convergence to a single terminal made the branch index constantly
+ * zero, so three quarters of every scheme went unread and every frame was one three-stop ramp —
+ * the reported mono-hue. Branch identity did not disappear, it moved inside the graph, so the whole
+ * scheme belongs to the one image that comes out.
+ */
+export function presentStops(palette: ScenePalette): Rgb[] {
+    return palette.entries.flatMap((entry) => [entry.shadow, entry.mid, entry.highlight]);
+}
+
+/**
  * Luminance the scheme's darkest colour is pulled down to.
  *
  * Several schemes are entirely light — gilded sunlight has no dark at all — and a visualizer whose

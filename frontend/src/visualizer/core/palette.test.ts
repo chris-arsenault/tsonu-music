@@ -5,6 +5,7 @@ import {
     driftPalette,
     luminanceOf,
     palettesFor,
+    presentStops,
     rampAt,
     scenePaletteFrom,
     wrapTurns,
@@ -126,6 +127,37 @@ describe('the ramp keeps hue at both ends', () => {
 
         expect(rampAt(entry, 0)).toEqual(entry.shadow);
         expect(rampAt(entry, 1)).toEqual(entry.highlight);
+    });
+});
+
+describe('the composite presents the whole scheme', () => {
+    // The composite indexed the scheme by presented branch, and requiring a scene to converge to one
+    // terminal made that index constantly zero — measured in 200 of 200 and 300 of 300 built scenes.
+    // Three quarters of every scheme was unreachable and the frame was one three-stop ramp.
+    const scene = scenePaletteFrom(CURATED_PALETTES[0], 0.8, 4);
+
+    test('every entry contributes its stops, in order', () => {
+        const stops = presentStops(scene);
+
+        expect(stops).toHaveLength(scene.entries.length * 3);
+        for (const [index, entry] of scene.entries.entries()) {
+            expect(stops[index * 3], `entry ${index} shadow`).toEqual(entry.shadow);
+            expect(stops[index * 3 + 1], `entry ${index} mid`).toEqual(entry.mid);
+            expect(stops[index * 3 + 2], `entry ${index} highlight`).toEqual(entry.highlight);
+        }
+    });
+
+    test('the stops reaching the frame are not all one colour', () => {
+        // The property the defect removed: a ramp built from a single entry cannot show two hues,
+        // whatever the material underneath it does.
+        const chromatic = presentStops(scene).filter((stop) => chromaOf(stop) > 0.06);
+        const directions = new Set(chromatic.map((stop) => {
+            const total = stop[0] + stop[1] + stop[2];
+            return total > 0 ? `${Math.round(stop[0] / total * 8)}:${Math.round(stop[1] / total * 8)}` : 'black';
+        }));
+
+        expect(chromatic.length).toBeGreaterThan(2);
+        expect(directions.size).toBeGreaterThan(1);
     });
 });
 
