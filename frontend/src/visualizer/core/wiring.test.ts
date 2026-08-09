@@ -208,6 +208,68 @@ describe('scene wiring', () => {
     });
 });
 
+describe('host assets', () => {
+    const MASKS = ['tree-of-life-full', 'tree-of-life-ringed', 'tree-canopy', 'root-network', 'knight-helm']
+        .map((id) => ({ resource: `asset:${id}`, type: 'mask-texture' as const }));
+
+    const stencilPort: PluginPort = { name: 'mask', type: 'mask-texture', required: true, fromAsset: true };
+    const stencil = plugin('stencil', 'field', [stencilPort]);
+    const secondStencil = plugin('stencil2', 'field', [stencilPort]);
+    const maskProducer = plugin('maskmaker', 'source', [], [{ name: 'mask', type: 'mask-texture', required: false }]);
+
+    function chosen(seed: string, scene = [stencil]) {
+        return wireScene(scene, MASKS, createRng(seed)).assetBindings[0]?.resource;
+    }
+
+    test('the choice varies with the scene', () => {
+        // It did not. `findAsset` returned the first compatible entry, which is the first line of the
+        // mask manifest, so 117 of 117 mask bindings across 200 scenes were `tree-of-life-full` and
+        // the other twenty-five masks were uploaded as textures and referenced by nothing.
+        const drawn = new Set(Array.from({ length: 40 }, (_, index) => chosen(`scene-${index}`)));
+
+        expect(drawn.size).toBeGreaterThan(1);
+    });
+
+    test('the same scene chooses the same asset twice', () => {
+        expect(chosen('stable')).toBe(chosen('stable'));
+    });
+
+    test('a scene has one stencil, not one per consumer', () => {
+        // Two mask consumers cutting against two different shapes is not variety.
+        const wired = wireScene([stencil, secondStencil], MASKS, createRng('two-consumers'));
+
+        expect(wired.assetBindings).toHaveLength(2);
+        expect(wired.assetBindings[0].resource).toBe(wired.assetBindings[1].resource);
+    });
+
+    test('an asset port is not captured by a producer of the same type', () => {
+        // The defect this port flag exists for: album art is a colour texture, so every colour
+        // producer matched the port and the artwork lost to whichever sorted first.
+        const wired = wireScene([maskProducer, stencil], MASKS, createRng('capture'));
+
+        expect(wired.edges.filter((edge) => edge.to.instanceId.startsWith('stencil'))).toEqual([]);
+        expect(wired.assetBindings).toHaveLength(1);
+    });
+
+    test('an ordinary port of the same type still takes the producer', () => {
+        const consumer = plugin('plain', 'compositor', [{ name: 'mask', type: 'mask-texture', required: true }]);
+        const wired = wireScene([maskProducer, consumer], MASKS, createRng('plain'));
+
+        expect(wired.assetBindings).toEqual([]);
+        expect(wired.edges[0].from.instanceId).toBe(instanceIdFor(maskProducer, 0));
+    });
+
+    test('with no asset loaded the port falls back to a producer', () => {
+        // `fromAsset` is a preference, not a requirement. Making it a requirement would be a second
+        // way for a scene to fail to build, and the plugins that read assets already state
+        // `requiredAssets`, which keeps them out of a scene that has none.
+        const wired = wireScene([maskProducer, stencil], []);
+
+        expect(wired.unsatisfied).toEqual([]);
+        expect(wired.edges[0].from.instanceId).toBe(instanceIdFor(maskProducer, 0));
+    });
+});
+
 describe('feedback wiring', () => {
     test('a feedback transformer reads its own previous frame', () => {
         const wired = wireScene([source, feedback, post]);

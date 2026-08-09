@@ -235,41 +235,69 @@ function buildSceneAttempt(
         };
     }
 
-    // Joined before the prune, not after, so the prune judges the graph the scene will actually have.
-    // Run the other way round it evaluated a wiring with several unjoined terminals in it, and
-    // contribution is defined by what reaches one — so a plugin feeding a branch that was about to be
-    // absorbed could be read as contributing to nothing and dropped, taking the field count with it.
-    plugins = withJoiningCompositors(
-        plugins,
-        wired,
-        schedulerContext,
-        createRng(`${entropy}:join`),
-    );
-    wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
+    // Joining and pruning are each other's input, so they run together until neither changes anything.
+    //
+    // Joining first was already necessary: contribution is defined by what reaches a terminal, so a
+    // plugin feeding a branch about to be absorbed reads as contributing to nothing if the join has
+    // not happened yet, and the prune takes the field count with it. The reverse is just as true and
+    // was not handled — pruning rewires, rewiring can split the branches back apart, and the join
+    // count was computed for a graph that no longer exists. `widen-2` on collision-energy arrived at
+    // the structural check with two unjoined terminals for exactly that reason.
+    //
+    // The prune within a round repeats too, because dropping one plugin can strand the plugin that
+    // fed it. `unreachableInstances` had already learned this at render time.
+    const rewire = () => wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
 
-    // Category counts alone are not enough: an optional field can be selected without anything ever
-    // reading it. Keep only plugins that contribute to a terminal colour layer, then re-check the
-    // grammar so an allegedly full scene cannot spend passes on disconnected decoration.
-    // Compared against the number of distinct definitions in the scene, not the number of nodes.
-    // `contributingPluginIds` returns definition ids, so two instances of one definition made the set
-    // smaller than the node count on their own and triggered a prune pass that had nothing to prune.
-    const contributing = contributingPluginIds(wired);
-    const distinctDefinitions = new Set(wired.nodes.map((node) => node.definition.id)).size;
-    if (contributing.size < distinctDefinitions) {
-        plugins = plugins.filter((definition) => contributing.has(definition.id));
-        const violations = grammarViolations(plugins, effectiveTheme.grammar);
-        if (violations.length > 0) {
-            return {
-                ok: false,
-                failure: {
-                    reason: 'grammar',
-                    detail: `connected graph: ${violations.map((violation) => violation.detail).join('; ')}`,
-                },
-            };
+    for (let round = 0; round < ASSEMBLY_ROUNDS; round += 1) {
+        const joined = withJoiningCompositors(
+            plugins,
+            wired,
+            schedulerContext,
+            createRng(`${entropy}:join`),
+        );
+
+        if (joined.length !== plugins.length) {
+            plugins = joined;
+            wired = rewire();
         }
 
-        // The same draw, so a prune does not silently move every loop in the scene.
-        wired = wireScene(plugins, context.assetResources ?? [], createRng(`${entropy}:loops`));
+        // Category counts alone are not enough: an optional field can be selected without anything
+        // ever reading it. Keep only plugins that contribute to a terminal colour layer, then
+        // re-check the grammar so an allegedly full scene cannot spend passes on disconnected
+        // decoration. Compared against the number of distinct definitions in the scene, not the
+        // number of nodes: `contributingPluginIds` returns definition ids, so two instances of one
+        // definition made the set smaller than the node count on their own.
+        let pruned = false;
+        for (let pass = 0; pass < plugins.length; pass += 1) {
+            const contributing = contributingPluginIds(wired);
+            const distinctDefinitions = new Set(wired.nodes.map((node) => node.definition.id)).size;
+            if (contributing.size >= distinctDefinitions) {
+                break;
+            }
+
+            plugins = plugins.filter((definition) => contributing.has(definition.id));
+            const violations = grammarViolations(plugins, effectiveTheme.grammar);
+            if (violations.length > 0) {
+                return {
+                    ok: false,
+                    failure: {
+                        reason: 'grammar',
+                        detail: `connected graph: ${violations.map((violation) => violation.detail).join('; ')}`,
+                    },
+                };
+            }
+
+            // The same draw, so a prune does not silently move every loop in the scene.
+            wired = rewire();
+            pruned = true;
+        }
+
+        // A round that pruned nothing leaves its own join valid, so there is nothing to re-derive and
+        // the usual scene costs exactly what it did before this loop existed: one join, one wiring,
+        // one contribution check. Only a scene that lost a plugin pays for a second round.
+        if (!pruned) {
+            break;
+        }
     }
 
     // How the scene is joined, which counts alone cannot express. Checked after the prune above, so a
@@ -372,6 +400,14 @@ function withJoiningCompositors(
  * costs one of thirty-two attempts.
  */
 const MAXIMUM_DERIVED_JOINS = 6;
+
+/**
+ * How many times joining and pruning may feed each other before the candidate is abandoned.
+ *
+ * Each round either adds joins or removes plugins, so a scene that has not settled by the fourth is
+ * oscillating rather than converging, and the assembler has thirty-one other candidates to try.
+ */
+const ASSEMBLY_ROUNDS = 4;
 
 /**
  * Structural checks the grammar can only make once the scene is wired.

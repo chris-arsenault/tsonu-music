@@ -161,8 +161,17 @@ describe('scene building', () => {
                 result.scene.plugins.some((entry) => entry.category === 'compositor'),
                 `${theme.id} compositor`,
             ).toBe(true);
-            expect(contributingPluginIds(result.scene.wired).size, `${theme.id} connected nodes`)
-                .toBe(result.scene.wired.nodes.length);
+            // Every node's definition reaches a terminal. Compared per node rather than by counting
+            // the set against `nodes.length`: `contributingPluginIds` returns definition ids, so a
+            // scene holding two instances of one definition failed the count while being entirely
+            // connected — which is the mismatch the scene builder's own prune comment describes.
+            const contributing = contributingPluginIds(result.scene.wired);
+            expect(
+                result.scene.wired.nodes
+                    .map((node) => node.definition.id)
+                    .filter((id) => !contributing.has(id)),
+                `${theme.id} nodes reaching nothing`,
+            ).toEqual([]);
         }
     });
 

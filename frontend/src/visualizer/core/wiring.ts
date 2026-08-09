@@ -124,7 +124,11 @@ function orderLoopSinks(
     rng: Rng,
 ): { node: GraphNode; input: PluginPort }[] {
     const sinks = nodes.flatMap((node) => node.definition.inputs
-        .filter((input) => isImagePortType(input.type))
+        // An asset port is not a loop sink. A historical edge onto one wins over the asset binding
+        // in the compiler — `previous` is checked before `inputs` — so closing a loop there quietly
+        // disconnects the artwork or the stencil the port exists to read, and the plugin spends the
+        // scene displaying its own last frame instead.
+        .filter((input) => isImagePortType(input.type) && !input.fromAsset)
         .map((input) => ({ node, input })));
 
     const displaces = (entry: { node: GraphNode }) =>
@@ -303,6 +307,36 @@ export function wireScene(
 
     const nodes: GraphNode[] = assignInstanceIds(ordered);
 
+    /**
+     * One asset per type for the whole scene, drawn rather than taken from the front of the list.
+     *
+     * `findAsset` returned `assets.find(...)`, which is the first compatible entry and therefore the
+     * first line of the mask manifest. Measured over 200 scenes: 117 mask bindings, all 117 to
+     * `tree-of-life-full`. The other twenty-five masks were fetched, decoded and uploaded as textures
+     * every session and referenced by nothing, and the choice had no entropy in it, so every scene on
+     * every track wore the same stencil.
+     *
+     * Per type rather than per port, because a scene has *a* stencil: two mask consumers cutting
+     * against two different shapes is not variety, it is two scenes sharing a frame.
+     */
+    const assetChoice = new Map<PluginPort['type'], AssetResource>();
+    for (const asset of assets) {
+        if (!assetChoice.has(asset.type)) {
+            const compatible = assets.filter((candidate) => candidate.type === asset.type);
+            assetChoice.set(asset.type, compatible[rng ? rng.int(compatible.length) : 0]);
+        }
+    }
+
+    const chosenAsset = (port: PluginPort): AssetResource | undefined => {
+        for (const [type, asset] of assetChoice) {
+            if (portsCompatible(type, port.type)) {
+                return asset;
+            }
+        }
+
+        return undefined;
+    };
+
     const edges: RenderGraphEdge[] = [];
     const assetBindings: WiredScene['assetBindings'] = [];
     const unsatisfied: WiredScene['unsatisfied'] = [];
@@ -347,6 +381,21 @@ export function wireScene(
                 continue;
             }
 
+            // A port that exists to consume an asset takes one before any producer is considered.
+            // The fallback below is for an ordinary image input that happens to have no upstream; it
+            // is not the right order for a port whose whole purpose is the artwork or the stencil.
+            if (port.fromAsset) {
+                const declared = chosenAsset(port);
+                if (declared) {
+                    assetBindings.push({
+                        instanceId: node.instanceId,
+                        port: port.name,
+                        resource: declared.resource,
+                    });
+                    continue;
+                }
+            }
+
             const excluded = usedProducerResources.get(port.type) ?? new Set<string>();
             // The first input continues whatever chain this node is part of; the rest reach for a
             // branch nothing has read, which is what folds separate generators into one image instead
@@ -369,7 +418,7 @@ export function wireScene(
 
             // No plugin produces this, so fall back to a host asset of a compatible type. Checked after
             // plugin outputs, so a derived texture always wins over the raw asset it came from.
-            const asset = findAsset(assets, port);
+            const asset = chosenAsset(port);
             if (asset) {
                 assetBindings.push({
                     instanceId: node.instanceId,
@@ -464,6 +513,7 @@ export function isBranchJoiner(definition: VisualPluginDefinition): boolean {
         && definition.outputs.some((port) => port.type === 'color-texture');
 }
 
+/** Whether any host asset could satisfy this port, for the dependency ordering below. */
 function findAsset(
     assets: readonly AssetResource[],
     port: PluginPort,

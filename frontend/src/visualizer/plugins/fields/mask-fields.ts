@@ -187,7 +187,11 @@ export function createMaskSignedDistanceField(): VisualPluginDefinition {
         id: 'MaskSignedDistanceField',
         version: 1,
         category: 'field',
-        inputs: [{ name: 'mask', type: 'mask-texture', required: true }],
+        // The stencil itself, not something else shaped like one. `AlbumArtEdges` and
+        // `ImageLuminanceField` both publish mask textures, and either would otherwise satisfy this
+        // port — leaving a plugin that only activates because a mask exists deriving its distance
+        // field from something that is not the mask.
+        inputs: [{ name: 'mask', type: 'mask-texture', required: true, fromAsset: true }],
         outputs: [{ name: 'field', type: 'distance-field', required: false }],
         capabilities: ['mask-derivation', 'distance-field'],
         // Medium to generate, low to reuse: one derivation serves every consumer in the scene.

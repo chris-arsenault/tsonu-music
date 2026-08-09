@@ -638,9 +638,12 @@ describe('spec section 25 example compositions', () => {
         expect(wired.assetBindings).toEqual([]);
     });
 
-    test('a derived texture wins over the raw asset it came from', () => {
-        // AlbumArtEdges produces a mask, so a mask consumer downstream should read that rather than the
-        // raw mask asset.
+    test('a port that exists to consume an asset takes the asset, not a lookalike', () => {
+        // This asserted the opposite: that AlbumArtEdges, which publishes a mask texture, should feed
+        // MaskSignedDistanceField in preference to the mask itself, under the rule that a derived
+        // texture beats "the raw asset it came from". The edges did not come from the mask — they
+        // came from the artwork — and the distance field is in the scene only because a mask was
+        // loaded. Satisfied that way, the mask a plugin was activated for is never read at all.
         const wired = wireScene(
             [
                 CATALOG.find((d) => d.id === 'AlbumArtEdges')!,
@@ -650,7 +653,26 @@ describe('spec section 25 example compositions', () => {
         );
 
         const intoSdf = wired.edges.find((edge) => edge.to.instanceId.startsWith('MaskSignedDistanceField'));
-        expect(intoSdf?.from.instanceId).toContain('AlbumArtEdges');
+        expect(intoSdf, 'nothing upstream captures the mask port').toBeUndefined();
+        expect(wired.assetBindings.some((binding) =>
+            binding.instanceId.startsWith('MaskSignedDistanceField')
+            && binding.port === 'mask')).toBe(true);
+    });
+
+    test('an ordinary port still prefers a derived texture over an asset', () => {
+        // The rule above is narrow. Only a port declaring `fromAsset` overrides the producer lookup;
+        // every other image input still folds the scene together rather than reaching past it.
+        const wired = wireScene(
+            [
+                CATALOG.find((d) => d.id === 'AlbumArtEdges')!,
+                CATALOG.find((d) => d.id === 'MaskRouter:apply')!,
+            ],
+            ASSET_RESOURCES,
+        );
+
+        const intoRouter = wired.edges.find((edge) =>
+            edge.to.instanceId.startsWith('MaskRouter') && edge.to.port === 'mask');
+        expect(intoRouter?.from.instanceId).toContain('AlbumArtEdges');
     });
 
     test('the masked example needs no particle system', () => {
