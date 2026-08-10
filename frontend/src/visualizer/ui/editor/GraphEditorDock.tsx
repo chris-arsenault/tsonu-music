@@ -184,7 +184,17 @@ export default function GraphEditorDock({
 
         attemptedRestore.current = true;
         if (stored) {
-            apply(stored, 'restored autosaved composition');
+            const restored = apply(stored, 'restored autosaved composition');
+            if (!restored) {
+                // An autosave the current catalog can no longer resolve is a stale convenience
+                // copy, not a document to nag about on every open. `apply` set the history before
+                // the kernel refused it, and the autosave effect would then re-persist the broken
+                // document — the copy kept itself alive forever. Discard both; a document the
+                // user deliberately pastes still stays editable with its problems shown.
+                setHistory(undefined);
+                storeScene(undefined);
+                setNotice('discarded an autosaved composition the current catalog cannot resolve');
+            }
         }
     }, [apply, handle, live, stored]);
 
