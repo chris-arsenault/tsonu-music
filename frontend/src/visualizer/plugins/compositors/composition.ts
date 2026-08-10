@@ -488,6 +488,7 @@ export function createFlowFieldCompositor(): VisualPluginDefinition {
                 attack: 0.12,
                 release: 0.7,
                 curve: 'smooth',
+                expressions: ['follow', 'glide', 'punch'],
             },
             {
                 feature: 'spectralCentroid',

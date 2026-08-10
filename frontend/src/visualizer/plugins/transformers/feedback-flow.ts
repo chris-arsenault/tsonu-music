@@ -207,25 +207,27 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
         parameters: { strength: 0.02, rotation: 0.15 },
         defaultBindings: [
             {
-                // Bass drives large-scale expansion, per the section 20 mapping table.
+                // Low-frequency energy drives large-scale expansion by default; the per-scene
+                // draw may instead make it swell over phrases or kick on hits.
                 feature: 'bass',
-                role: 'large-scale-force',
                 parameter: 'strength',
                 outputRange: [0.004, 0.05],
                 attack: 0.08,
                 release: 0.4,
                 curve: 'smooth',
+                expressions: ['follow', 'glide', 'punch'],
             },
             {
                 // The angle the warp turns through. Only the rotate mode reads it, and it read a
-                // constant.
+                // constant. `swing` recentres the range on zero, so the turn can change direction
+                // with the music instead of only changing speed.
                 feature: 'mid',
-                role: 'deformation',
                 parameter: 'rotation',
                 outputRange: [0.04, 0.55],
                 attack: 0.3,
                 release: 1,
                 curve: 'smooth',
+                expressions: ['follow', 'glide', 'swing'],
             },
         ],
         deactivationPolicy: 'fade',

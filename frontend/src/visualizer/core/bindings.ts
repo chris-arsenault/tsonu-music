@@ -14,22 +14,12 @@ export type BindingCurve =
     | 'exponential';
 
 /**
- * What a binding is *for*, drawn from the section 20 mapping table.
- *
- * A binding declares a role rather than only a feature so the scheduler can distribute reactivity
- * across a scene without changing what a parameter means. Choosing a feature at random from a
- * category-wide pool moved a feedback expansion onto stereo balance, which is the specific failure
- * the table exists to prevent.
+ * Inert legacy field. Roles constrained distribution by what a feature meant; distribution is now
+ * constrained by signal shape (`signal-shapes.ts`) and the temporal response is itself a per-scene
+ * draw (`audio-mapping.ts`). The field survives so documents written under the role table still
+ * round-trip byte-identically; nothing reads it.
  */
-export type BindingRole =
-    | 'intensity'
-    | 'large-scale-force'
-    | 'deformation'
-    | 'detail'
-    | 'burst'
-    | 'repeating-motion'
-    | 'complexity'
-    | 'lateral-force';
+export type BindingRole = string;
 
 /**
  * How a feature reaches a parameter.
@@ -70,6 +60,13 @@ export interface ParameterBinding {
      * accumulates without bound and would otherwise lose float precision over a long session.
      */
     wrap?: number;
+
+    /**
+     * Responses distribution may draw for this binding, beside the authored one (`follow` is
+     * always a candidate). Definition-side metadata: distribution strips it from its output, so
+     * documents and captures never carry it. See `audio-mapping.ts`.
+     */
+    expressions?: readonly ('follow' | 'glide' | 'punch' | 'swing' | 'spin')[];
 }
 
 export function bindingMode(binding: ParameterBinding): BindingMode {

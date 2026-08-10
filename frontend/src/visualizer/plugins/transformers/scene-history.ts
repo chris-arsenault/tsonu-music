@@ -86,21 +86,21 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
         defaultBindings: [
             {
                 feature: 'bass',
-                role: 'large-scale-force',
                 parameter: 'strength',
                 outputRange: [0.04, 0.4],
                 attack: 0.12,
                 release: 0.7,
                 curve: 'smooth',
+                expressions: ['follow', 'glide', 'punch'],
             },
             {
                 feature: 'mid',
-                role: 'deformation',
                 parameter: 'rotation',
                 outputRange: [-0.5, 0.7],
                 attack: 0.25,
                 release: 1,
                 curve: 'smooth',
+                expressions: ['follow', 'glide', 'swing'],
             },
         ],
         deactivationPolicy: 'fade',

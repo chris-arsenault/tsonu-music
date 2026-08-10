@@ -159,20 +159,23 @@ describe('modulation depth and exemptions', () => {
     });
 });
 
-describe('role shapes how far and how fast a parameter drifts', () => {
-    const roled = (role: ParameterBinding['role']): ParameterBinding[] => ([{
+describe('the envelope shapes how far and how fast a parameter drifts', () => {
+    // A slow follower is a structural parameter whatever it is called; a fast one is detail. The
+    // drift dynamics derive from attack + release, so the per-scene expression draw carries
+    // through: the same parameter drawn as glide arcs widely, drawn as punch it ripples.
+    const enveloped = (attack: number, release: number): ParameterBinding[] => ([{
         feature: 'bass',
-        role,
         parameter: 'value',
         outputRange: [0, 1],
-        attack: 0.1,
-        release: 0.4,
+        attack,
+        release,
         curve: 'linear',
     }]);
+    const slow = () => enveloped(0.6, 2);
+    const fast = () => enveloped(0.01, 0.14);
 
     /** Total sweep and how often the value crosses its midpoint, over two minutes of playback. */
-    const profile = (role: ParameterBinding['role']) => {
-        const bindings = roled(role);
+    const profile = (bindings: ParameterBinding[]) => {
         let low = Number.POSITIVE_INFINITY;
         let high = Number.NEGATIVE_INFINITY;
         let crossings = 0;
@@ -191,23 +194,23 @@ describe('role shapes how far and how fast a parameter drifts', () => {
         return { sweep: high - low, crossings };
     };
 
-    test('a large-scale role travels further than a detail role', () => {
+    test('a slow follower travels further than a fast one', () => {
         // One depth and one rate for everything meant a scene had a single amplitude and a single
         // tempo of change, which reads as uniformly small however the individual ranges are tuned.
-        expect(profile('large-scale-force').sweep).toBeGreaterThan(profile('detail').sweep * 2);
+        expect(profile(slow()).sweep).toBeGreaterThan(profile(fast()).sweep * 2);
     });
 
-    test('a detail role moves more often than a large-scale role', () => {
-        expect(profile('detail').crossings)
-            .toBeGreaterThan(profile('large-scale-force').crossings * 3);
+    test('a fast follower moves more often than a slow one', () => {
+        expect(profile(fast()).crossings)
+            .toBeGreaterThan(profile(slow()).crossings * 3);
     });
 
-    test('every role stays inside the binding range', () => {
-        for (const role of ['large-scale-force', 'deformation', 'intensity', 'detail', 'burst'] as const) {
-            const { sweep } = profile(role);
+    test('every envelope stays inside the binding range', () => {
+        for (const bindings of [slow(), fast(), enveloped(0.1, 0.4), enveloped(4, 8), enveloped(0, 0.05)]) {
+            const { sweep } = profile(bindings);
 
-            expect(sweep, role).toBeGreaterThan(0);
-            expect(sweep, role).toBeLessThanOrEqual(1);
+            expect(sweep).toBeGreaterThan(0);
+            expect(sweep).toBeLessThanOrEqual(1);
         }
     });
 });

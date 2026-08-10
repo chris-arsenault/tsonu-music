@@ -8,56 +8,57 @@
  * and seek semantics remain intact.
  */
 
-import { bindingMode, clamp01, type BindingRole, type ParameterBinding } from './bindings';
+import { bindingMode, clamp01, type ParameterBinding } from './bindings';
 
 const TAU = Math.PI * 2;
 
 /**
- * How far and how fast each role's slow motion travels.
+ * How far and how fast a parameter's slow motion travels, derived from its own envelope.
  *
- * Every parameter drifted by the same fraction of its range at the same rate, whatever it did. A
- * scene therefore had one tempo and one amplitude of change everywhere, which reads as uniformly
- * small no matter how the individual ranges are tuned — there was no sense of a large slow shift
- * carrying faster small detail on top of it.
+ * This was a table keyed by the binding's role: structural roles drifted far and slowly, detail
+ * roles a little and often. The role is gone, and the property the table was reaching for is
+ * already written into every binding — its response speed. A binding that follows the music over
+ * seconds is a structural parameter whatever it is called, and one that snaps in tens of
+ * milliseconds is detail. Deriving the dynamics from attack + release keeps the old contrast (a
+ * slow arc visibly larger than the ripple riding on it) and lets the per-scene expression draw
+ * carry through: the same parameter drawn as `glide` drifts in wide arcs, drawn as `punch` it
+ * twitches.
  *
- * Large-scale roles move far and slowly, because that is what large-scale means. Detail moves a
- * little and often. `depth` is a fraction of the headroom left between the audio-resolved value and
- * the limit the drift is travelling toward; `rate` is in hertz.
- *
- * The depths are roughly half what they were, and the rates are unchanged. Both figures were set
- * while the audio-resolved value moved about a fifth of its range, because every channel occupied a
- * fifth of `[0, 1]` — so a drift of half the remaining headroom was a modest addition to a parameter
- * that was barely moving. With the channels normalized against their own distributions the audio
- * moves nine tenths of the range, and the same fractions made the oscillator a co-driver: measured
- * over a hundred and fifty-four bound parameters, twenty-one moved further from the drift than from
- * the music, and the median parameter took only seventy-two percent of its motion from the audio.
- *
- * What the drift is for has not changed, which is why the rates have not: several layers should keep
- * breathing and folding between transients, on separate clocks, so the frame is never still. It is a
- * garnish on a parameter the music is already driving, not a second driver.
+ * Anchors match the retired table's extremes: a ~2.6s envelope gets the old large-scale dynamics
+ * (depth [0.18, 0.34], rate [0.012, 0.045] Hz), a ~0.15s envelope the old detail dynamics
+ * (depth [0.05, 0.12], rate [0.18, 0.5] Hz), log-interpolated between and clamped outside. The
+ * fast anchor sits at 0.15s rather than at the fastest catalog envelope so that a typical
+ * half-second follower lands on the old unroled default (depth ~[0.1, 0.22]) — the drift the
+ * whole catalog was tuned against. `depth` is a fraction of the headroom left between the
+ * audio-resolved value and the limit the drift travels toward; `rate` is in hertz. The drift
+ * remains a garnish on a parameter the music is already driving, not a second driver.
  */
-const ROLE_DYNAMICS: Record<BindingRole, { depth: [number, number]; rate: [number, number] }> = {
-    // Structure: wide, unhurried arcs that reshape the frame over many seconds.
-    'large-scale-force': { depth: [0.18, 0.34], rate: [0.012, 0.045] },
-    deformation: { depth: [0.16, 0.3], rate: [0.018, 0.06] },
-    // Presence: the middle ground, and the closest to the old uniform behaviour.
-    intensity: { depth: [0.12, 0.22], rate: [0.05, 0.12] },
-    complexity: { depth: [0.14, 0.26], rate: [0.03, 0.09] },
-    'lateral-force': { depth: [0.14, 0.28], rate: [0.04, 0.1] },
-    // Detail: small and quick, riding on top of whatever the structure is doing. Scaled with the
-    // structural roles rather than left alone, because the gap between them is the point — a
-    // structural arc has to be visibly larger than the detail riding on it, and halving one end of
-    // that comparison without the other would have flattened the two toward each other.
-    detail: { depth: [0.05, 0.12], rate: [0.18, 0.5] },
-    burst: { depth: [0.04, 0.1], rate: [0.25, 0.7] },
-    'repeating-motion': { depth: [0.1, 0.2], rate: [0.1, 0.3] },
-};
+const SLOW_ENVELOPE_SECONDS = 2.6;
+const FAST_ENVELOPE_SECONDS = 0.15;
+const SLOW_DYNAMICS = { depth: [0.18, 0.34] as [number, number], rate: [0.012, 0.045] as [number, number] };
+const FAST_DYNAMICS = { depth: [0.05, 0.12] as [number, number], rate: [0.18, 0.5] as [number, number] };
 
-/** What an unroled binding gets: the middle of the range, as before. */
-const DEFAULT_DYNAMICS = { depth: [0.1, 0.22] as [number, number], rate: [0.035, 0.14] as [number, number] };
+function dynamicsFor(binding: ParameterBinding): { depth: [number, number]; rate: [number, number] } {
+    const envelope = Math.max(1e-3, binding.attack + binding.release);
+    const position = clamp01(
+        (Math.log(envelope) - Math.log(FAST_ENVELOPE_SECONDS))
+        / (Math.log(SLOW_ENVELOPE_SECONDS) - Math.log(FAST_ENVELOPE_SECONDS)),
+    );
 
-function dynamicsFor(role: BindingRole | undefined) {
-    return role ? ROLE_DYNAMICS[role] : DEFAULT_DYNAMICS;
+    const blend = (fast: [number, number], slow: [number, number]): [number, number] => [
+        fast[0] + (slow[0] - fast[0]) * position,
+        fast[1] + (slow[1] - fast[1]) * position,
+    ];
+
+    return {
+        depth: blend(FAST_DYNAMICS.depth, SLOW_DYNAMICS.depth),
+        // Rates span an order of magnitude; interpolate them in log space so the middle of the
+        // envelope range lands in the middle of the audible tempo range, not near the slow end.
+        rate: [
+            Math.exp(Math.log(FAST_DYNAMICS.rate[0]) + (Math.log(SLOW_DYNAMICS.rate[0]) - Math.log(FAST_DYNAMICS.rate[0])) * position),
+            Math.exp(Math.log(FAST_DYNAMICS.rate[1]) + (Math.log(SLOW_DYNAMICS.rate[1]) - Math.log(FAST_DYNAMICS.rate[1])) * position),
+        ],
+    };
 }
 
 function lerp(range: readonly [number, number], t: number): number {
@@ -110,7 +111,7 @@ export function modulateParameters(
         const identity = fractional(
             instanceEntropy * 997.3 + stringPhase(binding.parameter) * 431.9,
         );
-        const dynamics = dynamicsFor(binding.role);
+        const dynamics = dynamicsFor(binding);
         const rate = lerp(dynamics.rate, identity);
         const phase = playbackTime * rate + identity * 127.31;
 

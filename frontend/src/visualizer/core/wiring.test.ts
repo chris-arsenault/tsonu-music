@@ -3,11 +3,10 @@ import { assignInstanceIds, instanceIdFor, wireScene } from './wiring';
 import { compileGraph } from './graph';
 import {
     distributeReactivity,
-    featureKind,
     peakConcentration,
     reactivitySpread,
-    ROLE_FEATURES,
 } from './audio-mapping';
+import { shapeOf } from './signal-shapes';
 import { createRng } from './random';
 import type { PluginCategory, PluginPort, VisualPluginDefinition } from './plugin';
 
@@ -422,53 +421,116 @@ describe('reactivity distribution', () => {
         expect(reactivitySpread(distributed).size).toBeGreaterThan(1);
     });
 
-    test('assignments stay inside the role the binding was authored for', () => {
-        // `rms` implies the intensity role, so distribution may move it to another intensity feature
-        // and to nothing else. Spreading reactivity must not change what a parameter means.
-        for (const seed of ['a', 'b', 'c', 'd', 'e', 'f']) {
-            const distributed = distributeReactivity(nodes(withBindings('f', 'field')), createRng(seed));
-            const rewritten = distributed[0].bindings[0];
+    test('a substituted feature keeps the authored signal shape', () => {
+        // Shapes have incompatible distributions — a level rides [0, 1] continuously, a pulse
+        // channel is a gate that spends most of its time at zero and clears its headroom on any
+        // hit. `inputRange`, `outputRange`, and `curve` are authored against one or the other, and
+        // a `follow` draw rescales none of them, so a swap across the boundary would turn a
+        // smooth rider into a binary toggle. Within a shape, substitution is free.
+        for (const authored of ['bass', 'treble', 'rms', 'bassExcite', 'transient', 'spectralFlux']) {
+            for (const seed of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
+                const subject = plugin('k', 'field', [], undefined, {
+                    parameters: { amount: 0 },
+                    defaultBindings: [{ ...binding, feature: authored }],
+                });
+                const rewritten = distributeReactivity(nodes(subject), createRng(seed))[0].bindings[0];
 
-            expect(rewritten.role).toBe('intensity');
-            expect(ROLE_FEATURES.intensity).toContain(rewritten.feature);
-        }
-    });
-
-    test('a level binding is never rewritten onto an excitation channel, or the reverse', () => {
-        // The two kinds have incompatible distributions — a level rides continuously around the
-        // middle of its range, an excitation channel is a gate that spends most of its time at zero
-        // and clears its headroom on any percussive hit. `inputRange`, `outputRange`, and `curve`
-        // are authored against one or the other, and distribution rescales none of them, so a swap
-        // across the boundary turns a smooth rider into a binary toggle.
-        for (const role of ['large-scale-force', 'deformation', 'detail'] as const) {
-            const levels = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === 'level');
-            const excited = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === 'excitation');
-            expect(levels.length, `${role} needs both kinds to make this test meaningful`).toBeGreaterThan(0);
-            expect(excited.length).toBeGreaterThan(0);
-
-            for (const authored of ROLE_FEATURES[role]) {
-                for (const seed of ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']) {
-                    const subject = plugin('k', 'field', [], undefined, {
-                        parameters: { amount: 0 },
-                        defaultBindings: [{ ...binding, feature: authored, role }],
-                    });
-                    const rewritten = distributeReactivity(nodes(subject), createRng(seed))[0].bindings[0];
-
-                    expect(featureKind(rewritten.feature)).toBe(featureKind(authored));
-                }
+                expect(shapeOf(rewritten.feature), `${authored}/${seed}`).toBe(shapeOf(authored));
             }
         }
     });
 
-    test('a declared role outranks the feature it was authored against', () => {
-        const declared = plugin('r', 'source', [], undefined, {
+    test('an expression draw varies how a parameter responds across scenes', () => {
+        // A binding authored once was a response the system could never vary; declaring
+        // expressions makes the response itself a per-scene draw. Across seeds, an opted-in
+        // binding must actually produce more than one character.
+        const subject = () => plugin('w', 'transformer', [], undefined, {
             parameters: { amount: 0 },
-            defaultBindings: [{ ...binding, role: 'detail' as const }],
+            defaultBindings: [{
+                ...binding,
+                feature: 'bass',
+                expressions: ['follow', 'glide', 'punch'] as const,
+            }],
         });
 
-        const rewritten = distributeReactivity(nodes(declared), createRng('declared'))[0].bindings[0];
+        const characters = new Set<string>();
+        for (let seed = 0; seed < 24; seed += 1) {
+            const rewritten = distributeReactivity(nodes(subject()), createRng(`x${seed}`))[0].bindings[0];
+            characters.add(`${rewritten.attack.toFixed(3)}:${shapeOf(rewritten.feature)}`);
 
-        expect(ROLE_FEATURES.detail).toContain(rewritten.feature);
+            // Whatever was drawn, the feature matches the drawn response's pool: a punch reads a
+            // gate, a glide reads a rider.
+            if (rewritten.attack < 0.06) {
+                expect(shapeOf(rewritten.feature)).toBe('pulse');
+                expect(rewritten.curve).toBe('sqrt');
+            } else {
+                expect(shapeOf(rewritten.feature)).toBe('level');
+            }
+            // Definition-side metadata never reaches the output.
+            expect(rewritten.expressions).toBeUndefined();
+        }
+
+        expect(characters.size).toBeGreaterThanOrEqual(2);
+    });
+
+    test('a swing draw recentres the range on zero', () => {
+        const subject = plugin('s', 'transformer', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{
+                ...binding,
+                feature: 'mid',
+                outputRange: [0.1, 0.6] as [number, number],
+                expressions: ['swing'] as const,
+            }],
+        });
+
+        let swung = false;
+        for (let seed = 0; seed < 16 && !swung; seed += 1) {
+            const rewritten = distributeReactivity(nodes(subject), createRng(`sw${seed}`))[0].bindings[0];
+            if (rewritten.outputRange[0] < 0) {
+                swung = true;
+                expect(rewritten.outputRange).toEqual([-0.6, 0.6]);
+            }
+        }
+        expect(swung).toBe(true);
+    });
+
+    test('a spin draw requires an authored wrap', () => {
+        const unwrapped = plugin('u', 'transformer', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{ ...binding, feature: 'mid', expressions: ['spin'] as const }],
+        });
+
+        for (let seed = 0; seed < 16; seed += 1) {
+            const rewritten = distributeReactivity(nodes(unwrapped), createRng(`u${seed}`))[0].bindings[0];
+            expect(rewritten.mode ?? 'value').toBe('value');
+        }
+
+        const wrapped = plugin('w', 'transformer', [], undefined, {
+            parameters: { amount: 0 },
+            defaultBindings: [{ ...binding, feature: 'mid', wrap: 1, expressions: ['spin'] as const }],
+        });
+
+        let spun = false;
+        for (let seed = 0; seed < 16 && !spun; seed += 1) {
+            const rewritten = distributeReactivity(nodes(wrapped), createRng(`w${seed}`))[0].bindings[0];
+            spun = rewritten.mode === 'rate';
+        }
+        expect(spun).toBe(true);
+    });
+
+    test('an undeclared binding always keeps its authored response', () => {
+        for (let seed = 0; seed < 12; seed += 1) {
+            const rewritten = distributeReactivity(
+                nodes(withBindings('a', 'source')),
+                createRng(`plain${seed}`),
+            )[0].bindings[0];
+
+            expect(rewritten.attack).toBe(0.1);
+            expect(rewritten.release).toBe(0.2);
+            expect(rewritten.curve).toBe('linear');
+            expect(rewritten.mode ?? 'value').toBe('value');
+        }
     });
 
     test('a feature outside the mapping table is left alone', () => {

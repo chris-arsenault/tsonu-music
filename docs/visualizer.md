@@ -113,12 +113,15 @@ changes the speed of a motion rather than the size of a displacement — `spin` 
 an integrated phase velocity, folded into a shader plugin's `uPhase`. `impulse` fires a decaying
 envelope from a detected onset or beat. A frozen clock passes zero delta and all three hold.
 
-A binding also declares the role it plays, drawn from the specification's section 20 mapping table:
-`intensity`, `large-scale-force`, `deformation`, `detail`, `burst`, `repeating-motion`, `complexity`,
-`lateral-force`. A binding written against a feature in the table infers its role from that feature.
-Reactivity is distributed within the role, so a scene spreads across features rather than pulsing
-together on every beat, without a parameter ever being moved onto a signal that means something
-else. A feature outside the table is left as authored.
+Reactivity is distributed by signal shape. Every bus channel is classified by how it behaves —
+`level` riders that occupy [0, 1] uniformly, `pulse` gates and event envelopes, the `beatPhase`
+sawtooth, and detected `event` channels — and distribution substitutes a binding's feature freely
+within its shape, so a scene spreads across channels rather than pulsing together on every beat
+while a rider is never replaced by a gate. The response is a per-scene draw as well: a binding may
+declare expressions (`glide`, `punch`, `swing`, `spin`) beside its authored `follow`, and
+distribution draws one, rewriting the envelope, range, or mode accordingly — the same warp
+strength follows the bass in one scene, swells over phrases in another, and kicks on hits in a
+third. A feature outside every shape pool is left as authored.
 
 ## Time
 

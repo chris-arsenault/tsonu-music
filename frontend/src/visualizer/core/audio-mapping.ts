@@ -1,63 +1,41 @@
 /**
- * Reactivity distribution (spec section 20).
+ * Reactivity distribution.
  *
- * Plugins should not all react to the same audio event. Left to their defaults every plugin binds to
- * whatever suits it in isolation, and the whole scene pulses together on every beat — the specific
- * failure the mapping table exists to prevent.
+ * Plugins should not all react to the same audio event, and a parameter should not respond the
+ * same way in every scene the system ever builds. Distribution therefore draws two things per
+ * binding per scene: which channel drives it, and how it responds.
  *
- * Distribution happens *within* what a binding means, never across it. Section 20 is a table of
- * appropriate targets: bass belongs to large-scale force, treble to edge detail, onsets to bursts.
- * An earlier version picked a feature at random from a pool defined by the plugin's category, which
- * moved feedback expansion onto stereo balance and palette movement onto beat phase — reactivity was
- * spread, and the meaning of every parameter was destroyed to do it. A binding now declares its role
- * and the scheduler chooses only among the features that role admits.
+ * The feature draw is constrained by signal shape (`signal-shapes.ts`), not by a semantic table.
+ * An earlier version drew features from category-wide pools and moved feedback expansion onto
+ * stereo balance; the correction was a table of roles that narrowed each binding's substitutes to
+ * near-duplicates and froze its temporal response entirely — a warp's strength was an EMA of
+ * low-frequency energy in every scene, whichever channel fed it. Shape is the property a
+ * substitute must preserve (a rider for a rider, a gate for a gate); within a shape, substitution
+ * is free, and the response itself becomes a draw.
+ *
+ * An expression is a draw-time transform producing a plain binding — concrete mode, envelope, and
+ * range values. Documents, captures, the editor, and the runtime never see expressions; they see
+ * the binding the draw produced.
  */
 
-import { bindingMode, type BindingRole, type ParameterBinding } from './bindings';
+import { bindingMode, type ParameterBinding } from './bindings';
 import type { GraphNode } from './graph';
 import type { Rng } from './random';
-
-/**
- * Features each role admits, from the section 20 table. Ordered by how well each expresses the role,
- * since selection prefers whatever is still unclaimed and falls back along this order.
- *
- * Excitation features appear where a role is about *events* — detail and burst want the transient,
- * not the standing level. Level features appear where a role is about *presence* — a large-scale
- * force should hold while the bass holds.
- *
- * `transient` is the onset envelope itself, and belongs to the two event roles for the reason above.
- * It was absent from every pool despite that claim, so the only channel in the bus that is both
- * event-driven and continuously valued was reachable by nothing: three hard-coded reads in the
- * renderer and the kernel, and no binding anywhere. It counts as a level for distribution because it
- * is an envelope with a real mid-range, not a gate — unlike the `*Excite` channels beside it.
- */
-export const ROLE_FEATURES: Record<BindingRole, readonly string[]> = {
-    intensity: ['rms', 'peak', 'rmsExcite'],
-    'large-scale-force': ['bass', 'subBass', 'bassExcite', 'subBassExcite'],
-    deformation: ['mid', 'lowMid', 'midExcite', 'lowMidExcite'],
-    detail: ['trebleExcite', 'highMidExcite', 'treble', 'highMid', 'transient'],
-    burst: ['spectralFlux', 'transient', 'trebleExcite', 'bassExcite', 'rmsExcite'],
-    'repeating-motion': ['beatPhase'],
-    complexity: ['spectralCentroid'],
-    'lateral-force': ['stereoBalance'],
-};
+import { DELIBERATE_ONLY_FEATURES, SIGNAL_SHAPES, shapeOf } from './signal-shapes';
 
 /** Event channels an impulse binding fires from. Distribution never moves one onto a level. */
-const IMPULSE_FEATURES: readonly string[] = ['onset', 'beat'];
+const IMPULSE_FEATURES: readonly string[] = SIGNAL_SHAPES.event;
 
 /**
  * Every channel a binding may name, for an editor offering the choice.
  *
- * The role table plus the event channels plus the few continuous measures no role admits — a role
- * exists to constrain what *distribution* may substitute, and choosing a feature by hand is not
- * distribution. `beatConfidence` is the case in point: nothing should be moved onto it at random, and
- * binding something to it deliberately is perfectly reasonable.
+ * The shape pools plus the deliberate-only channels — substitution never lands on the latter, but
+ * choosing one by hand is not substitution.
  */
 export const BINDABLE_FEATURES: readonly string[] = [
     ...new Set([
-        ...Object.values(ROLE_FEATURES).flat(),
-        ...IMPULSE_FEATURES,
-        'beatConfidence',
+        ...Object.values(SIGNAL_SHAPES).flat(),
+        ...DELIBERATE_ONLY_FEATURES,
     ]),
 ].sort();
 
@@ -66,44 +44,88 @@ export function isEventFeature(feature: string): boolean {
 }
 
 /**
- * Whether a feature reads as a standing level or as a departure from one.
+ * How a parameter responds to the channel that drives it. Each expression rewrites the authored
+ * binding's mode, envelope, or range, and names the shape pool its feature is drawn from.
  *
- * Level channels are peak-normalized: they ride continuously, spending most of their time somewhere
- * in the middle of their range. Excitation channels report how far a measure sits above its own
- * recent mean in units of its own recent deviation, so on percussive material they clear the
- * headroom constant entirely and read as a gate. Measured: `bass` has a median of 0.204 and a 95th
- * percentile of 0.402, while `bassExcite` has a median of 0.000 and a 95th percentile of 1.000.
- *
- * Derived from the name rather than tabulated, so a new excitation channel cannot be added without
- * being classified.
+ * `follow` is the authored binding as written and is what every binding gets unless its plugin
+ * declares more. The others exist because a response authored once is a response the system can
+ * never vary: the reported "MilkDrop-style warps feel constant rate" is a warp strength that is
+ * the same smoothed follower of the same kind of channel in every scene.
  */
-export type FeatureKind = 'level' | 'excitation';
+export type BindingExpression = 'follow' | 'glide' | 'punch' | 'swing' | 'spin';
 
-export function featureKind(feature: string): FeatureKind {
-    return feature.endsWith('Excite') ? 'excitation' : 'level';
+interface ExpressionDraw {
+    /** The pool the feature is drawn from. Undefined keeps the authored feature's own shape. */
+    pool?: keyof typeof SIGNAL_SHAPES;
+    /** Rewrites the authored binding into the drawn response. */
+    apply(binding: ParameterBinding, rng: Rng): ParameterBinding;
 }
 
-/**
- * The role a feature belongs to, so a binding written before roles existed keeps its meaning.
- *
- * This is what lets role-based distribution take effect across the whole catalog without editing
- * every plugin definition: an author who wrote `feature: 'bass'` meant large-scale force, and that
- * is exactly what the table says.
- */
-export function roleForFeature(feature: string): BindingRole | undefined {
-    for (const [role, features] of Object.entries(ROLE_FEATURES) as [BindingRole, readonly string[]][]) {
-        if (features.includes(feature)) {
-            return role;
-        }
-    }
+const EXPRESSIONS: Record<BindingExpression, ExpressionDraw> = {
+    /** The authored response, feature drawn within its own shape. */
+    follow: {
+        apply: (binding) => binding,
+    },
 
-    return undefined;
-}
+    /** Phrase-scale swells: the authored envelope stretched fourfold, on a riding channel. */
+    glide: {
+        pool: 'level',
+        apply: (binding) => ({
+            ...binding,
+            attack: binding.attack * 4,
+            release: binding.release * 4,
+            curve: 'smooth',
+        }),
+    },
 
-/** A binding's declared role, or the one implied by the feature it was authored against. */
-export function bindingRole(binding: ParameterBinding): BindingRole | undefined {
-    return binding.role ?? roleForFeature(binding.feature);
-}
+    /**
+     * Beat-kicked: a fast rise and a musical fall, fed by a gate. The ceiling widens so the hit
+     * reads over the authored resting level, bounded so a drawn response cannot leave the range
+     * the parameter was written to tolerate by more than half again.
+     */
+    punch: {
+        pool: 'pulse',
+        apply: (binding, rng) => {
+            const [low, high] = binding.outputRange;
+            return {
+                ...binding,
+                mode: 'value',
+                attack: rng.range(0.015, 0.05),
+                release: rng.range(0.25, 0.6),
+                curve: 'sqrt',
+                outputRange: [low, low + (high - low) * 1.3] as [number, number],
+            };
+        },
+    },
+
+    /**
+     * A signed response: the range recentres on zero, so the parameter crosses it and the motion
+     * it drives changes direction with the music instead of only changing speed.
+     */
+    swing: {
+        pool: 'level',
+        apply: (binding) => {
+            const high = Math.max(...binding.outputRange.map(Math.abs));
+            return {
+                ...binding,
+                mode: 'value',
+                outputRange: [-high, high] as [number, number],
+            };
+        },
+    },
+
+    /**
+     * Integrated: the feature sets a velocity and the parameter accumulates, wrapped. Only legal
+     * where the authored binding declares `wrap` — integration without a wrap is unbounded.
+     */
+    spin: {
+        pool: 'level',
+        apply: (binding) => ({
+            ...binding,
+            mode: 'rate',
+        }),
+    },
+};
 
 export interface DistributedBinding {
     /** The instance these bindings belong to. Two instances of one definition are distinct here. */
@@ -113,20 +135,18 @@ export interface DistributedBinding {
 }
 
 /**
- * Spreads bindings across the features their roles admit.
+ * Draws each binding's channel and response for one scene.
  *
- * Assignment is per binding, not per plugin: a plugin that binds amplitude to level and brightness to
- * treble means those to be different signals, and collapsing them onto one feature would undo exactly
- * the separation this function exists to create.
+ * Assignment is per binding, not per plugin: a plugin that binds amplitude to level and brightness
+ * to treble means those to be different signals, and collapsing them onto one feature would undo
+ * exactly the separation this function exists to create.
  *
- * Features already claimed are avoided until a role's pool runs dry, at which point reuse is allowed
- * — a scene with more bindings in one role than that role has features cannot give each an exclusive
- * signal, but it can still avoid every binding sharing one.
+ * Features already claimed are avoided until a shape's pool runs dry, at which point reuse is
+ * allowed — a scene with more bindings in one shape than that shape has channels cannot give each
+ * an exclusive signal, but it can still avoid every binding sharing one.
  *
- * Distribution runs over instances rather than definitions. Keyed by definition, two instances of one
- * plugin received one assignment between them: they bound the same parameter to the same feature and
- * moved as one object, which is the concentration this function exists to break — and the scene had
- * no way to tell them apart afterwards, because there was only one entry to look up.
+ * Distribution runs over instances rather than definitions, so two instances of one plugin can be
+ * assigned separately and told apart afterwards.
  */
 export function distributeReactivity(
     nodes: readonly GraphNode[],
@@ -153,29 +173,53 @@ export function distributeReactivity(
             // An impulse names an event channel. Rewriting it onto a continuous feature would leave
             // the binding reading a channel that never fires.
             if (bindingMode(binding) === 'impulse') {
-                return { ...binding, feature: claim(IMPULSE_FEATURES, binding.feature) };
+                return strip({ ...binding, feature: claim(IMPULSE_FEATURES, binding.feature) });
             }
 
-            const role = bindingRole(binding);
-            if (!role) {
-                // A feature outside the table is deliberate and specific. Leave it alone rather than
-                // guessing at a replacement.
-                return { ...binding };
+            const shape = shapeOf(binding.feature);
+            if (!shape) {
+                // A feature outside every pool — `beatConfidence`, a raw channel level — is
+                // deliberate and specific. Leave it alone rather than guessing at a replacement.
+                return strip({ ...binding });
             }
 
-            // Within the role, only among features of the binding's own kind. `inputRange`,
-            // `outputRange`, and `curve` are authored against a distribution, and the two kinds do
-            // not share one: substituting `bassExcite` for `bass` turns a parameter written to ride
-            // smoothly at a fifth of its range into a binary toggle between its extremes, decided by
-            // a per-scene die roll. This is the same guard the impulse branch above applies to
-            // events, for the same reason — distribution spreads reactivity, it does not reinterpret
-            // what a binding meant.
-            const kind = featureKind(binding.feature);
-            const pool = ROLE_FEATURES[role].filter((feature) => featureKind(feature) === kind);
+            const expression = drawExpression(binding, rng);
+            const draw = EXPRESSIONS[expression];
+            const pool = SIGNAL_SHAPES[draw.pool ?? shape];
+            const rewritten = draw.apply(binding, rng);
 
-            return { ...binding, role, feature: claim(pool, binding.feature) };
+            return strip({ ...rewritten, feature: claim(pool, binding.feature) });
         }),
     }));
+}
+
+/**
+ * The response drawn for one binding.
+ *
+ * `follow` is always among the candidates, so an opted-in parameter keeps its authored behaviour
+ * as one character among several rather than losing it. `spin` requires an authored `wrap`, and a
+ * declaration naming it without one is treated as not naming it.
+ */
+function drawExpression(binding: ParameterBinding, rng: Rng): BindingExpression {
+    const declared = binding.expressions ?? [];
+    const legal = declared.filter((expression) =>
+        expression !== 'spin' || (binding.wrap !== undefined && binding.wrap > 0));
+    const candidates: BindingExpression[] = legal.length > 0
+        ? [...new Set<BindingExpression>(['follow', ...legal])]
+        : ['follow'];
+
+    return rng.pick(candidates) ?? 'follow';
+}
+
+/** Definition-side metadata never reaches a document, a capture, or the runtime. */
+function strip(binding: ParameterBinding): ParameterBinding {
+    if (binding.expressions === undefined) {
+        return binding;
+    }
+
+    const rest = { ...binding };
+    delete rest.expressions;
+    return rest;
 }
 
 /**

@@ -328,7 +328,6 @@ function driverNodesAndEdges(
                     details: [
                         { label: 'range', value: `${binding.outputRange[0]} … ${binding.outputRange[1]}` },
                         { label: 'curve', value: binding.curve },
-                        ...(binding.role ? [{ label: 'role', value: binding.role }] : []),
                         ...(binding.polarity === -1 ? [{ label: 'polarity', value: 'inverted' }] : []),
                         { label: 'drives', value: `${node.id}.${parameter}` },
                     ],
