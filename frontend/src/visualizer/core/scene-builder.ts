@@ -226,12 +226,17 @@ export function settleScene(
     schedulerContext: SchedulerContext,
 ): SettledScene | { ok: false; failure: SceneBuildFailure } {
     let plugins = [...initial];
+    // Material wiring nominates trails and draws its own fold-back loop (ADR-0016). These are the
+    // scene's material memory — a stage echoing itself, the composed image folding back through a
+    // lossy port — distinct from the canonical image state `withCanonicalState` adds afterwards.
+    // Wired with `false` here, every stage upstream of the combine is a fresh redraw resampled
+    // through per-frame absolute warps, which is invertible: the picture returns exactly when the
+    // parameter does.
     const rewire = () => wireScene(
         plugins,
         context.assetResources ?? [],
         createRng(`${entropy}:loops`),
         theme.grammar.maximumFeedbackLoops,
-        false,
     );
 
     let wired = rewire();
@@ -622,16 +627,24 @@ export function structuralViolations(
 
         return port !== undefined && isImagePortType(port.type);
     });
+    // The canonical state loop counts toward the minimum — a scene holding only it is legal — but
+    // not against the ceiling, which is a character budget on the material loops a family keeps
+    // (ADR-0016). Counted against the ceiling, the infrastructure loop consumed the whole budget
+    // of a one-loop grammar and no scene was permitted any material memory of its own.
+    const materialLoops = imageLoops.filter((edge) => {
+        const sink = scene.nodes.find((node) => node.instanceId === edge.to.instanceId);
+        return !sink?.definition.capabilities.includes(DERIVED_STATE);
+    });
     if (imageLoops.length < grammar.minimumFeedbackLoops) {
         violations.push({
             kind: 'too-few-feedback',
             detail: `${imageLoops.length} loops below ${grammar.minimumFeedbackLoops}`,
         });
     }
-    if (imageLoops.length > grammar.maximumFeedbackLoops) {
+    if (materialLoops.length > grammar.maximumFeedbackLoops) {
         violations.push({
             kind: 'too-many-feedback',
-            detail: `${imageLoops.length} loops exceed ${grammar.maximumFeedbackLoops}`,
+            detail: `${materialLoops.length} material loops exceed ${grammar.maximumFeedbackLoops}`,
         });
     }
 

@@ -189,7 +189,7 @@ describe('scene building', () => {
         }
     });
 
-    test('every scene has exactly one graph-owned image history resource', () => {
+    test('every scene presents its graph-owned image history resource', () => {
         for (const seed of ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']) {
             const result = buildScene(seed, GEOMETRIC_SIGNAL_THEME, context(), FULL);
             if (!result.ok) continue;
@@ -198,8 +198,10 @@ describe('scene building', () => {
             const imageResources = new Set(result.scene.graph.resources
                 .filter((resource) => resource.type === 'color-texture')
                 .map((resource) => resource.id));
+            // The state resource ping-pongs, and material trails may add their own history buffers
+            // beside it (ADR-0016) — those are the scene's material memory, not competitors.
             expect(result.scene.graph.pingPong.filter((resource) => imageResources.has(resource)), seed)
-                .toEqual([result.scene.graph.state!.stateResource]);
+                .toContain(result.scene.graph.state!.stateResource);
             expect(result.scene.graph.present, seed).toBe(result.scene.graph.state!.stateResource);
         }
     });

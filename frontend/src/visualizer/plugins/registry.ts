@@ -70,11 +70,13 @@ import {
     createEdgeContourTransform,
     createShockwaveTransform,
     createSymmetryTransform,
+    createTemporalTransform,
     createTilingTransform,
     DOMAIN_WARP_MODES,
     EDGE_CONTOUR_MODES,
     SHOCKWAVE_MODES,
     SYMMETRY_MODES,
+    TEMPORAL_MODES,
     TILING_MODES,
 } from './transformers/transforms';
 import {
@@ -167,6 +169,10 @@ export function transformerDefinitions(): VisualPluginDefinition[] {
         // The drag, which the kernel used to own (ADR-0012) and which no longer carries its own
         // combine (ADR-0013).
         createFieldAdvectTransform(),
+        // The catalog's history-port transformer: its `decay` is the gain of any cycle closing on
+        // it, which is what lets a drawn loop converge (ADR-0016). Without it the catalog offers
+        // no optional image port a trail can nominate.
+        ...TEMPORAL_MODES.map(createTemporalTransform),
     ];
 }
 

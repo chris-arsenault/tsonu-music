@@ -248,9 +248,12 @@ export function createSignalTraceSource(mode: SignalTraceMode = 'oscilloscope'):
             dominance: 'either',
         },
         activationRules: {
-            // High: an audio-derived trace is the material a music visualizer is about, and the
-            // whole family now competes as one rather than as eight.
-            activationWeight: 7,
+            // Above the pack but no longer dominant. At 7 this family appeared in 78% of scenes
+            // and held the transformer chain's head in 47% — measured over 400 builds — so most
+            // scenes were structurally a signal trace with things around it. An audio-derived
+            // trace is still the material a music visualizer is about; it should not be the
+            // material of nearly every scene.
+            activationWeight: 3,
             minimumDuration: 8,
         },
         parameters: {

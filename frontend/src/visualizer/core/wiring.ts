@@ -334,7 +334,11 @@ export function wireScene(
      * their edges rather than drawing them.
      */
     maximumImageLoops = 1,
-    /** False for material assembly; the scene builder adds the one canonical image state itself. */
+    /**
+     * False only for graphs that state their own memory. The scene builder passes true: nominated
+     * trails and the drawn fold-back loop are the material's memory (ADR-0016), and the canonical
+     * image state it adds afterwards is validated separately by `analyzeSceneState`.
+     */
     nominateImageHistory = true,
 ): WiredScene {
     // Derived joins sort after every category, not with the compositors they otherwise resemble.

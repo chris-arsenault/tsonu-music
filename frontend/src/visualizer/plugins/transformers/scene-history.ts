@@ -85,9 +85,14 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
         parameters: { strength: 0.16, rotation: 0.3 },
         defaultBindings: [
             {
+                // The state's travel per second, as a fraction of the frame. The ceiling was 0.4,
+                // which put MilkDrop-typical speed (an ordinary preset zooms at the equivalent of
+                // ~0.6/s) permanently out of reach — measured, the reported "never fast". The
+                // range decides what is reachable; the EMA and the expression draw decide where
+                // in it a scene actually lives.
                 feature: 'bass',
                 parameter: 'strength',
-                outputRange: [0.04, 0.4],
+                outputRange: [0.06, 1.2],
                 attack: 0.12,
                 release: 0.7,
                 curve: 'smooth',
@@ -96,7 +101,7 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
             {
                 feature: 'mid',
                 parameter: 'rotation',
-                outputRange: [-0.5, 0.7],
+                outputRange: [-1.5, 1.5],
                 attack: 0.25,
                 release: 1,
                 curve: 'smooth',
