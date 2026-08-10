@@ -15,7 +15,7 @@ import { peakConcentration } from './audio-mapping';
 import { allDefinitions } from '../plugins/registry';
 import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';
 import { assetResourceId, wireScene } from './wiring';
-import { ORGANIC_FLOW, REDUCED_GRAMMAR, SPATIAL_FEEDBACK } from './grammar';
+import { displacesHistory, ORGANIC_FLOW, REDUCED_GRAMMAR, SPATIAL_FEEDBACK } from './grammar';
 import type { PluginCategory, PortType, VisualPluginDefinition } from './plugin';
 
 const FULL_CATALOG = allDefinitions();
@@ -189,10 +189,12 @@ describe('scene building', () => {
         }
     });
 
-    test('every previous-frame image read passes through a displacing warp', () => {
+    test('every previous-frame image read passes through a displacing transport', () => {
         // A feedback edge alone is memory without motion: an echo resamples fixed offsets, a
-        // fold-back blends in place. Every image loop must read its past through a warp whose
-        // per-frame step compounds — the shape the canonical state proves (ADR-0016).
+        // fold-back blends in place. Every image loop must read its past through a transport
+        // whose per-frame step compounds — the shape the canonical state proves (ADR-0016). The
+        // transport family is anything declaring SPATIAL_FEEDBACK, not one plugin standing in
+        // for all motion.
         for (const seed of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8']) {
             const result = buildScene(seed, GEOMETRIC_SIGNAL_THEME, context(), FULL);
             if (!result.ok) continue;
@@ -205,7 +207,7 @@ describe('scene building', () => {
                 if (!port || port.type !== 'color-texture') continue;
 
                 expect(
-                    sink.definition.capabilities.includes('scene-history-warp'),
+                    displacesHistory(sink.definition),
                     `${seed}: ${edge.from.instanceId} -> ${edge.to.instanceId}.${edge.to.port}`,
                 ).toBe(true);
             }

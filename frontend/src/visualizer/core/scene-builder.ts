@@ -14,6 +14,7 @@ import {
     displacesHistory,
     grammarViolations,
     REDUCED_GRAMMAR,
+    SPATIAL_FEEDBACK,
     type GrammarViolation,
     type SceneGrammar,
 } from './grammar';
@@ -372,31 +373,51 @@ export function settleScene(
 }
 
 /**
- * Interposes a drift warp on every material previous-frame image read (ADR-0016).
+ * Interposes a drift transport on every material previous-frame image read (ADR-0016).
  *
  * A feedback edge alone gives a plugin memory and no motion: a temporal echo resamples its past at
  * fixed offsets, and a mixer fold-back blends its past with zero displacement — ghosts that pulse
  * in place. The canonical state is the proof of the correct shape: it reads its past *through a
- * warp that displaces by a per-frame step*, so the displacement compounds and the picture travels.
- * This applies that shape to every material loop: `producer -(previous)-> warp -> port`, each
- * splice drawing its own warp mode, so a scene's trails drift on their own courses rather than
- * decaying where they were stamped.
+ * transport that displaces by a per-frame step*, so the displacement compounds and the picture
+ * travels. This applies that shape to every material loop: `producer -(previous)-> transport ->
+ * port`.
  *
- * Warp modes are the intrinsic four; the field mode is reserved for the canonical state, whose
- * steering already knows how to pick a live field. Cycle gains are unchanged — the warp only
- * resamples — so the lossy port that made a loop legal still governs it.
+ * The transport is drawn from every `SPATIAL_FEEDBACK` plugin whose required inputs the scene can
+ * satisfy — the capability's own definition is "a loop through this displaces the image it reads".
+ * That is the scene-history warp's four intrinsic modes, `FeedbackFlowTransform`'s nine, and
+ * `FieldFeedback` wherever a field exists to steer it, rather than one plugin family standing in
+ * for all motion. Field-consuming transports take the freshest field, preferring a dedicated
+ * field or simulator output over a side-motion, the same policy the canonical state uses. Each
+ * transport is an ordinary instance: distribution draws its features and expressions, its seed
+ * sets its drift course. Cycle gains are unchanged — a transport only resamples — so the lossy
+ * port that made a loop legal still governs it.
  */
 function withTrailWarps(
     material: WiredScene,
     entropy: string,
     catalog: readonly VisualPluginDefinition[],
 ): WiredScene {
-    const trailModes = ['zoom', 'rotate', 'drift', 'spiral'];
+    const fieldOutputs = material.nodes.flatMap((node) => node.definition.outputs
+        .filter((output) => isMotionSource(output.type))
+        .map((output) => ({
+            instanceId: node.instanceId,
+            port: output.name,
+            type: output.type,
+            category: node.definition.category,
+        })));
+    const fieldFor = (type: VisualPluginDefinition['inputs'][number]['type']) => {
+        const compatible = fieldOutputs.filter((output) => portsCompatible(output.type, type));
+        const dedicated = compatible.filter((output) => ['field', 'simulator'].includes(output.category));
+        return [...(dedicated.length > 0 ? dedicated : compatible)].reverse()[0];
+    };
+
     const candidates = catalog.filter((definition) =>
-        definition.capabilities.includes(DERIVED_STATE)
-        && definition.capabilities.includes('scene-history-warp')
-        && trailModes.includes(definition.id.split(':')[1] ?? '')
-        && definition.inputs.every((input) => !input.required || input.type === 'color-texture'));
+        definition.capabilities.includes(SPATIAL_FEEDBACK)
+        && definition.inputs.some((input) => input.required && input.type === 'color-texture')
+        && definition.inputs.every((input) =>
+            !input.required
+            || input.type === 'color-texture'
+            || fieldFor(input.type) !== undefined));
     if (candidates.length === 0) {
         return material;
     }
@@ -419,19 +440,37 @@ function withTrailWarps(
             continue;
         }
 
-        const definition = rng.pick(candidates) ?? candidates[0];
+        const drawn = rng.pick(candidates) ?? candidates[0];
+        // Derived infrastructure, like a joining compositor's DERIVED_JOIN: the transport is here
+        // because the builder put it here, and the branch counts must not read it as material.
+        const definition: VisualPluginDefinition = drawn.capabilities.includes(DERIVED_STATE)
+            ? drawn
+            : { ...drawn, capabilities: [...drawn.capabilities, DERIVED_STATE] };
         const occurrence = occurrences.get(definition.id) ?? 0;
         occurrences.set(definition.id, occurrence + 1);
-        const warp: GraphNode = {
+        const transport: GraphNode = {
             instanceId: instanceIdFor(definition, occurrence),
             definition,
         };
 
-        nodes.push(warp);
+        const sourcePort = definition.inputs.find((input) =>
+            input.required && input.type === 'color-texture')!;
+        nodes.push(transport);
         edges.push(
-            { from: edge.from, to: { instanceId: warp.instanceId, port: 'source' }, feedback: true },
-            { from: { instanceId: warp.instanceId, port: 'color' }, to: edge.to },
+            { from: edge.from, to: { instanceId: transport.instanceId, port: sourcePort.name }, feedback: true },
+            { from: { instanceId: transport.instanceId, port: 'color' }, to: edge.to },
         );
+
+        for (const input of definition.inputs) {
+            if (!input.required || input.type === 'color-texture') {
+                continue;
+            }
+            const field = fieldFor(input.type)!;
+            edges.push({
+                from: { instanceId: field.instanceId, port: field.port },
+                to: { instanceId: transport.instanceId, port: input.name },
+            });
+        }
     }
 
     return { ...material, nodes, edges };

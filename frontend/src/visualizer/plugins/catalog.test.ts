@@ -768,8 +768,11 @@ describe('scenes accumulate and move', () => {
         // none of them can be present in a scene without the motion sum finding it.
         for (const theme of THEMES) {
             for (const scene of scenesFor(theme)) {
-                const spatial = scene.plugins.flatMap((definition) =>
-                    definition.outputs.filter((port) => isMotionSource(port.type)));
+                // Counted over the wired nodes rather than the selected plugins: derived
+                // transports (ADR-0016) publish motion outputs too, and their resources are as
+                // real as anyone's.
+                const spatial = scene.wired.nodes.flatMap((node) =>
+                    node.definition.outputs.filter((port) => isMotionSource(port.type)));
                 if (spatial.length === 0) {
                     continue;
                 }
