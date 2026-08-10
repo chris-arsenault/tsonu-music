@@ -27,13 +27,19 @@ uniform float uMode;
 uniform float uStrength;
 uniform float uRotation;
 uniform vec2 uDrift;
+/**
+ * Where the radial modes pivot. Hardcoded at frame centre, every rotation and zoom in a scene
+ * shared one axis: persistent material collapsed onto concentric orbits — the reported "turns
+ * into a circle" — and two transports could never conflict. Seed-drawn per instance.
+ */
+uniform vec2 uCentre;
 uniform float uDelta;
 
 vec2 rotateAroundCentre(vec2 uv, float angle) {
-    vec2 p = uv - 0.5;
+    vec2 p = uv - uCentre;
     float c = cos(angle);
     float s = sin(angle);
-    return mat2(c, -s, s, c) * p + 0.5;
+    return mat2(c, -s, s, c) * p + uCentre;
 }
 
 void main() {
@@ -42,13 +48,13 @@ void main() {
     vec2 source = vUv;
 
     if (uMode < 0.5) {
-        source = (vUv - 0.5) * (1.0 - stepSize) + 0.5;
+        source = (vUv - uCentre) * (1.0 - stepSize) + uCentre;
     } else if (uMode < 1.5) {
         source = rotateAroundCentre(vUv, uRotation * delta);
     } else if (uMode < 2.5) {
         source = vUv - uDrift * stepSize;
     } else if (uMode < 3.5) {
-        vec2 p = vUv - 0.5;
+        vec2 p = vUv - uCentre;
         source = rotateAroundCentre(vUv, stepSize * (0.4 + length(p) * 2.4));
     } else {
         vec2 field = texture(uField, clamp(vUv, 0.0, 1.0)).xy;
@@ -112,6 +118,7 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
 
         create(context): VisualPluginInstance {
             let drift: [number, number] = [0, 0];
+            let centre: [number, number] = [0.5, 0.5];
 
             return {
                 initialize() {
@@ -120,6 +127,13 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
                 activate() {
                     const angle = context.seed * Math.PI * 2;
                     drift = [Math.cos(angle), Math.sin(angle)];
+                    // A different derivation from the same seed, so the pivot and the drift do not
+                    // point the same way by construction.
+                    const pivot = context.seed * Math.PI * 2 * 3.7;
+                    centre = [
+                        0.5 + Math.cos(pivot) * 0.18,
+                        0.5 + Math.sin(pivot) * 0.18,
+                    ];
                 },
                 update() {
                     // The image state belongs to the graph resource feeding `source`.
@@ -147,6 +161,7 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
                             uStrength: 0.16,
                             uRotation: 0.3,
                             uDrift: drift,
+                            uCentre: centre,
                         },
                     }];
                 },

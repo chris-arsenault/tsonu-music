@@ -512,23 +512,32 @@ function withCanonicalState(
     }
 
     const rng = createRng(`${entropy}:scene-state`);
-    const warpDefinition = rng.pick(warpCandidates) ?? warpCandidates[0];
+    // Two distinct modes in series, when the catalog offers them. A single pure mode has an
+    // invariant set — rotation's is circles, drift's is parallel lines, zoom's is rays — and
+    // persistent material collapses onto it: the reported "turns into a circle pretty fast,
+    // there's no conflicting motion". Composed transports with per-instance pivots have no simple
+    // closed orbits, which is where MilkDrop-class wander comes from.
+    const firstWarp = rng.pick(warpCandidates) ?? warpCandidates[0];
+    const secondCandidates = warpCandidates.filter((candidate) => candidate.id !== firstWarp.id);
+    const secondWarp = secondCandidates.length > 0 ? rng.pick(secondCandidates) : undefined;
+    const warpDefinitions = secondWarp ? [firstWarp, secondWarp] : [firstWarp];
     const combineDefinition = rng.pick(combineCandidates) ?? combineCandidates[0];
-    // Occurrence counted against the material, not assumed zero: trail warps interposed by
+    // Occurrence counted against the material, not assumed zero: trail transports interposed by
     // `withTrailWarps` may already hold instances of the same warp definition.
-    const occurrenceOf = (definition: VisualPluginDefinition) =>
-        material.nodes.filter((node) => node.definition.id === definition.id).length;
-    const warp: GraphNode = {
-        instanceId: instanceIdFor(warpDefinition, occurrenceOf(warpDefinition)),
-        definition: warpDefinition,
+    const occurrences = new Map<string, number>();
+    for (const node of material.nodes) {
+        occurrences.set(node.definition.id, (occurrences.get(node.definition.id) ?? 0) + 1);
+    }
+    const instanceFor = (definition: VisualPluginDefinition): GraphNode => {
+        const occurrence = occurrences.get(definition.id) ?? 0;
+        occurrences.set(definition.id, occurrence + 1);
+        return { instanceId: instanceIdFor(definition, occurrence), definition };
     };
-    const combine: GraphNode = {
-        instanceId: instanceIdFor(combineDefinition, occurrenceOf(combineDefinition)),
-        definition: combineDefinition,
-    };
+
+    const warps = warpDefinitions.map(instanceFor);
+    const combine = instanceFor(combineDefinition);
     const contract = combineDefinition.temporalCombine!;
-    const sourceInput = warpDefinition.inputs.find((input) => input.name === 'source');
-    if (!sourceInput) {
+    if (warps.some((warp) => !warp.definition.inputs.some((input) => input.name === 'source'))) {
         return undefined;
     }
 
@@ -538,24 +547,34 @@ function withCanonicalState(
             from: terminals[0],
             to: { instanceId: combine.instanceId, port: contract.sourceInput },
         },
+        // The previous state enters the first warp; each warp feeds the next; the last returns
+        // through the combine's history input. `analyzeSceneState` verifies the chain by
+        // reachability, so the canonical form is unchanged: one previous-frame read of the state,
+        // however many displacements it passes through on the way back.
         {
             from: { instanceId: combine.instanceId, port: contract.output },
-            to: { instanceId: warp.instanceId, port: sourceInput.name },
+            to: { instanceId: warps[0].instanceId, port: 'source' },
             feedback: true,
         },
+        ...warps.slice(1).map((warp, index) => ({
+            from: { instanceId: warps[index].instanceId, port: 'color' },
+            to: { instanceId: warp.instanceId, port: 'source' },
+        })),
         {
-            from: { instanceId: warp.instanceId, port: 'color' },
+            from: { instanceId: warps[warps.length - 1].instanceId, port: 'color' },
             to: { instanceId: combine.instanceId, port: contract.historyInput },
         },
     ];
 
-    const fieldInput = warpDefinition.inputs.find((input) => isMotionSource(input.type));
-    if (fieldInput) {
+    for (const warp of warps) {
+        const fieldInput = warp.definition.inputs.find((input) => isMotionSource(input.type));
+        if (!fieldInput) {
+            continue;
+        }
         // A dedicated field plugin's output over a transformer's side-motion, freshest within the
         // preferred class. The reverse-order search alone took whatever motion output happened to
         // sit last in the node order, which was regularly a post-processing stage's side-motion —
-        // weak where a procedural field is strong, and the state warp it steers is the scene's
-        // only transport of memory.
+        // weak where a procedural field is strong.
         const byInstance = new Map(material.nodes.map((node) => [node.instanceId, node]));
         const compatible = fieldOutputs.filter((output) =>
             portsCompatible(output.type, fieldInput.type));
@@ -573,7 +592,7 @@ function withCanonicalState(
 
     return {
         ...material,
-        nodes: [...material.nodes, warp, combine],
+        nodes: [...material.nodes, ...warps, combine],
         edges,
         present: { instanceId: combine.instanceId, port: contract.output },
     };

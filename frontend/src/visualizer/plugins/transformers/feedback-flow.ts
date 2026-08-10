@@ -53,7 +53,10 @@ export function feedbackModeIndex(mode: FeedbackFlowMode): number {
  */
 const WARP_BODY = `
 vec2 warp(vec2 uv, float mode, float strength) {
-    vec2 centered = uv - 0.5;
+    // Seed-drawn per instance: pivoting every radial mode on the frame centre put all of a
+    // scene's rotations and zooms on one axis, so persistent material converged on concentric
+    // orbits and two transports could never conflict.
+    vec2 centered = uv - uCentre;
     float radius = length(centered);
     float angle = atan(centered.y, centered.x);
 
@@ -80,7 +83,7 @@ vec2 warp(vec2 uv, float mode, float strength) {
         centered -= uDrift * strength * (0.5 + radius);
     }
 
-    return centered + 0.5;
+    return centered + uCentre;
 }`;
 
 const FRAGMENT = `#version 300 es
@@ -96,6 +99,7 @@ uniform float uMode;
 uniform float uStrength;
 uniform float uRotation;
 uniform vec2 uDrift;
+uniform vec2 uCentre;
 uniform float uDelta;
 
 /** Frames a second the strength constant is tuned against. */
@@ -145,6 +149,7 @@ uniform float uMode;
 uniform float uStrength;
 uniform float uRotation;
 uniform vec2 uDrift;
+uniform vec2 uCentre;
 uniform float uDelta;
 
 const float REFERENCE_RATE = 60.0;
@@ -234,6 +239,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
 
         create(context): VisualPluginInstance {
             let drift: [number, number] = [0, 0];
+            let centre: [number, number] = [0.5, 0.5];
 
             return {
                 initialize() {
@@ -248,6 +254,11 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 activate() {
                     const angle = context.seed * Math.PI * 2;
                     drift = [Math.cos(angle) * 0.01, Math.sin(angle) * 0.01];
+                    const pivot = context.seed * Math.PI * 2 * 3.7;
+                    centre = [
+                        0.5 + Math.cos(pivot) * 0.18,
+                        0.5 + Math.sin(pivot) * 0.18,
+                    ];
                 },
 
                 update() {
@@ -275,6 +286,7 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                         uStrength: 0.02,
                         uRotation: 0.15,
                         uDrift: drift,
+                        uCentre: centre,
                     };
 
                     const passes: RenderPass[] = [{
