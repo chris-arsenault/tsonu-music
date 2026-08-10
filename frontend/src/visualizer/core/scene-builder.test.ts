@@ -189,6 +189,29 @@ describe('scene building', () => {
         }
     });
 
+    test('every previous-frame image read passes through a displacing warp', () => {
+        // A feedback edge alone is memory without motion: an echo resamples fixed offsets, a
+        // fold-back blends in place. Every image loop must read its past through a warp whose
+        // per-frame step compounds — the shape the canonical state proves (ADR-0016).
+        for (const seed of ['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8']) {
+            const result = buildScene(seed, GEOMETRIC_SIGNAL_THEME, context(), FULL);
+            if (!result.ok) continue;
+
+            for (const edge of result.scene.wired.edges) {
+                if (!edge.feedback) continue;
+                const sink = result.scene.wired.nodes
+                    .find((node) => node.instanceId === edge.to.instanceId)!;
+                const port = sink.definition.inputs.find((input) => input.name === edge.to.port);
+                if (!port || port.type !== 'color-texture') continue;
+
+                expect(
+                    sink.definition.capabilities.includes('scene-history-warp'),
+                    `${seed}: ${edge.from.instanceId} -> ${edge.to.instanceId}.${edge.to.port}`,
+                ).toBe(true);
+            }
+        }
+    });
+
     test('every scene presents its graph-owned image history resource', () => {
         for (const seed of ['f1', 'f2', 'f3', 'f4', 'f5', 'f6']) {
             const result = buildScene(seed, GEOMETRIC_SIGNAL_THEME, context(), FULL);

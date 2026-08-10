@@ -7,7 +7,7 @@
  */
 
 import { distributeReactivity, type DistributedBinding } from './audio-mapping';
-import { compileSceneGraph, portsCompatible, type CompiledGraph, type GraphNode } from './graph';
+import { compileSceneGraph, portsCompatible, type CompiledGraph, type GraphNode, type RenderGraphEdge } from './graph';
 import {
     DERIVED_JOIN,
     DERIVED_STATE,
@@ -335,6 +335,11 @@ export function settleScene(
         }
     }
 
+    // Every material previous-frame read drifts (ADR-0016): spliced after the graph settles so
+    // the join and prune rounds reason about the material alone, and before the canonical state
+    // so its occurrence counting sees the trail warps.
+    wired = withTrailWarps(wired, entropy, schedulerContext.available);
+
     const stateful = withCanonicalState(wired, entropy, schedulerContext.available);
     if (!stateful) {
         return {
@@ -364,6 +369,72 @@ export function settleScene(
     }
 
     return { ok: true, plugins, wired, graph: compiled.graph };
+}
+
+/**
+ * Interposes a drift warp on every material previous-frame image read (ADR-0016).
+ *
+ * A feedback edge alone gives a plugin memory and no motion: a temporal echo resamples its past at
+ * fixed offsets, and a mixer fold-back blends its past with zero displacement — ghosts that pulse
+ * in place. The canonical state is the proof of the correct shape: it reads its past *through a
+ * warp that displaces by a per-frame step*, so the displacement compounds and the picture travels.
+ * This applies that shape to every material loop: `producer -(previous)-> warp -> port`, each
+ * splice drawing its own warp mode, so a scene's trails drift on their own courses rather than
+ * decaying where they were stamped.
+ *
+ * Warp modes are the intrinsic four; the field mode is reserved for the canonical state, whose
+ * steering already knows how to pick a live field. Cycle gains are unchanged — the warp only
+ * resamples — so the lossy port that made a loop legal still governs it.
+ */
+function withTrailWarps(
+    material: WiredScene,
+    entropy: string,
+    catalog: readonly VisualPluginDefinition[],
+): WiredScene {
+    const trailModes = ['zoom', 'rotate', 'drift', 'spiral'];
+    const candidates = catalog.filter((definition) =>
+        definition.capabilities.includes(DERIVED_STATE)
+        && definition.capabilities.includes('scene-history-warp')
+        && trailModes.includes(definition.id.split(':')[1] ?? '')
+        && definition.inputs.every((input) => !input.required || input.type === 'color-texture'));
+    if (candidates.length === 0) {
+        return material;
+    }
+
+    const occurrences = new Map<string, number>();
+    for (const node of material.nodes) {
+        occurrences.set(node.definition.id, (occurrences.get(node.definition.id) ?? 0) + 1);
+    }
+
+    const rng = createRng(`${entropy}:trail-warps`);
+    const nodes = [...material.nodes];
+    const edges: RenderGraphEdge[] = [];
+
+    for (const edge of material.edges) {
+        const sink = material.nodes.find((node) => node.instanceId === edge.to.instanceId);
+        const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+        const carriesImage = port !== undefined && isImagePortType(port.type);
+        if (!edge.feedback || !carriesImage) {
+            edges.push(edge);
+            continue;
+        }
+
+        const definition = rng.pick(candidates) ?? candidates[0];
+        const occurrence = occurrences.get(definition.id) ?? 0;
+        occurrences.set(definition.id, occurrence + 1);
+        const warp: GraphNode = {
+            instanceId: instanceIdFor(definition, occurrence),
+            definition,
+        };
+
+        nodes.push(warp);
+        edges.push(
+            { from: edge.from, to: { instanceId: warp.instanceId, port: 'source' }, feedback: true },
+            { from: { instanceId: warp.instanceId, port: 'color' }, to: edge.to },
+        );
+    }
+
+    return { ...material, nodes, edges };
 }
 
 /**
@@ -404,9 +475,16 @@ function withCanonicalState(
     const rng = createRng(`${entropy}:scene-state`);
     const warpDefinition = rng.pick(warpCandidates) ?? warpCandidates[0];
     const combineDefinition = rng.pick(combineCandidates) ?? combineCandidates[0];
-    const warp: GraphNode = { instanceId: instanceIdFor(warpDefinition, 0), definition: warpDefinition };
+    // Occurrence counted against the material, not assumed zero: trail warps interposed by
+    // `withTrailWarps` may already hold instances of the same warp definition.
+    const occurrenceOf = (definition: VisualPluginDefinition) =>
+        material.nodes.filter((node) => node.definition.id === definition.id).length;
+    const warp: GraphNode = {
+        instanceId: instanceIdFor(warpDefinition, occurrenceOf(warpDefinition)),
+        definition: warpDefinition,
+    };
     const combine: GraphNode = {
-        instanceId: instanceIdFor(combineDefinition, 0),
+        instanceId: instanceIdFor(combineDefinition, occurrenceOf(combineDefinition)),
         definition: combineDefinition,
     };
     const contract = combineDefinition.temporalCombine!;
