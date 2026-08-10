@@ -652,6 +652,12 @@ export function createMaskRouter(
         }],
         character: character({ visualDensity: 0.4, geometricOrder: 0.7, dominance: 'supporting' }),
         activationWeight: 1,
+        // The set operations are self-annihilating beside a stencil: wiring gives a scene one
+        // mask, so subtracting or intersecting against the shape the stencil already clipped to
+        // leaves a feather-width ring of the entire upstream chain — measured on a captured scene
+        // whose wave field, temporal trails, and advect all survived only as an outline. The pair
+        // is degenerate by construction under the one-mask policy, not by bad luck.
+        ...(combines ? { incompatibleWith: ['MaskEffectStencil'] } : {}),
     });
 }
 

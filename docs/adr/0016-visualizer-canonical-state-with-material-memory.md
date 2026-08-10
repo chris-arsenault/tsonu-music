@@ -41,8 +41,13 @@ Three exclusivity clauses are relaxed, each with its own bound:
 3. **The combine's history input declares its survival as the port gain**, so the loop-gain model
    sees the decay that governs the canonical cycle instead of reporting unity.
 
-The combine arithmetic remains `max` only. An operator family was tried and read as washout and
-passthrough in viewing; diversifying the combine is a separate decision if wanted later.
+The combine arithmetic is an open question, not a settled one. `max` is what ships today; it is a
+winner-take-all recurrence in which fresh brightness erases warped history wherever both are lit,
+so motion is only visible where the fresh frame is dark — static bright regions are its signature.
+One alternative family (stamp/screen) was implemented hastily and read as washout in viewing;
+that discredits those two implementations, not the direction, which stands as reported: the
+composition operator needs to be debugged and alternatives designed rather than treated as an
+invariant.
 
 ## Alternatives
 
