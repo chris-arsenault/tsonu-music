@@ -1,6 +1,6 @@
 # 0016 — The canonical state anchors a scene; bounded material memory composes beneath it
 
-- Status: Accepted
+- Status: Amended by [0017](./0017-visualizer-combine-operator-family.md)
 - Date: 2026-08-10
 - Amends: [0015](./0015-visualizer-single-graph-owned-scene-state.md)
 

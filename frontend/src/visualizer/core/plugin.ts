@@ -135,8 +135,15 @@ export interface SelectionCharacter {
     dominance: 'supporting' | 'primary' | 'either';
 }
 
-/** Arithmetic used by the graph-owned scene-state transition. */
-export type TemporalCombineOperator = 'max';
+/**
+ * Arithmetic used by the graph-owned scene-state transition (ADR-0017).
+ *
+ * `max` keeps the brighter of history and fresh — a flash afterimage whose failure signature is
+ * static bright regions. `flow` closes the gap to that envelope at an audio-driven rate, so fresh
+ * takes over lit regions gradually while dark regions decay on survival alone. `deposit`
+ * accumulates a bounded number of copies with a hue-preserving knee and a fresh-visibility floor.
+ */
+export type TemporalCombineOperator = 'max' | 'flow' | 'deposit';
 
 /**
  * Identifies the one node that combines warped history with fresh scene material.

@@ -67,6 +67,13 @@ const width = argument('width', '320');
 const height = argument('height', '180');
 /** Repeat the audio exactly on this period. Zero leaves it free-running. */
 const period = argument('period', '0');
+/**
+ * `--fixtures` runs the combine-operator verification matrix instead of generated scenes: one
+ * browser invocation per frame rate (`--fps 60,30`), each producing a FixtureReport, printed
+ * together as one JSON array.
+ */
+const fixtures = process.argv.includes('--fixtures');
+const fpsList = argument('fps', '60,30').split(',').map((entry) => entry.trim()).filter(Boolean);
 
 const server = spawn(
     'npx',
@@ -78,12 +85,8 @@ let serverLog = '';
 server.stdout.on('data', (chunk) => { serverLog += chunk; });
 server.stderr.on('data', (chunk) => { serverLog += chunk; });
 
-try {
-    await waitForServer(`http://127.0.0.1:${HARNESS_PORT}/`);
-
-    const url = `http://127.0.0.1:${HARNESS_PORT}/?scenes=${scenes}&seconds=${seconds}`
-        + `&prefix=${prefix}&width=${width}&height=${height}&period=${period}`;
-
+/** Loads one harness page in headless Chromium and returns the JSON the page wrote into #results. */
+function dumpPage(url) {
     const result = spawnSync(findChromium(), [
         '--headless=new',
         '--disable-gpu-sandbox',
@@ -123,7 +126,25 @@ try {
         process.exit(1);
     }
 
-    console.log(text);
+    return text;
+}
+
+try {
+    await waitForServer(`http://127.0.0.1:${HARNESS_PORT}/`);
+
+    if (fixtures) {
+        const reports = [];
+        for (const fps of fpsList) {
+            const url = `http://127.0.0.1:${HARNESS_PORT}/?mode=fixtures&fps=${fps}`
+                + `&width=${width}&height=${height}`;
+            reports.push(JSON.parse(dumpPage(url)));
+        }
+        console.log(JSON.stringify(reports));
+    } else {
+        const url = `http://127.0.0.1:${HARNESS_PORT}/?scenes=${scenes}&seconds=${seconds}`
+            + `&prefix=${prefix}&width=${width}&height=${height}&period=${period}`;
+        console.log(dumpPage(url));
+    }
 } finally {
     server.kill('SIGTERM');
 }

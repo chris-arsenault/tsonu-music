@@ -182,6 +182,12 @@ void main() {
 
     colour = mix(colour, ramp, clamp(pull, 0.0, 1.0) * uChromatic);
 
+    // The composite is the operand of screen blends during crossfades, and screen on values
+    // above one inverts: two HDR states at 2.0 give 1-(1-2)(1-2) = 0, so overlapping bright
+    // areas of two crossfading scenes flash dark. The state may legitimately exceed one (the
+    // deposit combine accumulates to its knee); presentation is where it stops being HDR.
+    colour = min(colour, vec3(1.0));
+
     // Alpha is only meaningful for colour material. A field or buffer inspected on its own carries
     // data in every channel — a particle buffer's alpha is a velocity component, frequently zero or
     // negative — so taking alpha from the source made the diagnostics view of every non-colour

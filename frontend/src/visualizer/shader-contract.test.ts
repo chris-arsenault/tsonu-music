@@ -455,6 +455,20 @@ describe('every declared loop gain is a per-second survival', () => {
             }
         }
     });
+
+    test('the deposit combine accumulates strictly more than one copy', () => {
+        // The positive companion to the complement rule above. That rule exists because a convex
+        // blend's fixed point holds exactly one copy of the source — a motion blur, never a
+        // tunnel. The deposit combine normalizes its injection by (1 - keep) deliberately, and
+        // what licenses that is this: its inject binding's floor stays above one copy, so the
+        // fixed point holds MORE than the source — the accumulation the rule protects, not the
+        // blur it forbids (ADR-0017).
+        const deposit = CATALOG.find((definition) => definition.id === 'SceneStateCombine:deposit')!;
+        const inject = (deposit.defaultBindings ?? []).find((binding) => binding.parameter === 'inject')!;
+
+        expect(inject).toBeDefined();
+        expect(Math.min(...inject.outputRange)).toBeGreaterThan(1);
+    });
 });
 
 /**

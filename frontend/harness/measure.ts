@@ -30,9 +30,10 @@ import { allDefinitions } from '../src/visualizer/plugins/registry';
 import { THEMES } from '../src/visualizer/plugins/themes';
 import type { AudioFeatureBus } from '../src/visualizer/core/features';
 import type { PlaybackClock } from '../src/visualizer/core/clock';
+import type { AuthoredScene } from '../src/visualizer/core/authored-scene';
 
 /** Frames are compared at this resolution, not the render resolution. */
-const GRID = 48;
+export const GRID = 48;
 
 /** Half-width of the shift search, in grid cells. */
 const SEARCH = 10;
@@ -62,6 +63,29 @@ export interface MeasureOptions {
      * contributed, and the null model's own divergence is what the clocks contributed.
      */
     withoutHistory?: boolean;
+    /**
+     * Measure this document instead of building one from the entropy.
+     *
+     * The fixture path: a scene is built once, captured, rewritten (a different combine operator
+     * swapped in), and every variant is measured from the same document — so the only difference
+     * between two runs is the thing under test.
+     */
+    scene?: AuthoredScene;
+    /** Blank the history slots on exactly one frame: the first at or after this many seconds. */
+    clearAtSeconds?: number;
+    /**
+     * Replace the musical bus with a two-level probe: a loud burst while inside any window, steady
+     * moderate levels outside. What a fixture needs to ask "what does one loud frame do" — the
+     * musical bus never holds still long enough for the answer to be attributable.
+     */
+    impulseWindows?: [number, number][];
+    /** Keep every sampled luminance and RGB grid on the result, for callers computing their own metrics. */
+    keepGrids?: boolean;
+    /**
+     * Skip the translation/similarity alignment search. It dominates runtime once a caller samples
+     * every frame, and the fixture metrics never read it.
+     */
+    skipAlignment?: boolean;
 }
 
 export interface SceneMeasurement {
@@ -120,6 +144,10 @@ export interface SceneMeasurement {
         rotation: number;
     }[];
     problems: string[];
+    /** Every sampled luminance grid, GRID by GRID row-major. Present only under `keepGrids`. */
+    grids?: Float32Array[];
+    /** Per-sample RGB grids at the same resolution, for saturation. Present only under `keepGrids`. */
+    rgbGrids?: { r: Float32Array; g: Float32Array; b: Float32Array }[];
 }
 
 /**
@@ -177,8 +205,8 @@ function featuresAt(rawTime: number, periodSeconds = 0): AudioFeatureBus {
 
     // Events fire on the beat, so anything reading the impulse path sees the same rhythm.
     if (beatPhase < 0.05) {
-        bus.events.beat.push({ playbackTime: time, strength: 1 });
-        bus.events.onset.push({ playbackTime: time, strength: 0.8 });
+        bus.events.beat.push({ feature: 'beat', playbackTime: time, audioTime: time, strength: 1 });
+        bus.events.onset.push({ feature: 'onset', playbackTime: time, audioTime: time, strength: 0.8 });
     }
 
     // A spectrum that moves, for the geometry sources that read it directly.
@@ -195,35 +223,130 @@ function featuresAt(rawTime: number, periodSeconds = 0): AudioFeatureBus {
     return { ...bus, spectrum, waveform };
 }
 
+/**
+ * The impulse probe: the wrapped bus flattened to two levels.
+ *
+ * Wraps the musical bus rather than replacing it — spectrum, waveform and the fields the probe does
+ * not speak for keep their shapes — but the levels a combine operator answers to become a square
+ * wave: loud inside a window (with a beat and an onset event, so the impulse paths fire too), steady
+ * moderate outside, with the excites and transients silenced so nothing pulses on its own.
+ */
+function withImpulseProfile(
+    base: AudioFeatureBus,
+    time: number,
+    windows: [number, number][],
+): AudioFeatureBus {
+    const burst = windows.some(([start, end]) => time >= start && time < end);
+
+    if (burst) {
+        return {
+            ...base,
+            continuous: {
+                ...base.continuous,
+                rms: 0.95,
+                peak: 1,
+                subBass: 0.95,
+                bass: 0.95,
+                lowMid: 0.9,
+                mid: 0.9,
+                highMid: 0.85,
+                treble: 0.8,
+                rmsExcite: 1,
+                subBassExcite: 1,
+                bassExcite: 1,
+                lowMidExcite: 0.9,
+                midExcite: 0.8,
+                highMidExcite: 0.7,
+                trebleExcite: 0.6,
+                spectralFlux: 0.95,
+                transient: 1,
+            },
+            events: {
+                ...base.events,
+                beat: [{ feature: 'beat', playbackTime: time, audioTime: time, strength: 1 }],
+                onset: [{ feature: 'onset', playbackTime: time, audioTime: time, strength: 1 }],
+            },
+        };
+    }
+
+    return {
+        ...base,
+        continuous: {
+            ...base.continuous,
+            rms: 0.35,
+            peak: 0.4,
+            subBass: 0.3,
+            bass: 0.3,
+            lowMid: 0.3,
+            mid: 0.3,
+            highMid: 0.25,
+            treble: 0.2,
+            rmsExcite: 0,
+            subBassExcite: 0,
+            bassExcite: 0,
+            lowMidExcite: 0,
+            midExcite: 0,
+            highMidExcite: 0,
+            trebleExcite: 0,
+            spectralFlux: 0.05,
+            transient: 0,
+        },
+        events: { ...base.events, beat: [], onset: [] },
+    };
+}
+
 function clockAt(time: number): PlaybackClock {
     return { trackId: 'harness', playbackTime: time, duration: 600, state: 'playing', generation: 1 };
 }
 
-/** Downsamples the canvas to a GRID by GRID luminance grid. */
-function sampleGrid(gl: WebGL2RenderingContext, width: number, height: number): Float32Array {
+/** Downsamples the canvas to GRID by GRID: luminance always, the RGB planes when asked for. */
+function sampleGrid(
+    gl: WebGL2RenderingContext,
+    width: number,
+    height: number,
+    withRgb = false,
+): { lum: Float32Array; rgb?: { r: Float32Array; g: Float32Array; b: Float32Array } } {
     const pixels = new Uint8Array(width * height * 4);
     gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
 
     const grid = new Float32Array(GRID * GRID);
     const counts = new Float32Array(GRID * GRID);
+    const red = withRgb ? new Float32Array(GRID * GRID) : undefined;
+    const green = withRgb ? new Float32Array(GRID * GRID) : undefined;
+    const blue = withRgb ? new Float32Array(GRID * GRID) : undefined;
 
     for (let y = 0; y < height; y += 1) {
         const gy = Math.min(GRID - 1, Math.floor((y / height) * GRID));
         for (let x = 0; x < width; x += 1) {
             const gx = Math.min(GRID - 1, Math.floor((x / width) * GRID));
             const offset = (y * width + x) * 4;
+            const cell = gy * GRID + gx;
             const luminance =
                 (0.2126 * pixels[offset] + 0.7152 * pixels[offset + 1] + 0.0722 * pixels[offset + 2]) / 255;
-            grid[gy * GRID + gx] += luminance;
-            counts[gy * GRID + gx] += 1;
+            grid[cell] += luminance;
+            counts[cell] += 1;
+            if (red && green && blue) {
+                red[cell] += pixels[offset] / 255;
+                green[cell] += pixels[offset + 1] / 255;
+                blue[cell] += pixels[offset + 2] / 255;
+            }
         }
     }
 
     for (let index = 0; index < grid.length; index += 1) {
-        grid[index] /= Math.max(1, counts[index]);
+        const count = Math.max(1, counts[index]);
+        grid[index] /= count;
+        if (red && green && blue) {
+            red[index] /= count;
+            green[index] /= count;
+            blue[index] /= count;
+        }
     }
 
-    return grid;
+    return {
+        lum: grid,
+        ...(red && green && blue ? { rgb: { r: red, g: green, b: blue } } : {}),
+    };
 }
 
 function mean(values: ArrayLike<number>): number {
@@ -446,33 +569,41 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
 
     const renderer: Renderer = created.renderer;
 
-    // Built from the entropy rather than captured from the renderer.
-    //
-    // This took whatever scene the renderer drew on creation and overwrote its `entropy` field, which
-    // renames a scene without choosing one: the renderer seeds itself from a fresh browser UUID, so
-    // the same harness entropy produced a different theme on every run and two runs could not be
-    // compared. Measured that way, `harness-0` was collision-energy in one run and organic-flow in
-    // the next.
-    const built = buildFirstViableScene(
-        options.entropy,
-        variedThemeOrder(options.entropy, THEMES),
-        {
-            available: allDefinitions(),
-            assets: [],
-            capabilities: ['float-textures', 'webgl2'],
-            history: {},
-            playbackTime: 0,
-        },
-        profile,
-    );
-
-    if (!built.ok) {
-        throw new Error(`scene did not build: ${built.failure.reason} ${built.failure.detail}`);
-    }
-
     // Not named `document`: that shadows the DOM global this function uses to make its canvas, and
     // the shadow reaches back over the whole body.
-    const sceneDocument = captureScene(built.scene);
+    let sceneDocument: AuthoredScene;
+
+    if (options.scene) {
+        // A caller-authored document, measured as-is. The build path below is what makes generated
+        // scenes comparable across runs; a fixture makes its variants comparable by construction.
+        sceneDocument = options.scene;
+    } else {
+        // Built from the entropy rather than captured from the renderer.
+        //
+        // This took whatever scene the renderer drew on creation and overwrote its `entropy` field,
+        // which renames a scene without choosing one: the renderer seeds itself from a fresh browser
+        // UUID, so the same harness entropy produced a different theme on every run and two runs
+        // could not be compared. Measured that way, `harness-0` was collision-energy in one run and
+        // organic-flow in the next.
+        const built = buildFirstViableScene(
+            options.entropy,
+            variedThemeOrder(options.entropy, THEMES),
+            {
+                available: allDefinitions(),
+                assets: [],
+                capabilities: ['float-textures', 'webgl2'],
+                history: {},
+                playbackTime: 0,
+            },
+            profile,
+        );
+
+        if (!built.ok) {
+            throw new Error(`scene did not build: ${built.failure.reason} ${built.failure.detail}`);
+        }
+
+        sceneDocument = captureScene(built.scene);
+    }
     const problems = renderer.setAuthoredScene(sceneDocument);
     if (problems.length > 0) {
         throw new Error(`scene did not resolve: ${problems.map((entry) => entry.detail).join('; ')}`);
@@ -484,26 +615,38 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
     const everyFrames = Math.max(1, Math.round(options.sampleInterval * options.fps));
 
     const grids: Float32Array[] = [];
+    const rgbGrids: { r: Float32Array; g: Float32Array; b: Float32Array }[] = [];
     const luminance: number[] = [];
     const coverage: number[] = [];
     const peak: number[] = [];
     let lastFrame: string | undefined;
 
+    // The first frame at or after the requested clear time, so the blank lands exactly once and on
+    // the same simulated instant at every frame rate.
+    const clearFrame = options.clearAtSeconds === undefined
+        ? -1
+        : Math.ceil(options.clearAtSeconds * options.fps - 1e-6);
+
     for (let frame = 0; frame <= totalFrames; frame += 1) {
         const time = frame * dt;
+        const musical = featuresAt(time, options.periodSeconds ?? 0);
         renderer.renderFrame({
             clock: clockAt(time),
-            features: featuresAt(time, options.periodSeconds ?? 0),
+            features: options.impulseWindows
+                ? withImpulseProfile(musical, time, options.impulseWindows)
+                : musical,
             deltaSeconds: dt,
             profile,
             // Reaches `clearHistory` in the runtime, which blanks every ping-ponged slot before
             // anything reads one. The graph is unchanged; only its memory is gone.
-            clearTransients: options.withoutHistory === true,
+            clearTransients: options.withoutHistory === true || frame === clearFrame,
         });
 
         if (frame % everyFrames === 0) {
-            const grid = sampleGrid(gl, canvas.width, canvas.height);
+            const sampled = sampleGrid(gl, canvas.width, canvas.height, options.keepGrids === true);
+            const grid = sampled.lum;
             grids.push(grid);
+            if (sampled.rgb) rgbGrids.push(sampled.rgb);
             luminance.push(mean(grid));
             peak.push(Math.max(...grid));
             let lit = 0;
@@ -561,8 +704,9 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
 
     // The alignment search costs a few thousand resampled correlations per pair, which is most of a
     // run. A path-dependence run does not need it and pays for the scene twice over already, so it is
-    // skipped there rather than making every measurement wait for a statistic it is not using.
-    const lags = (options.periodSeconds ?? 0) > 0 ? [] : [0.25, 0.5, 1, 2, 4]
+    // skipped there rather than making every measurement wait for a statistic it is not using. The
+    // fixture runs sample every frame and compute their own metrics, so they skip it explicitly.
+    const lags = options.skipAlignment === true || (options.periodSeconds ?? 0) > 0 ? [] : [0.25, 0.5, 1, 2, 4]
         .filter((seconds) => seconds / options.sampleInterval < grids.length - 1)
         .map((seconds) => {
             const step = Math.round(seconds / options.sampleInterval);
@@ -621,5 +765,6 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         periodDivergence,
         lags,
         problems: renderer.problems(),
+        ...(options.keepGrids === true ? { grids, rgbGrids } : {}),
     };
 }

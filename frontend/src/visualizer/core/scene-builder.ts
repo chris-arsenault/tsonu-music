@@ -521,7 +521,40 @@ function withCanonicalState(
     const secondCandidates = warpCandidates.filter((candidate) => candidate.id !== firstWarp.id);
     const secondWarp = secondCandidates.length > 0 ? rng.pick(secondCandidates) : undefined;
     const warpDefinitions = secondWarp ? [firstWarp, secondWarp] : [firstWarp];
-    const combineDefinition = rng.pick(combineCandidates) ?? combineCandidates[0];
+
+    // The combine operator is drawn weighted by how much of the frame the material actually
+    // covers (ADR-0017): dense scenes lean toward `flow`, whose softened takeover is what keeps
+    // motion visible inside bright figures; sparse scenes lean toward `deposit`, whose sub-unity
+    // accumulation is invisible on dense >=1 material anyway. Authored density is a poor proxy
+    // for coverage in two known shapes — a stencil gates a dense chain down to its mask interior,
+    // and glyph/trace scenes author bright but cover little — so those force the sparse reading.
+    // No weight reaches zero and flow's is capped, so no scene class is deterministically one
+    // operator.
+    const materialNodes = material.nodes.filter((node) =>
+        !node.definition.capabilities.includes(DERIVED_STATE)
+        && node.definition.outputs.some((output) => output.type === 'color-texture'));
+    const sparseShape = material.nodes.some((node) =>
+        node.definition.id.startsWith('MaskEffectStencil')
+        || node.definition.id.startsWith('TransientGlyphSource'))
+        || materialNodes
+            .filter((node) => node.definition.category === 'source')
+            .every((node) =>
+                node.definition.id.startsWith('SignalTraceSource')
+                || node.definition.id.startsWith('ParametricCurveSource'));
+    const density = sparseShape || materialNodes.length === 0
+        ? 0.15
+        : materialNodes.reduce((sum, node) => sum + node.definition.character.visualDensity, 0)
+            / materialNodes.length;
+    const combineDefinition = rng.weighted(combineCandidates, (candidate) => {
+        switch (candidate.temporalCombine!.operator) {
+            case 'flow':
+                return Math.min(0.6, 0.15 + density);
+            case 'deposit':
+                return 0.15 + (1 - density);
+            default:
+                return 0.4;
+        }
+    }) ?? combineCandidates[0];
     // Occurrence counted against the material, not assumed zero: trail transports interposed by
     // `withTrailWarps` may already hold instances of the same warp definition.
     const occurrences = new Map<string, number>();
@@ -633,6 +666,42 @@ function buildSceneAttempt(
 
     const { plugins, wired, graph } = settled;
 
+    let bindings = applyColourPolicy(
+        distributeReactivity(wired.nodes, createRng(`${entropy}:bindings`)),
+        effectiveTheme.colorPolicy,
+    );
+
+    // A flow scene's state travel must outrun its own memory constant or a one-copy takeover
+    // reads as blur rather than motion (ADR-0017). The warp strength floor rises for the
+    // scene-history warps only — FeedbackFlow strengths are per-frame quantities on another
+    // scale — following the applyColourPolicy precedent of durably reshaping a binding's range
+    // rather than its smoothed-away starting value.
+    const combineNode = wired.nodes.find((node) => node.definition.temporalCombine !== undefined);
+    if (combineNode?.definition.temporalCombine?.operator === 'flow') {
+        const FLOW_STRENGTH_FLOOR = 0.3;
+        bindings = bindings.map((entry) => {
+            const node = wired.nodes.find((candidate) => candidate.instanceId === entry.instanceId);
+            if (!node?.definition.capabilities.includes('scene-history-warp')) {
+                return entry;
+            }
+
+            return {
+                ...entry,
+                bindings: entry.bindings.map((binding) => (
+                    binding.parameter === 'strength' && binding.outputRange[0] >= 0
+                        ? {
+                            ...binding,
+                            outputRange: [
+                                Math.max(binding.outputRange[0], FLOW_STRENGTH_FLOOR),
+                                Math.max(binding.outputRange[1], FLOW_STRENGTH_FLOOR),
+                            ] as [number, number],
+                        }
+                        : binding
+                )),
+            };
+        });
+    }
+
     return {
         ok: true,
         scene: {
@@ -641,10 +710,7 @@ function buildSceneAttempt(
             plugins,
             wired,
             graph,
-            bindings: applyColourPolicy(
-                distributeReactivity(wired.nodes, createRng(`${entropy}:bindings`)),
-                effectiveTheme.colorPolicy,
-            ),
+            bindings,
             // The theme's colour policy reaches the plugins that map colour, so a theme asking for the
             // album palette at full strength actually gets it.
             parameterOverrides: instanceOverrides(wired, effectiveTheme.colorPolicy),

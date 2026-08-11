@@ -7,8 +7,11 @@
  */
 
 import { measureScene, type SceneMeasurement } from './measure';
+import { runFixtureMatrix } from './fixtures';
 
 const parameters = new URLSearchParams(location.search);
+/** `scenes` measures generated scenes as before; `fixtures` runs the combine-operator matrix. */
+const mode = parameters.get('mode') ?? 'scenes';
 const count = Number(parameters.get('scenes') ?? 8);
 const seconds = Number(parameters.get('seconds') ?? 12);
 const fps = Number(parameters.get('fps') ?? 60);
@@ -51,7 +54,13 @@ async function run(): Promise<void> {
     output.dataset.state = 'done';
 }
 
-run().catch((error) => {
+async function runFixtures(): Promise<void> {
+    const report = await runFixtureMatrix({ fps, width, height });
+    output.textContent = JSON.stringify(report);
+    output.dataset.state = 'done';
+}
+
+(mode === 'fixtures' ? runFixtures() : run()).catch((error) => {
     output.textContent = JSON.stringify({ error: String(error) });
     output.dataset.state = 'failed';
 });

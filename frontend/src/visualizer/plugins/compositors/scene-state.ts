@@ -5,9 +5,27 @@ import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/pl
 import type { RenderPass } from '../../core/passes';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
 
-const SHADER_ID = 'SceneStateCombine';
+/**
+ * How warped history and fresh material become the next state. One scene holds one of these,
+ * drawn by the builder weighted by the material's density (ADR-0017).
+ *
+ * `max` is winner-take-all per pixel: fresh brightness erases warped history wherever both are
+ * lit, so static bright figures never move and motion survives only in dark regions — measured
+ * on three captured scenes. It survives as one character among three, not the definition of
+ * memory. `flow` softens the same envelope: fresh takes over at an audio-driven rate instead of
+ * in one frame, so history visibly fades inside lit figures while dark regions decay on survival
+ * alone. `deposit` accumulates: a normalized additive recurrence whose steady state is a bounded
+ * number of copies, with a hue-preserving knee and a fresh-visibility floor.
+ */
+export const SCENE_STATE_COMBINE_MODES = ['max', 'flow', 'deposit'] as const;
+export type SceneStateCombineMode = typeof SCENE_STATE_COMBINE_MODES[number];
 
-const FRAGMENT = `#version 300 es
+const LUMINANCE = `
+float luminance(vec3 c) {
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}`;
+
+const MAX_FRAGMENT = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 fragColor;
@@ -32,15 +50,126 @@ void main() {
     fragColor = vec4(clamp(result, vec3(0.0), vec3(256.0)), max(historySample.a, sourceSample.a));
 }`;
 
-export function createSceneStateCombine(): VisualPluginDefinition {
+const FLOW_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uHistory;
+uniform sampler2D uSource;
+uniform float uHistoryWeight;
+uniform float uSourceWeight;
+uniform float uInject;
+uniform float uDelta;
+${LUMINANCE}
+
+void main() {
+    vec4 historySample = texture(uHistory, vUv);
+    vec4 sourceSample = texture(uSource, vUv);
+
+    float keep = uDelta > 0.0
+        ? pow(clamp(uHistoryWeight, 0.0, 0.999), uDelta)
+        : 1.0;
+    // Fraction of the gap to the envelope closed this frame, from a per-second fraction. Not the
+    // survival's complement: an independent audio-driven rate.
+    float injectFrame = uDelta > 0.0
+        ? 1.0 - pow(clamp(1.0 - uInject, 0.001, 1.0), uDelta)
+        : 0.0;
+
+    vec3 history = historySample.rgb * keep;
+    vec3 source = sourceSample.rgb * max(uSourceWeight, 0.0);
+
+    // Where the state is empty, fresh material lands immediately. Keyed on history, not source:
+    // a dense state disables the fill, so this cannot degenerate to passthrough on dense
+    // material the way a source-coverage key did.
+    float fill = 1.0 - smoothstep(0.0, 0.08, luminance(history));
+    float share = max(injectFrame, fill);
+
+    // Softened max. Where fresh outshines history it takes over at the inject rate rather than
+    // in one frame — warped history visibly fades inside bright figures. Where history outshines
+    // fresh it survives on the declared port gain alone, so dark-region trails do not die when
+    // the music gets loud. share -> 1 recovers bare max continuously.
+    vec3 target = max(history, source);
+    vec3 result = mix(history, target, share);
+
+    fragColor = vec4(clamp(result, vec3(0.0), vec3(256.0)), max(historySample.a, sourceSample.a));
+}`;
+
+const DEPOSIT_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uHistory;
+uniform sampler2D uSource;
+uniform float uHistoryWeight;
+uniform float uSourceWeight;
+uniform float uInject;
+uniform float uDelta;
+${LUMINANCE}
+
+/**
+ * Luminance asymptote of the recurrence. Kept tight: the present palette clamps luminance at
+ * one, so state range far above it is structure the viewer cannot see.
+ */
+const float KNEE = 1.6;
+
+void main() {
+    vec4 historySample = texture(uHistory, vUv);
+    vec4 sourceSample = texture(uSource, vUv);
+
+    float keep = uDelta > 0.0
+        ? pow(clamp(uHistoryWeight, 0.0, 0.999), uDelta)
+        : 1.0;
+    // Normalized so a static pixel's steady state is exactly uInject copies of the source,
+    // independent of frame rate and of where the survival binding sits. This is deliberately not
+    // the convex complement the shader contract forbids: uInject's binding floor exceeds one
+    // copy — the fixed point holds MORE than one copy of the source, which is the accumulation
+    // that rule exists to protect — and the max() floor below keeps fresh material visible from
+    // its first frame. See the deposit-mass contract test.
+    float depositShare = uInject * (1.0 - keep);
+
+    vec3 sum = historySample.rgb * keep + sourceSample.rgb * depositShare;
+
+    // Hue-preserving scalar knee bounding the recurrence well below the policy clamp.
+    float l = luminance(sum);
+    float rolled = l <= 1.0
+        ? l
+        : 1.0 + (l - 1.0) / (1.0 + (l - 1.0) / (KNEE - 1.0));
+    sum *= rolled / max(l, 1e-5);
+
+    // Fresh material is never invisible: it enters at full source weight and the accumulation
+    // overtakes it wherever the deposit has built past it. Without this floor, a cleared state
+    // rebuilds at the deposit share per frame and the scene is black-plus-trails for seconds.
+    vec3 source = sourceSample.rgb * max(uSourceWeight, 0.0);
+    vec3 result = max(sum, source);
+
+    fragColor = vec4(clamp(result, vec3(0.0), vec3(256.0)), max(historySample.a, sourceSample.a));
+}`;
+
+const FRAGMENTS: Record<SceneStateCombineMode, string> = {
+    max: MAX_FRAGMENT,
+    flow: FLOW_FRAGMENT,
+    deposit: DEPOSIT_FRAGMENT,
+};
+
+export function createSceneStateCombine(
+    mode: SceneStateCombineMode = 'max',
+): VisualPluginDefinition {
+    // The bare id stays with `max` so every capture and authored document written before the
+    // family existed still resolves to the operator it was written against.
+    const id = mode === 'max' ? 'SceneStateCombine' : `SceneStateCombine:${mode}`;
+    const withInject = mode !== 'max';
+
     return {
-        id: 'SceneStateCombine',
+        id,
         version: 1,
         category: 'compositor',
         inputs: [
             // `historyWeight` is the fraction of the state surviving one second, which is the gain
-            // of the canonical cycle closing through this port. Declaring it lets `core/loop-gain.ts`
-            // see the decay that actually governs the loop instead of reporting unity.
+            // of the canonical cycle closing through this port. For `flow` it is exactly the
+            // dark-region decay; for `deposit` the series ratio. Declaring it lets
+            // `core/loop-gain.ts` see the decay that governs the loop instead of reporting unity.
             {
                 name: 'history',
                 type: 'color-texture',
@@ -52,7 +181,7 @@ export function createSceneStateCombine(): VisualPluginDefinition {
         outputs: [{ name: 'color', type: 'color-texture', required: false }],
         capabilities: [DERIVED_STATE, 'scene-state-combine'],
         temporalCombine: {
-            operator: 'max',
+            operator: mode,
             historyInput: 'history',
             sourceInput: 'source',
             output: 'color',
@@ -66,37 +195,67 @@ export function createSceneStateCombine(): VisualPluginDefinition {
             geometricOrder: 0.5,
             recognizability: 0.5,
             persistence: 1,
-            brightness: 0.5,
+            brightness: mode === 'deposit' ? 0.7 : 0.5,
             dominance: 'supporting',
         },
         activationRules: { activationWeight: 0 },
-        parameters: { historyWeight: 0.9, sourceWeight: 0.9 },
+        parameters: {
+            historyWeight: mode === 'deposit' ? 0.93 : 0.9,
+            sourceWeight: 0.9,
+            ...(withInject ? { inject: mode === 'flow' ? 0.8 : 1.2 } : {}),
+        },
         defaultBindings: [
             {
                 feature: 'spectralFlux',
-                role: 'intensity',
                 parameter: 'historyWeight',
-                outputRange: [0.96, 0.78],
+                outputRange: mode === 'deposit' ? [0.97, 0.85] : [0.96, 0.78],
                 attack: 0.6,
                 release: 2,
                 curve: 'smooth',
             },
             {
                 feature: 'rms',
-                role: 'intensity',
                 parameter: 'sourceWeight',
-                outputRange: [0.65, 1.05],
+                // Deposit's source weight multiplies into the accumulated mass, so its range is
+                // narrow — a wide range would double-modulate the mass by two level features.
+                outputRange: mode === 'deposit' ? [0.9, 1] : [0.65, 1.05],
                 attack: 0.1,
                 release: 0.55,
                 curve: 'smooth',
             },
+            ...(mode === 'flow'
+                ? [{
+                    // How fast fresh material takes over lit regions, as a fraction per second.
+                    // Punch lets a hit slam the takeover — the state flashes to the fresh frame
+                    // on onsets and relaxes into trails between them.
+                    feature: 'mid',
+                    parameter: 'inject',
+                    outputRange: [0.6, 0.98] as [number, number],
+                    attack: 0.15,
+                    release: 0.7,
+                    curve: 'smooth' as const,
+                    expressions: ['follow', 'punch'] as const,
+                }]
+                : []),
+            ...(mode === 'deposit'
+                ? [{
+                    // Steady-state mass in copies of the source. The floor stays above one copy —
+                    // that is the operator's contract with the anti-complement rule.
+                    feature: 'lowMid',
+                    parameter: 'inject',
+                    outputRange: [1.05, 1.6] as [number, number],
+                    attack: 0.3,
+                    release: 1.2,
+                    curve: 'smooth' as const,
+                }]
+                : []),
         ],
         deactivationPolicy: 'fade',
 
         create(context): VisualPluginInstance {
             return {
                 initialize() {
-                    context.registerShader({ id: SHADER_ID, vertex: QUAD_VERTEX_SHADER, fragment: FRAGMENT });
+                    context.registerShader({ id, vertex: QUAD_VERTEX_SHADER, fragment: FRAGMENTS[mode] });
                 },
                 activate() {
                     // State lives in the output resource, not in this instance.
@@ -113,14 +272,15 @@ export function createSceneStateCombine(): VisualPluginDefinition {
 
                     return [{
                         kind: 'fullscreen',
-                        shader: SHADER_ID,
+                        shader: id,
                         inputs: { uHistory: history, uSource: source },
                         output: render.outputs.color,
                         blend: 'none',
                         clear: true,
                         uniforms: {
-                            uHistoryWeight: 0.9,
+                            uHistoryWeight: mode === 'deposit' ? 0.93 : 0.9,
                             uSourceWeight: 0.9,
+                            ...(withInject ? { uInject: mode === 'flow' ? 0.8 : 1.2 } : {}),
                         },
                     }];
                 },
