@@ -254,16 +254,20 @@ export function createFeedbackFlowTransform(mode: FeedbackFlowMode = 'zoom'): Vi
                 activate() {
                     const angle = context.seed * Math.PI * 2;
                     drift = [Math.cos(angle) * 0.01, Math.sin(angle) * 0.01];
-                    const pivot = context.seed * Math.PI * 2 * 3.7;
-                    centre = [
-                        0.5 + Math.cos(pivot) * 0.18,
-                        0.5 + Math.sin(pivot) * 0.18,
-                    ];
                 },
 
-                update() {
-                    // Stateless between frames: all persistence lives in the feedback texture, which
+                update(frame) {
+                    // The pivot wanders the viewport on an open seed-derived Lissajous path (see
+                    // scene-history.ts): a fixed pivot closed every orbit around one point and
+                    // nothing travelled. Pure in playback time, so pause and seek hold. Otherwise
+                    // stateless between frames: all persistence lives in the feedback texture, which
                     // is what lets this plugin be replaced without losing the accumulated image.
+                    const t = frame.clock.playbackTime;
+                    const s = context.seed;
+                    centre = [
+                        0.5 + 0.26 * Math.sin(t * (0.021 + s * 0.05) * Math.PI * 2 + s * 9.1),
+                        0.5 + 0.26 * Math.sin(t * (0.034 + s * 0.041) * Math.PI * 2 + s * 17.3),
+                    ];
                 },
 
                 render(render): RenderPass[] {

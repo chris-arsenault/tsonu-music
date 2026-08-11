@@ -127,16 +127,19 @@ export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefi
                 activate() {
                     const angle = context.seed * Math.PI * 2;
                     drift = [Math.cos(angle), Math.sin(angle)];
-                    // A different derivation from the same seed, so the pivot and the drift do not
-                    // point the same way by construction.
-                    const pivot = context.seed * Math.PI * 2 * 3.7;
-                    centre = [
-                        0.5 + Math.cos(pivot) * 0.18,
-                        0.5 + Math.sin(pivot) * 0.18,
-                    ];
                 },
-                update() {
-                    // The image state belongs to the graph resource feeding `source`.
+                update(frame) {
+                    // The pivot wanders the viewport instead of sitting where it was seeded. A
+                    // static pivot — and before that, a hardcoded frame centre — meant every
+                    // orbit in a scene closed around one fixed point and nothing ever travelled;
+                    // two incommensurate seed-derived rates give an open Lissajous path that
+                    // never retraces. Pure in playback time, so pause and seek hold.
+                    const t = frame.clock.playbackTime;
+                    const s = context.seed;
+                    centre = [
+                        0.5 + 0.26 * Math.sin(t * (0.021 + s * 0.05) * Math.PI * 2 + s * 9.1),
+                        0.5 + 0.26 * Math.sin(t * (0.034 + s * 0.041) * Math.PI * 2 + s * 17.3),
+                    ];
                 },
                 render(render): RenderPass[] {
                     const previous = render.previous.source;
