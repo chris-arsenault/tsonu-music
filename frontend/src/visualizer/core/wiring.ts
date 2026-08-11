@@ -550,6 +550,10 @@ export function unabsorbedOutputs(scene: WiredScene): { instanceId: string; port
         .filter((port) =>
             port.type === 'color-texture'
             && !port.internal
+            // Derived state nodes are infrastructure, not branches: the combine's state output is
+            // read only by the previous-frame edge and its display output only by presentation,
+            // and neither is a branch the joins should absorb.
+            && !node.definition.capabilities.includes('derived-state')
             && !consumed.has(`${node.instanceId}.${port.name}`))
         .map((port) => ({ instanceId: node.instanceId, port: port.name })));
 }

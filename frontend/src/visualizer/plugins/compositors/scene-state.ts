@@ -138,13 +138,66 @@ void main() {
         : 1.0 + (l - 1.0) / (1.0 + (l - 1.0) / (KNEE - 1.0));
     sum *= rolled / max(l, 1e-5);
 
-    // Fresh material is never invisible: it enters at full source weight and the accumulation
-    // overtakes it wherever the deposit has built past it. Without this floor, a cleared state
-    // rebuilds at the deposit share per frame and the scene is black-plus-trails for seconds.
-    vec3 source = sourceSample.rgb * max(uSourceWeight, 0.0);
-    vec3 result = max(sum, source);
+    // The memory is the pure recurrence. Fresh visibility is the display pass's job (ADR-0017
+    // amendment): folding a max floor into the fed-back state made the memory max-like wherever
+    // fresh exceeded the accumulation, which quietly restored the erasure this operator exists
+    // to avoid.
+    fragColor = vec4(clamp(sum, vec3(0.0), vec3(256.0)), max(historySample.a, sourceSample.a));
+}`;
 
-    fragColor = vec4(clamp(result, vec3(0.0), vec3(256.0)), max(historySample.a, sourceSample.a));
+/**
+ * The presented frame: the state with this frame's material riding on top at full audio rate.
+ *
+ * Memory and presentation have opposite needs — the recurrence smooths or trails die, the screen
+ * needs crisp instant response or the picture goes numb. One texture cannot serve both: shipped
+ * with the state presented directly, flow low-passed every fresh pixel to 1.5-6% per frame and
+ * deposit buried flashes under its own accumulation, and the reported result was "lost nearly all
+ * audio rate movement, just smooth". The display output feeds back into nothing.
+ */
+const FLOW_DISPLAY_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uState;
+uniform sampler2D uSource;
+uniform float uSourceWeight;
+
+void main() {
+    vec4 state = texture(uState, vUv);
+    vec4 sourceSample = texture(uSource, vUv);
+    vec3 source = sourceSample.rgb * max(uSourceWeight, 0.0);
+
+    // Screen keeps both visible at once: the smooth flowing state underneath, this frame's
+    // material at full rate on top. Max here would hand static bright figures the whole display
+    // again; screen lets the state's motion read through them.
+    vec3 s = clamp(state.rgb, vec3(0.0), vec3(1.0));
+    vec3 f = clamp(source * 0.85, vec3(0.0), vec3(1.0));
+    vec3 result = vec3(1.0) - (vec3(1.0) - s) * (vec3(1.0) - f);
+
+    fragColor = vec4(result, max(state.a, sourceSample.a));
+}`;
+
+const DEPOSIT_DISPLAY_FRAGMENT = `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+
+uniform sampler2D uState;
+uniform sampler2D uSource;
+uniform float uSourceWeight;
+
+void main() {
+    vec4 state = texture(uState, vUv);
+    vec4 sourceSample = texture(uSource, vUv);
+    vec3 source = sourceSample.rgb * max(uSourceWeight, 0.0);
+
+    // The accumulation routinely exceeds one, so screen would saturate; max is right here — the
+    // built field wins wherever it has built past the source, and fresh material lands at full
+    // weight everywhere else from its first frame.
+    vec3 result = max(state.rgb, source);
+
+    fragColor = vec4(result, max(state.a, sourceSample.a));
 }`;
 
 const FRAGMENTS: Record<SceneStateCombineMode, string> = {
@@ -178,17 +231,23 @@ export function createSceneStateCombine(
             },
             { name: 'source', type: 'color-texture', required: true },
         ],
-        outputs: [{ name: 'color', type: 'color-texture', required: false }],
+        outputs: [
+            { name: 'color', type: 'color-texture', required: false },
+            ...(withInject
+                ? [{ name: 'display', type: 'color-texture' as const, required: false }]
+                : []),
+        ],
         capabilities: [DERIVED_STATE, 'scene-state-combine'],
         temporalCombine: {
             operator: mode,
             historyInput: 'history',
             sourceInput: 'source',
             output: 'color',
+            ...(withInject ? { displayOutput: 'display' } : {}),
             historyWeightParameter: 'historyWeight',
             sourceWeightParameter: 'sourceWeight',
         },
-        cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: 1, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 0, memory: 2, renderPasses: withInject ? 2 : 1, qualityScalable: true, dominant: false },
         character: {
             visualDensity: 0.6,
             motionEnergy: 0.5,
@@ -256,6 +315,13 @@ export function createSceneStateCombine(
             return {
                 initialize() {
                     context.registerShader({ id, vertex: QUAD_VERTEX_SHADER, fragment: FRAGMENTS[mode] });
+                    if (withInject) {
+                        context.registerShader({
+                            id: `${id}/display`,
+                            vertex: QUAD_VERTEX_SHADER,
+                            fragment: mode === 'flow' ? FLOW_DISPLAY_FRAGMENT : DEPOSIT_DISPLAY_FRAGMENT,
+                        });
+                    }
                 },
                 activate() {
                     // State lives in the output resource, not in this instance.
@@ -270,7 +336,7 @@ export function createSceneStateCombine(
                         return [];
                     }
 
-                    return [{
+                    const passes: RenderPass[] = [{
                         kind: 'fullscreen',
                         shader: id,
                         inputs: { uHistory: history, uSource: source },
@@ -283,6 +349,22 @@ export function createSceneStateCombine(
                             ...(withInject ? { uInject: mode === 'flow' ? 0.8 : 1.2 } : {}),
                         },
                     }];
+
+                    // The presented frame: state beneath, this frame's material at full audio
+                    // rate on top. Reads the state written by the pass above.
+                    if (withInject && render.outputs.display) {
+                        passes.push({
+                            kind: 'fullscreen',
+                            shader: `${id}/display`,
+                            inputs: { uState: render.outputs.color, uSource: source },
+                            output: render.outputs.display,
+                            blend: 'none',
+                            clear: true,
+                            uniforms: { uSourceWeight: 0.9 },
+                        });
+                    }
+
+                    return passes;
                 },
                 deactivate() {
                     // The retiring scene owns its resource until the transition completes.

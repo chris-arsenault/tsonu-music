@@ -734,7 +734,14 @@ describe('scenes accumulate and move', () => {
 
             for (const scene of scenes) {
                 expect(scene.graph.state, `${theme.id}/${scene.entropy}`).toBeDefined();
-                expect(scene.graph.present).toBe(scene.graph.state!.stateResource);
+                // Presentation may be the combine's display output (state plus crisp fresh);
+                // the state resource remains the previous-frame read (ADR-0017).
+                const combine = scene.wired.nodes
+                    .find((node) => node.definition.temporalCombine !== undefined)!;
+                const contract = combine.definition.temporalCombine!;
+                const presentPort = contract.displayOutput ?? contract.output;
+                expect(scene.graph.present)
+                    .toBe(scene.graph.state!.stateResource.replace(/\.[^.]+$/, `.${presentPort}`));
             }
         }
     });

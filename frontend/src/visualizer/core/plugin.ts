@@ -156,6 +156,14 @@ export interface TemporalCombineContract {
     historyInput: string;
     sourceInput: string;
     output: string;
+    /**
+     * Presented instead of `output` when declared (ADR-0017 amendment). Memory and presentation
+     * are different jobs with opposite needs: the recurrence wants smoothing or trails die, the
+     * screen wants crisp audio-rate material or the picture goes numb. `output` remains the
+     * previous-frame read; `displayOutput` is the state with fresh material riding on top, and it
+     * feeds back into nothing.
+     */
+    displayOutput?: string;
     historyWeightParameter: string;
     sourceWeightParameter: string;
 }

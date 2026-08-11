@@ -227,7 +227,13 @@ describe('scene building', () => {
             // beside it (ADR-0016) — those are the scene's material memory, not competitors.
             expect(result.scene.graph.pingPong.filter((resource) => imageResources.has(resource)), seed)
                 .toContain(result.scene.graph.state!.stateResource);
-            expect(result.scene.graph.present, seed).toBe(result.scene.graph.state!.stateResource);
+            // Presentation may be the combine's display output; the state stays the feedback read.
+            const combine = result.scene.wired.nodes
+                .find((node) => node.definition.temporalCombine !== undefined)!;
+            const presentPort = combine.definition.temporalCombine!.displayOutput
+                ?? combine.definition.temporalCombine!.output;
+            expect(result.scene.graph.present, seed)
+                .toBe(result.scene.graph.state!.stateResource.replace(/\.[^.]+$/, `.${presentPort}`));
         }
     });
 

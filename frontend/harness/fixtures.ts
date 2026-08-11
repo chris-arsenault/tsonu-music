@@ -168,7 +168,10 @@ export function withOperator(base: AuthoredScene, operator: CombineOperator): Au
     }));
 
     if (rewritten.present) {
-        rewritten.present = { ...rewritten.present, node: renamed(rewritten.present.node) };
+        // Flow and deposit present their display output — the state with fresh material riding
+        // on top — while max presents the state itself (ADR-0017).
+        const presentPort = targetPluginId === 'SceneStateCombine' ? 'color' : 'display';
+        rewritten.present = { node: renamed(rewritten.present.node), port: presentPort };
     }
 
     return rewritten;

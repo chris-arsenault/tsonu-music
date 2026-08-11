@@ -104,12 +104,15 @@ export function analyzeSceneState(
     const combine = combines[0];
     const contract = combine.definition.temporalCombine!;
     const stateResource = `${combine.instanceId}.${contract.output}`;
+    // Presentation and memory may be different outputs of the combine: the state stays the
+    // previous-frame read, the display carries fresh material at full weight (ADR-0017).
+    const presentPort = contract.displayOutput ?? contract.output;
 
-    if (!present || present.instanceId !== combine.instanceId || present.port !== contract.output) {
+    if (!present || present.instanceId !== combine.instanceId || present.port !== presentPort) {
         problems.push({
-            detail: `scene must present ${stateResource}`,
+            detail: `scene must present ${combine.instanceId}.${presentPort}`,
             instanceId: combine.instanceId,
-            port: contract.output,
+            port: presentPort,
         });
     }
 

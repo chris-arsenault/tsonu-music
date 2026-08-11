@@ -627,7 +627,7 @@ function withCanonicalState(
         ...material,
         nodes: [...material.nodes, ...warps, combine],
         edges,
-        present: { instanceId: combine.instanceId, port: contract.output },
+        present: { instanceId: combine.instanceId, port: contract.displayOutput ?? contract.output },
     };
 }
 
