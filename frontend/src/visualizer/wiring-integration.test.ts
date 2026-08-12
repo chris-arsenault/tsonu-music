@@ -258,10 +258,12 @@ describe('the theme colour policy reaches plugins', () => {
 describe('composition uses more than one layer where a scene has parallel branches', () => {
     test('two unconsumed colour outputs both become layers', () => {
         // Built by hand: two sources feeding nothing downstream is exactly the case a single-layer
-        // compositor silently discarded.
+        // compositor silently discarded. Two traces rather than trace + texture: the texture now
+        // takes a structural warp input, so wiring nests the pair into one branch — the behaviour
+        // higher-order generators exist for, and not what this test pins.
         const wired = wireScene([
             plugin('SignalTraceSource:circular'),
-            plugin('ProceduralTextureSource:value-noise'),
+            plugin('SignalTraceSource:oscilloscope'),
         ]);
         const compiled = compileGraph(wired.nodes, wired.edges, wired.present, wired.assetBindings);
         if (!compiled.ok) throw new Error(compiled.errors.join('; '));

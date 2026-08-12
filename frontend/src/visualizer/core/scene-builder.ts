@@ -941,10 +941,15 @@ export function materialBranchCount(scene: WiredScene): number {
     for (const node of scene.nodes) {
         const producesColour = node.definition.outputs.some((port) => port.type === 'color-texture');
 
+        // A source stays a root even when it consumes colour: a structural input (another
+        // branch's image becoming this generator's edge, interior, or domain) makes the
+        // generator higher-order, not derivative — material still enters here. Without this,
+        // every structural edge cost the scene a branch and nesting was rejected by the
+        // minimum-branches grammar it exists to enrich.
         if (
             producesColour
             && !node.definition.capabilities.includes(DERIVED_STATE)
-            && !colourSinks.has(node.instanceId)
+            && (node.definition.category === 'source' || !colourSinks.has(node.instanceId))
         ) {
             roots.add(node.instanceId);
         }

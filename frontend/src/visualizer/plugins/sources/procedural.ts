@@ -42,6 +42,9 @@ uniform float uSeed;
 uniform float uMode;
 uniform float uScale;
 uniform float uContrast;
+uniform sampler2D uWarp;
+uniform float uHasWarp;
+uniform float uWarpAmount;
 ${GLSL_COMMON}
 ${GLSL_PERTURB}
 
@@ -49,6 +52,18 @@ void main() {
     // Sampled through the field, so anything producing one can push this texture around instead of
     // it being redrawn at the same coordinates every frame.
     vec2 p = (perturbed(vUv) - 0.5) * uScale;
+
+    // Structural argument: another branch's image bends this texture's domain — its gradient-ish
+    // read displaces where the pattern is evaluated, so the input's structure appears IN the
+    // pattern rather than blended over it. Zero texture unwired -> identity.
+    if (uHasWarp > 0.5) {
+        vec2 warpUv = clamp(vUv, 0.0, 1.0);
+        float wl = luminance(texture(uWarp, warpUv).rgb);
+        float wr = luminance(texture(uWarp, warpUv + vec2(0.01, 0.0)).rgb);
+        float wu = luminance(texture(uWarp, warpUv + vec2(0.0, 0.01)).rgb);
+        p += vec2(wr - wl, wu - wl) * 12.0 * uWarpAmount;
+    }
+
     float value;
 
     if (uMode < 0.5) {                       // oscillator stripes
@@ -164,6 +179,8 @@ uniform float uPhase;
 uniform float uMode;
 uniform float uThickness;
 uniform float uFrequency;
+uniform sampler2D uProfile;
+uniform float uHasProfile;
 ${GLSL_COMMON}
 ${GLSL_PERTURB}
 ${PARAMETRIC_CURVE_BODY}
@@ -173,7 +190,15 @@ void main() {
     p.x *= uResolution.x / max(uResolution.y, 1.0);
 
     float distance = curveDistance(p);
-    float line = 1.0 - smoothstep(0.0, uThickness, distance);
+    // Structural argument: the profile input sets the stroke weight around the curve — read at
+    // the pixel's angular index so a spectrogram fed here draws the curve thick where the band
+    // is loud and thin where it is quiet. One fetch, outside the distance loop.
+    float thickness = uThickness;
+    if (uHasProfile > 0.5) {
+        float profileIndex = atan(vUv.y - 0.5, vUv.x - 0.5) / 6.2831853 + 0.5;
+        thickness *= 0.35 + 1.9 * luminance(texture(uProfile, vec2(profileIndex, 0.5)).rgb);
+    }
+    float line = 1.0 - smoothstep(0.0, thickness, distance);
 
     fragColor = vec4(vec3(line), line);
 }`;
@@ -190,6 +215,17 @@ uniform float uMode;
 uniform float uMorph;
 uniform float uRepeat;
 uniform float uEnergy;
+uniform float uEdgeAmount;
+/**
+ * Structural arguments (ADR: higher-order generators). Another branch's image is not blended
+ * over this shape — it becomes part of the shape: uEdge displaces the boundary at the shape's
+ * angular index, uInterior fills each cell with the input domain-mapped into it. Composition as
+ * f(g(...)), not f()+g().
+ */
+uniform sampler2D uEdge;
+uniform float uHasEdge;
+uniform sampler2D uInterior;
+uniform float uHasInterior;
 ${GLSL_COMMON}
 ${GLSL_PERTURB}
 
@@ -249,6 +285,14 @@ void main() {
         shape = min(glyph, box(rotate(p, -1.0472), vec2(0.34, 0.06)));
     }
 
+    // The edge input reshapes the boundary itself: the input read at this pixel's angular index
+    // around the shape becomes boundary displacement, so a spectrogram fed here IS the edge.
+    if (uHasEdge > 0.5) {
+        float edgeAngle = atan(p.y, p.x) / 6.2831853 + 0.5;
+        float edgeSample = luminance(texture(uEdge, vec2(edgeAngle, 0.5)).rgb);
+        shape -= edgeSample * uEdgeAmount;
+    }
+
     float fill = 1.0 - smoothstep(0.0, 0.012, shape);
 
     // Colour and mask. The comment here used to promise "colour, mask, distance, and gradient in one
@@ -258,6 +302,14 @@ void main() {
     // the gradient of this shape is what the vector-field port is for.
     float palettePhase = 0.5 + 0.5 * sin(uPhase + uTime * 0.12 + uEnergy * 2.0);
     vec3 colour = mix(vec3(0.12, 0.22, 0.58), vec3(0.95, 0.56, 0.16), palettePhase);
+
+    // The interior input fills each cell with the input image domain-mapped into it — repeated
+    // per lattice cell when uRepeat tiles the domain — instead of the built-in two-colour wash.
+    if (uHasInterior > 0.5) {
+        vec3 inside = texture(uInterior, clamp(p * 0.5 + 0.5, 0.0, 1.0)).rgb;
+        colour = mix(colour, inside, 0.85);
+    }
+
     fragColor = vec4(colour * fill, fill);
 }`;
 
@@ -510,7 +562,12 @@ export function createProceduralTextureSource(
     return defineShaderPlugin({
         id: `ProceduralTextureSource:${mode}`,
         category: 'source',
-        inputs: [PERTURB_INPUT],
+        inputs: [
+            PERTURB_INPUT,
+            // Structural argument: another branch's image bends this pattern's domain, so the
+            // input's structure appears in the pattern rather than blended over it.
+            { name: 'warp', type: 'color-texture', required: false },
+        ],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
@@ -518,6 +575,8 @@ export function createProceduralTextureSource(
         capabilities: ['procedural', 'vector-field'],
         fragment: PROCEDURAL_TEXTURE_FRAGMENT,
         motion: { port: 'motion', fragment: PROCEDURAL_TEXTURE_MOTION },
+        presenceFlags: ['warp'],
+        prefersWith: ['SpectrumGeometrySource'],
         // The target is cleared first; lighten therefore writes this frame's pattern without owning
         // a second image history beside the canonical scene state.
         blend: 'lighten',
@@ -526,9 +585,20 @@ export function createProceduralTextureSource(
             uMode: PROCEDURAL_TEXTURE_MODES.indexOf(mode),
             uScale: 2,
             uContrast: 1.2,
+            uWarpAmount: 0.5,
         },
-        parameters: { scale: 2, contrast: 1.2 },
+        parameters: { scale: 2, contrast: 1.2, warpAmount: 0.5 },
         bindings: [
+            {
+                // How hard the structural input bends the domain. Inert against the zero texture.
+                feature: 'lowMidExcite',
+                role: 'deformation',
+                parameter: 'warpAmount',
+                outputRange: [0.2, 1.1],
+                attack: 0.12,
+                release: 0.6,
+                curve: 'smooth',
+            },
             {
                 feature: 'lowMid',
                 role: 'deformation',
@@ -558,7 +628,11 @@ export function createParametricCurveSource(
     return defineShaderPlugin({
         id: `ParametricCurveSource:${mode}`,
         category: 'source',
-        inputs: [PERTURB_INPUT],
+        inputs: [
+            PERTURB_INPUT,
+            // Structural argument: the input sets the stroke weight around the curve.
+            { name: 'profile', type: 'color-texture', required: false },
+        ],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
@@ -566,6 +640,8 @@ export function createParametricCurveSource(
         capabilities: ['procedural', 'parametric-curve', 'vector-field'],
         fragment: PARAMETRIC_CURVE_FRAGMENT,
         motion: { port: 'motion', fragment: PARAMETRIC_CURVE_MOTION },
+        presenceFlags: ['profile'],
+        prefersWith: ['SpectrumGeometrySource'],
         // Current-frame material. The scene-state recurrence owns the track it leaves over time.
         blend: 'lighten',
         uniforms: {
@@ -608,14 +684,26 @@ export function createSdfShapeSource(
     return defineShaderPlugin({
         id: `SDFShapeSource:${mode}`,
         category: 'source',
-        inputs: [PERTURB_INPUT],
+        inputs: [
+            PERTURB_INPUT,
+            // Structural arguments: another branch's image becomes part of this shape rather
+            // than being blended over it — `edge` displaces the boundary at the shape's angular
+            // index (a spectrogram fed here IS the edge), `interior` fills each lattice cell with
+            // the input domain-mapped into it. Declared edge-first so the second draws from the
+            // unconsumed set. Optional: unwired they read the zero texture and the presence
+            // flags gate both branches off.
+            { name: 'edge', type: 'color-texture', required: false },
+            { name: 'interior', type: 'color-texture', required: false },
+        ],
         outputs: [
             { name: 'color', type: 'color-texture' },
             { name: 'motion', type: 'vector-field' },
         ],
+        // The motion fragment models the base spin, not texture-driven deformation of the edge.
         capabilities: ['procedural', 'sdf', 'vector-field'],
         fragment: SDF_SHAPE_FRAGMENT,
         motion: { port: 'motion', fragment: SDF_SHAPE_MOTION },
+        presenceFlags: ['edge', 'interior'],
         blend: 'lighten',
         uniforms: {
             ...PERTURB_UNIFORMS,
@@ -623,10 +711,23 @@ export function createSdfShapeSource(
             uMorph: 0.5,
             uRepeat: 1,
             uEnergy: 0.35,
+            uEdgeAmount: 0.18,
         },
-        parameters: { ...PERTURB_PARAMETERS, morph: 0.5, repeat: 1, energy: 0.35, spin: 0 },
+        parameters: { ...PERTURB_PARAMETERS, morph: 0.5, repeat: 1, energy: 0.35, spin: 0, edgeAmount: 0.18 },
+        prefersWith: ['SpectrumGeometrySource', 'SignalTraceSource'],
         bindings: [
             PERTURB_BINDING,
+            {
+                // How far the edge input pushes the boundary. Meaningful only when an edge branch
+                // is wired; harmless against the zero texture otherwise.
+                feature: 'mid',
+                role: 'deformation',
+                parameter: 'edgeAmount',
+                outputRange: [0.06, 0.42],
+                attack: 0.1,
+                release: 0.5,
+                curve: 'smooth',
+            },
             {
                 feature: 'subBass',
                 role: 'large-scale-force',
