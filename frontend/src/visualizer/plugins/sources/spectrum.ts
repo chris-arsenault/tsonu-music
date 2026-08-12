@@ -39,6 +39,34 @@ function impactKey(impact: ImpactEvent): string {
 const SPECTRUM_SHADER = 'spectrum-geometry';
 const SPECTRUM_MOTION_SHADER = 'spectrum-geometry:motion';
 const SPECTRUM_MOTION_GEOMETRY = 'spectrum-motion-vertices';
+const SPECTRUM_BANDS_SHADER = 'spectrum-geometry:bands';
+const SPECTRUM_BANDS_GEOMETRY = 'spectrum-bands-vertices';
+
+/**
+ * The band strip: one full-height bar per bin, brightness = magnitude. This is the spectrum as
+ * DATA — a structural argument for other generators (a shape's edge displacement read at its
+ * angular index sees every band as a distinct vertex), where the colour output is the spectrum
+ * as a picture and sampling a picture along one row collapses sixty-four bands into however many
+ * strokes happen to cross it.
+ */
+const SPECTRUM_BANDS_VERTEX = `#version 300 es
+in vec2 aPosition;
+in float aMagnitude;
+out float vMagnitude;
+
+void main() {
+    vMagnitude = aMagnitude;
+    gl_Position = vec4(aPosition, 0.0, 1.0);
+}`;
+
+const SPECTRUM_BANDS_FRAGMENT = `#version 300 es
+precision highp float;
+in float vMagnitude;
+out vec4 fragColor;
+
+void main() {
+    fragColor = vec4(vec3(vMagnitude), 1.0);
+}`;
 
 /**
  * The rise and fall of each band, published as a field (ADR-0012).
@@ -270,9 +298,13 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
             // How fast each band is rising, which is what this plugin knows about the music that
             // nothing downstream of it can see.
             { name: 'motion', type: 'vector-field', required: false },
+            // The spectrum as data: one bar per bin, for structural inputs. Declared after
+            // `color` so a structural port taking the newest producer reads the bands, and
+            // `structural` so no join ever composites the strip over the picture.
+            { name: 'bands', type: 'color-texture', required: false, structural: true },
         ],
         capabilities: ['spectrum-geometry', 'vector-field'],
-        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 2, qualityScalable: true, dominant: false },
+        cost: { gpu: 1, cpu: 1, memory: 1, renderPasses: 3, qualityScalable: true, dominant: false },
         character: character({ geometricOrder: 0.85, visualDensity: 0.5, motionEnergy: 0.6 }),
         activationRules: { activationWeight: 1, minimumDuration: 8 },
         parameters: { gain: 1.15, brightness: 1.3, wakeScale: 1.2 },
@@ -315,8 +347,11 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
             const previous = new Float32Array(MAX_BINS * 3);
             /** Position and velocity per bin, for the pass that publishes the motion. */
             const motion = new Float32Array(MAX_BINS * 4);
+            /** The band strip: two triangles per bin, x from bin index, brightness = magnitude. */
+            const bands = new Float32Array(MAX_BINS * 6 * 3);
             let hasPrevious = false;
             let count = 0;
+            let bandVertexCount = 0;
             let phase = 0;
 
             return {
@@ -330,6 +365,11 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                         id: SPECTRUM_MOTION_SHADER,
                         vertex: SPECTRUM_MOTION_VERTEX,
                         fragment: SPECTRUM_MOTION_FRAGMENT,
+                    });
+                    context.registerShader({
+                        id: SPECTRUM_BANDS_SHADER,
+                        vertex: SPECTRUM_BANDS_VERTEX,
+                        fragment: SPECTRUM_BANDS_FRAGMENT,
                     });
                 },
 
@@ -380,6 +420,37 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                             { name: 'aVelocity', components: 2 },
                         ],
                     });
+
+                    // The band strip: full-height bar per bin so a structural consumer sampling
+                    // any row reads all of them at data resolution.
+                    const spectrum = frame.features.spectrum;
+                    const gain = frame.parameters.gain ?? 6;
+                    const bins = Math.min(spectrum.length, MAX_BINS);
+                    let write = 0;
+                    for (let bin = 0; bin < bins; bin += 1) {
+                        const magnitude = Math.min(1, Math.max(0, spectrum[bin] * gain * 0.12));
+                        const x0 = (bin / bins) * 2 - 1;
+                        const x1 = ((bin + 1) / bins) * 2 - 1;
+                        const quad = [
+                            x0, -1, x0, 1, x1, -1,
+                            x1, -1, x0, 1, x1, 1,
+                        ];
+                        for (let v = 0; v < 6; v += 1) {
+                            bands[write] = quad[v * 2];
+                            bands[write + 1] = quad[v * 2 + 1];
+                            bands[write + 2] = magnitude;
+                            write += 3;
+                        }
+                    }
+                    bandVertexCount = bins * 6;
+                    frame.uploadGeometry({
+                        id: SPECTRUM_BANDS_GEOMETRY,
+                        data: bands.subarray(0, write),
+                        attributes: [
+                            { name: 'aPosition', components: 2 },
+                            { name: 'aMagnitude', components: 1 },
+                        ],
+                    });
                 },
 
                 render(render): RenderPass[] {
@@ -414,6 +485,20 @@ export function createSpectrumGeometrySource(mode: SpectrumMode = 'radial'): Vis
                             blend: 'add',
                             clear: true,
                             uniforms: { uReach: 16 },
+                        });
+                    }
+
+                    if (render.outputs.bands && bandVertexCount > 0) {
+                        passes.push({
+                            kind: 'geometry',
+                            shader: SPECTRUM_BANDS_SHADER,
+                            geometry: SPECTRUM_BANDS_GEOMETRY,
+                            primitive: 'triangles',
+                            vertexCount: bandVertexCount,
+                            output: render.outputs.bands,
+                            blend: 'none',
+                            clear: true,
+                            uniforms: {},
                         });
                     }
 

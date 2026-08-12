@@ -101,6 +101,13 @@ export interface PluginPort {
      */
     internal?: boolean;
     /**
+     * A data output offered to structural inputs, never presentable material: wiring may feed it
+     * to consumers but the join machinery must not absorb it as a branch, and it is not a
+     * terminal. The spectrum's band strip is the archetype — one bar per bin, meaningful as
+     * another generator's edge or profile argument, meaningless composited over the picture.
+     */
+    structural?: boolean;
+    /**
      * Parameter scaling how much of this input reaches the output (ADR-0013).
      *
      * The quantity that decides whether a cycle through this port converges. `attenuatesHistory` asked

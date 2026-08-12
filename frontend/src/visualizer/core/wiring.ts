@@ -557,6 +557,9 @@ export function unabsorbedOutputs(scene: WiredScene): { instanceId: string; port
         .filter((port) =>
             port.type === 'color-texture'
             && !port.internal
+            // A structural data output is offered to generators' structural inputs, never to the
+            // joins: composited over the picture it is bars, not material.
+            && !port.structural
             // Derived state nodes are infrastructure, not branches: the combine's state output is
             // read only by the previous-frame edge and its display output only by presentation,
             // and neither is a branch the joins should absorb.
