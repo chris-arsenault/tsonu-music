@@ -24,6 +24,7 @@ import type { VisualPluginDefinition } from './plugin';
 import { createRng, type Rng } from './random';
 import { assembleScene, type SchedulerContext, type VisualTheme } from './scheduler';
 import {
+    closeSceneLoop,
     isBranchJoiner,
     isImagePortType,
     unabsorbedOutputs,
@@ -227,17 +228,20 @@ export function settleScene(
     schedulerContext: SchedulerContext,
 ): SettledScene | { ok: false; failure: SceneBuildFailure } {
     let plugins = [...initial];
-    // Material wiring nominates trails and draws its own fold-back loop (ADR-0016). These are the
-    // scene's material memory — a stage echoing itself, the composed image folding back through a
-    // lossy port — distinct from the canonical image state `withCanonicalState` adds afterwards.
-    // Wired with `false` here, every stage upstream of the combine is a fresh redraw resampled
-    // through per-frame absolute warps, which is invertible: the picture returns exactly when the
-    // parameter does.
+    // Material wiring nominates trails; the fold-back loop is drawn once, below, after the plugin
+    // set stops changing. These are the scene's material memory — a stage echoing itself, the
+    // composed image folding back through a lossy port — distinct from the canonical image state
+    // `withCanonicalState` adds afterwards. Without them every stage upstream of the combine is a
+    // fresh redraw resampled through per-frame absolute warps, which is invertible: the picture
+    // returns exactly when the parameter does.
     const rewire = () => wireScene(
         plugins,
         context.assetResources ?? [],
-        createRng(`${entropy}:loops`),
-        theme.grammar.maximumFeedbackLoops,
+        {
+            rng: createRng(`${entropy}:loops`),
+            maximumImageLoops: theme.grammar.maximumFeedbackLoops,
+            drawLoop: false,
+        },
     );
 
     let wired = rewire();
@@ -335,6 +339,19 @@ export function settleScene(
             break;
         }
     }
+
+    // The fold-back loop, drawn once on the settled graph.
+    //
+    // The draw reads the whole node list, so it answers differently for every plugin set it sees.
+    // Run inside the rounds above it re-drew the loop each time the joins or the prune changed the
+    // set, and the rounds were chasing a fixpoint that moved underneath them — which is why a fix
+    // to any one round could not converge, and why 155 of 200 builds had to discard their first
+    // candidate. Drawn here it sees the graph the scene actually ships.
+    wired = closeSceneLoop(
+        wired,
+        createRng(`${entropy}:loops`),
+        theme.grammar.maximumFeedbackLoops,
+    );
 
     // Every material previous-frame read drifts (ADR-0016): spliced after the graph settles so
     // the join and prune rounds reason about the material alone, and before the canonical state

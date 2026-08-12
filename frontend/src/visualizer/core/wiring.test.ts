@@ -217,7 +217,7 @@ describe('host assets', () => {
     const maskProducer = plugin('maskmaker', 'source', [], [{ name: 'mask', type: 'mask-texture', required: false }]);
 
     function chosen(seed: string, scene = [stencil]) {
-        return wireScene(scene, MASKS, createRng(seed)).assetBindings[0]?.resource;
+        return wireScene(scene, MASKS, { rng: createRng(seed) }).assetBindings[0]?.resource;
     }
 
     test('the choice varies with the scene', () => {
@@ -235,7 +235,7 @@ describe('host assets', () => {
 
     test('a scene has one stencil, not one per consumer', () => {
         // Two mask consumers cutting against two different shapes is not variety.
-        const wired = wireScene([stencil, secondStencil], MASKS, createRng('two-consumers'));
+        const wired = wireScene([stencil, secondStencil], MASKS, { rng: createRng('two-consumers') });
 
         expect(wired.assetBindings).toHaveLength(2);
         expect(wired.assetBindings[0].resource).toBe(wired.assetBindings[1].resource);
@@ -244,7 +244,7 @@ describe('host assets', () => {
     test('an asset port is not captured by a producer of the same type', () => {
         // The defect this port flag exists for: album art is a colour texture, so every colour
         // producer matched the port and the artwork lost to whichever sorted first.
-        const wired = wireScene([maskProducer, stencil], MASKS, createRng('capture'));
+        const wired = wireScene([maskProducer, stencil], MASKS, { rng: createRng('capture') });
 
         expect(wired.edges.filter((edge) => edge.to.instanceId.startsWith('stencil'))).toEqual([]);
         expect(wired.assetBindings).toHaveLength(1);
@@ -252,7 +252,7 @@ describe('host assets', () => {
 
     test('an ordinary port of the same type still takes the producer', () => {
         const consumer = plugin('plain', 'compositor', [{ name: 'mask', type: 'mask-texture', required: true }]);
-        const wired = wireScene([maskProducer, consumer], MASKS, createRng('plain'));
+        const wired = wireScene([maskProducer, consumer], MASKS, { rng: createRng('plain') });
 
         expect(wired.assetBindings).toEqual([]);
         expect(wired.edges[0].from.instanceId).toBe(instanceIdFor(maskProducer, 0));
@@ -332,7 +332,7 @@ describe('a loop may close to any producer', () => {
         const reached = new Set<string>();
 
         for (let seed = 0; seed < 40; seed += 1) {
-            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            const wired = wireScene(scene, [], { rng: createRng(`loop-${seed}`) });
             for (const edge of wired.edges.filter((entry) => entry.feedback)) {
                 reached.add(edge.from.instanceId);
             }
@@ -344,7 +344,7 @@ describe('a loop may close to any producer', () => {
 
     test('every drawn loop still compiles as a declared cycle and asks for a second slot', () => {
         for (let seed = 0; seed < 40; seed += 1) {
-            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            const wired = wireScene(scene, [], { rng: createRng(`loop-${seed}`) });
             const result = compileGraph(wired.nodes, wired.edges, wired.present);
 
             expect(result.ok, result.ok ? '' : result.errors.join('; ')).toBe(true);
@@ -368,7 +368,7 @@ describe('a loop may close to any producer', () => {
         // this fixture only because the fixture is three plugins long.
         const composed = instanceIdFor(feedback, 0);
         const found = Array.from({ length: 40 }, (_, seed) =>
-            wireScene(scene, [], createRng(`loop-${seed}`)).edges
+            wireScene(scene, [], { rng: createRng(`loop-${seed}`) }).edges
                 .filter((edge) => edge.feedback)
                 .some((edge) => edge.from.instanceId === composed));
 
@@ -377,7 +377,7 @@ describe('a loop may close to any producer', () => {
 
     test('no loop closes through a presentation stage', () => {
         for (let seed = 0; seed < 40; seed += 1) {
-            const wired = wireScene(scene, [], createRng(`loop-${seed}`));
+            const wired = wireScene(scene, [], { rng: createRng(`loop-${seed}`) });
             const reaches = wired.edges
                 .filter((edge) => edge.feedback)
                 .map((edge) => edge.from.instanceId);

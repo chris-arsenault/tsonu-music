@@ -124,9 +124,15 @@ export function assetResourceId(assetId: string): string {
  * gives a scene a memory and no motion. Drawn flat, the displacing sinks are a minority of the image
  * inputs in a scene and most candidates settled on one that only recolours, which the grammar then
  * rejected after the whole scene had been assembled.
+ *
+ * Within each of those two groups, a port nothing feeds comes before one that is already fed.
+ * Closing on a fed port displaces its forward edge and strands that producer as a second terminal,
+ * which is material for the branch absorption to place again — worth doing when it is the only way
+ * to fold the composed image back, and needless churn when a free port would have served.
  */
 function orderLoopSinks(
     nodes: readonly GraphNode[],
+    edges: readonly RenderGraphEdge[],
     rng: Rng,
 ): { node: GraphNode; input: PluginPort }[] {
     const sinks = nodes.flatMap((node) => node.definition.inputs
@@ -139,10 +145,21 @@ function orderLoopSinks(
 
     const displaces = (entry: { node: GraphNode }) =>
         entry.node.definition.capabilities.includes(SPATIAL_FEEDBACK);
+    const fed = (entry: { node: GraphNode; input: PluginPort }) => edges.some((edge) =>
+        !edge.feedback
+        && edge.to.instanceId === entry.node.instanceId
+        && edge.to.port === entry.input.name);
+
+    const grouped = (
+        wanted: boolean,
+        occupied: boolean,
+    ) => rng.shuffle(sinks.filter((entry) => displaces(entry) === wanted && fed(entry) === occupied));
 
     return [
-        ...rng.shuffle(sinks.filter(displaces)),
-        ...rng.shuffle(sinks.filter((entry) => !displaces(entry))),
+        ...grouped(true, false),
+        ...grouped(true, true),
+        ...grouped(false, false),
+        ...grouped(false, true),
     ];
 }
 
@@ -246,7 +263,7 @@ function closeLoop(
     // required, therefore always forward-fed, and the one port whose gain was designed to carry
     // the composed-image loop — unreachable for every drawn loop, and the mixer-carried fold-back
     // went extinct while the machinery for it sat live.
-    for (const { node: sink, input } of orderLoopSinks(nodes, rng)) {
+    for (const { node: sink, input } of orderLoopSinks(nodes, edges, rng)) {
         const candidates = nodes.flatMap((node) => node.definition.outputs
             .filter((output) => !output.internal && portsCompatible(output.type, input.type))
             .map((output) => ({ instanceId: node.instanceId, port: output.name })));
@@ -319,28 +336,46 @@ function closeLoop(
     // composition instead of adding a property.
 }
 
-export function wireScene(
-    plugins: readonly VisualPluginDefinition[],
-    assets: readonly AssetResource[] = [],
+/** What a wiring pass is allowed to draw, beyond the edges the plugin set determines on its own. */
+export interface WiringOptions {
     /**
-     * Draws where each loop closes. Absent, every loop closes on its own plugin, which is what an
-     * authored graph and every wiring test expect: they state their edges rather than drawing them.
+     * Draws the scene's asset choice and, unless `drawLoop` is false, where its fold-back loop
+     * closes. Absent, every loop closes on its own plugin and each asset takes the first compatible
+     * entry, which is what an authored graph and every wiring test expect: they state their edges
+     * rather than drawing them.
      */
-    rng?: Rng,
+    rng?: Rng;
     /**
      * The family's ceiling on image loops, so the trails a scene keeps stay inside its character.
      *
-     * Defaults to one, which is what every wiring test and every authored graph expects: they state
-     * their edges rather than drawing them.
+     * Defaults to one, which is what every wiring test and every authored graph expects.
      */
-    maximumImageLoops = 1,
+    maximumImageLoops?: number;
     /**
-     * False only for graphs that state their own memory. The scene builder passes true: nominated
-     * trails and the drawn fold-back loop are the material's memory (ADR-0016), and the canonical
-     * image state it adds afterwards is validated separately by `analyzeSceneState`.
+     * False only for graphs that state their own memory. The scene builder leaves this true:
+     * nominated trails and the drawn fold-back loop are the material's memory (ADR-0016), and the
+     * canonical image state it adds afterwards is validated separately by `analyzeSceneState`.
      */
-    nominateImageHistory = true,
+    nominateImageHistory?: boolean;
+    /**
+     * False while a scene is still settling.
+     *
+     * The draw reads the node list — which sinks exist, which is the terminal, how many candidates
+     * each group holds — so it answers differently for every plugin set it is shown. Running it
+     * inside the builder's join-and-prune rounds meant each round re-drew the loop for a graph the
+     * next round changed again, and the rounds chased a fixpoint that moved: measured over 200
+     * builds, only 45 settled on their first candidate. The builder now wires with this false and
+     * draws once, with `closeSceneLoop`, on the graph it finished with.
+     */
+    drawLoop?: boolean;
+}
+
+export function wireScene(
+    plugins: readonly VisualPluginDefinition[],
+    assets: readonly AssetResource[] = [],
+    options: WiringOptions = {},
 ): WiredScene {
+    const { rng, maximumImageLoops = 1, nominateImageHistory = true, drawLoop = true } = options;
     // Derived joins sort at the end of the compositors, before post-processing. Sorted after
     // every category, a joined branch reached the composite having passed through zero downstream
     // stages — a spectrum absorbed by a terminal join was pasted over the finished, graded
@@ -527,11 +562,40 @@ export function wireScene(
         // output, so where a scene remembers is drawn below like any other wiring choice.
     }
 
-    if (rng && nominateImageHistory) {
+    if (rng && nominateImageHistory && drawLoop) {
         closeLoop(edges, nodes, rng, maximumImageLoops);
     }
 
     return { nodes, edges, assetBindings, present: resolvePresent(nodes), unsatisfied };
+}
+
+/**
+ * Draws the scene's fold-back loop on a graph that is already wired.
+ *
+ * The same draw `wireScene` performs, made available on its own so it can happen once, last, on the
+ * plugin set the builder settled on rather than once per settling round.
+ *
+ * A draw that would strand a producer is declined here rather than left for a later pass: closing on
+ * an occupied port displaces its forward edge, and where nothing is left to place that branch again
+ * the scene arrives at the composite in two pieces. The nominated trails and the canonical state's
+ * own loop remain, so declining costs the scene a fold-back and not a build.
+ */
+export function closeSceneLoop(
+    scene: WiredScene,
+    rng: Rng,
+    maximumImageLoops = 1,
+    /** True once branch placement runs after the draw and can absorb a displaced producer. */
+    allowDisplacement = false,
+): WiredScene {
+    const edges = [...scene.edges];
+    closeLoop(edges, scene.nodes, rng, maximumImageLoops);
+
+    const drawn = { ...scene, edges };
+    if (!allowDisplacement && unabsorbedOutputs(drawn).length > unabsorbedOutputs(scene).length) {
+        return scene;
+    }
+
+    return drawn;
 }
 
 /**
