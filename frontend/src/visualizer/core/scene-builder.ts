@@ -357,6 +357,21 @@ export function settleScene(
     // A draw that displaced a forward edge left its producer loose; the same splice places it again.
     wired = spliceJoins(wired, `${entropy}:after-loop`, schedulerContext);
 
+    // Said here, where it is true. A scene that never converged reached the state wrapper with two
+    // terminals, the wrapper declined for that reason, and the failure came back as "canonical
+    // scene-state nodes are unavailable" — a complaint about the catalog, which sends anyone reading
+    // it to look for a missing plugin. Placement and joining ran out of room; that is the fact.
+    const loose = unabsorbedOutputs(wired);
+    if (loose.length !== 1) {
+        return {
+            ok: false,
+            failure: {
+                reason: 'grammar',
+                detail: `${loose.length} colour outputs reach the canvas unjoined`,
+            },
+        };
+    }
+
     // Every material previous-frame read drifts (ADR-0016): spliced after the graph settles so
     // the join and prune rounds reason about the material alone, and before the canonical state
     // so its occurrence counting sees the trail warps.
@@ -366,7 +381,7 @@ export function settleScene(
     if (!stateful) {
         return {
             ok: false,
-            failure: { reason: 'compile', detail: 'canonical scene-state nodes are unavailable' },
+            failure: { reason: 'compile', detail: 'the catalog has no scene-state operators' },
         };
     }
     wired = stateful;
@@ -533,8 +548,40 @@ function withTrailWarps(
             type: output.type,
             category: node.definition.category,
         })));
-    const fieldFor = (type: VisualPluginDefinition['inputs'][number]['type']) => {
-        const compatible = fieldOutputs.filter((output) => portsCompatible(output.type, type));
+    /** What each node can reach by forward edges, so a transport cannot be steered from below it. */
+    const downstreamOf = (instanceId: string): Set<string> => {
+        const seen = new Set<string>();
+        const stack = [instanceId];
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            for (const edge of material.edges) {
+                if (edge.feedback || edge.from.instanceId !== current || seen.has(edge.to.instanceId)) {
+                    continue;
+                }
+                seen.add(edge.to.instanceId);
+                stack.push(edge.to.instanceId);
+            }
+        }
+        return seen;
+    };
+
+    /**
+     * The freshest field the transport may read, preferring a dedicated field or simulator output
+     * over a stage's side-motion — the same policy the canonical state uses.
+     *
+     * A field produced below the transport's own sink is refused. The transport feeds that sink, so
+     * taking its steering from anything the sink reaches closes a forward cycle, and the candidate
+     * died in the compiler one stage after the decision that caused it.
+     */
+    const fieldFor = (
+        type: VisualPluginDefinition['inputs'][number]['type'],
+        sinkInstanceId?: string,
+    ) => {
+        const below = sinkInstanceId ? downstreamOf(sinkInstanceId) : new Set<string>();
+        const compatible = fieldOutputs.filter((output) =>
+            portsCompatible(output.type, type)
+            && output.instanceId !== sinkInstanceId
+            && !below.has(output.instanceId));
         const dedicated = compatible.filter((output) => ['field', 'simulator'].includes(output.category));
         return [...(dedicated.length > 0 ? dedicated : compatible)].reverse()[0];
     };
@@ -571,7 +618,20 @@ function withTrailWarps(
             continue;
         }
 
-        const drawn = rng.pick(candidates) ?? candidates[0];
+        // Only transports this loop can actually steer: a field-driven one needs a field produced
+        // above the sink it feeds, and which fields qualify depends on where in the graph the loop
+        // is. Drawn from what is left, so a scene with no field above the sink still gets one of the
+        // intrinsic modes rather than an unsatisfiable edge.
+        const usable = candidates.filter((definition) => definition.inputs.every((input) =>
+            !input.required
+            || input.type === 'color-texture'
+            || fieldFor(input.type, edge.to.instanceId) !== undefined));
+        if (usable.length === 0) {
+            edges.push(edge);
+            continue;
+        }
+
+        const drawn = rng.pick(usable) ?? usable[0];
         // Derived infrastructure, like a joining compositor's DERIVED_JOIN: the transport is here
         // because the builder put it here, and the branch counts must not read it as material.
         const definition: VisualPluginDefinition = drawn.capabilities.includes(DERIVED_STATE)
@@ -596,7 +656,7 @@ function withTrailWarps(
             if (!input.required || input.type === 'color-texture') {
                 continue;
             }
-            const field = fieldFor(input.type)!;
+            const field = fieldFor(input.type, edge.to.instanceId)!;
             edges.push({
                 from: { instanceId: field.instanceId, port: field.port },
                 to: { instanceId: transport.instanceId, port: input.name },
@@ -973,6 +1033,42 @@ function spliceJoins(
     const reaches = (instanceId: string) => reachesIn(edges, instanceId);
 
     /**
+     * Whether a proposed edge set has a forward cycle in it.
+     *
+     * Checked for the same reason the operand test is: a splice is acyclic in the graph it was
+     * measured against, and the next splice changes that graph. Two candidates in 240 reached the
+     * compiler with an undeclared cycle and were discarded there, one stage after the decision that
+     * made them.
+     */
+    const closesCycle = (pool: readonly RenderGraphEdge[]): boolean => {
+        const indegree = new Map<string, number>();
+        const forward = pool.filter((edge) => !edge.feedback);
+        for (const edge of forward) {
+            indegree.set(edge.to.instanceId, (indegree.get(edge.to.instanceId) ?? 0) + 1);
+        }
+        const participants = new Set(forward.flatMap((edge) =>
+            [edge.from.instanceId, edge.to.instanceId]));
+        const ready = [...participants].filter((id) => (indegree.get(id) ?? 0) === 0);
+        let settled = 0;
+        while (ready.length > 0) {
+            const current = ready.shift()!;
+            settled += 1;
+            for (const edge of forward) {
+                if (edge.from.instanceId !== current) {
+                    continue;
+                }
+                const remaining = (indegree.get(edge.to.instanceId) ?? 0) - 1;
+                indegree.set(edge.to.instanceId, remaining);
+                if (remaining === 0) {
+                    ready.push(edge.to.instanceId);
+                }
+            }
+        }
+
+        return settled !== participants.size;
+    };
+
+    /**
      * Whether every mixer in a proposed graph still reads two independent pictures.
      *
      * Checked against the result rather than at the moment of each splice, because a splice is only
@@ -985,7 +1081,7 @@ function spliceJoins(
     const operandsIndependent = (
         pool: readonly RenderGraphEdge[],
         nodeList: readonly GraphNode[],
-    ): boolean => nodeList.filter((node) => isDerivedJoin(node.definition)).every((join) => {
+    ): boolean => !closesCycle(pool) && nodeList.filter((node) => isDerivedJoin(node.definition)).every((join) => {
         const operands = pool.filter((edge) =>
             !edge.feedback
             && edge.to.instanceId === join.instanceId

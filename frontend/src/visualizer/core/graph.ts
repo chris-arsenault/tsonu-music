@@ -152,8 +152,16 @@ export function compileGraph(
     const forward = edges.filter((edge) => !edge.feedback);
     const ordered = topologicalOrder(nodes, forward);
     if (!ordered) {
+        // Named, because "somewhere in this graph" leaves the caller to rebuild the sort by hand to
+        // find out which stage closed the loop. What the sort could not place is exactly the cycle
+        // and everything downstream of it.
+        const placed = new Set(topologicalPrefix(nodes, forward).map((node) => node.instanceId));
+        const stuck = nodes
+            .filter((node) => !placed.has(node.instanceId))
+            .map((node) => node.instanceId);
         problems.push({
-            detail: 'graph contains an undeclared cycle; mark the closing edge as feedback',
+            detail: `graph contains an undeclared cycle; mark the closing edge as feedback`
+                + ` (unplaceable: ${stuck.join(', ')})`,
         });
     }
 
@@ -378,9 +386,18 @@ function validateRequiredInputs(
 }
 
 /** Kahn's algorithm. Returns undefined when a cycle remains among forward edges. */
+/** The nodes a topological sort can place, which for a cyclic graph is everything outside the cycle. */
+function topologicalPrefix(
+    nodes: readonly GraphNode[],
+    forward: readonly RenderGraphEdge[],
+): GraphNode[] {
+    return topologicalOrder(nodes, forward, true) ?? [];
+}
+
 function topologicalOrder(
     nodes: readonly GraphNode[],
     forward: readonly RenderGraphEdge[],
+    partial = false,
 ): GraphNode[] | undefined {
     const indegree = new Map<string, number>();
     const dependents = new Map<string, string[]>();
@@ -416,7 +433,7 @@ function topologicalOrder(
         }
     }
 
-    return order.length === nodes.length ? order : undefined;
+    return partial || order.length === nodes.length ? order : undefined;
 }
 
 function resolvePresent(
