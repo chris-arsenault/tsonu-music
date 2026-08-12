@@ -252,6 +252,10 @@ describe('scene building', () => {
                 if (!result.ok) continue;
                 const scene = result.scene.wired;
 
+                const byInstance = new Map(scene.nodes.map((node) => [node.instanceId, node]));
+                // Colour paths. A branch steering another branch's motion field or cutting its
+                // stencil is composition — the two mixer operands are still different pictures.
+                // What doubles brightness is one picture arriving on both inputs.
                 const feeds = (instanceId: string): Set<string> => {
                     const seen = new Set<string>();
                     const stack = [instanceId];
@@ -260,6 +264,10 @@ describe('scene building', () => {
                         for (const edge of scene.edges) {
                             if (edge.feedback || edge.from.instanceId !== current) continue;
                             if (seen.has(edge.to.instanceId)) continue;
+                            const sink = byInstance.get(edge.to.instanceId);
+                            const port = sink?.definition.inputs
+                                .find((input) => input.name === edge.to.port);
+                            if (port?.type !== 'color-texture') continue;
                             seen.add(edge.to.instanceId);
                             stack.push(edge.to.instanceId);
                         }

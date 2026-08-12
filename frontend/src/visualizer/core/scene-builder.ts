@@ -944,14 +944,25 @@ function spliceJoins(
     const nodes = [...scene.nodes];
     let edges = [...scene.edges];
 
-    const reaches = (instanceId: string): Set<string> => {
+    const reachesIn = (
+        pool: readonly RenderGraphEdge[],
+        instanceId: string,
+        colourOnly = false,
+    ): Set<string> => {
         const seen = new Set<string>();
         const stack = [instanceId];
         while (stack.length > 0) {
             const current = stack.pop()!;
-            for (const edge of edges) {
+            for (const edge of pool) {
                 if (edge.feedback || edge.from.instanceId !== current || seen.has(edge.to.instanceId)) {
                     continue;
+                }
+                if (colourOnly) {
+                    const sink = byInstance.get(edge.to.instanceId);
+                    const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+                    if (port?.type !== 'color-texture') {
+                        continue;
+                    }
                 }
                 seen.add(edge.to.instanceId);
                 stack.push(edge.to.instanceId);
@@ -959,6 +970,33 @@ function spliceJoins(
         }
         return seen;
     };
+    const reaches = (instanceId: string) => reachesIn(edges, instanceId);
+
+    /**
+     * Whether every mixer in a proposed graph still reads two independent pictures.
+     *
+     * Checked against the result rather than at the moment of each splice, because a splice is only
+     * legal in the graph it lands in. Two branches entering the same chain is the case: the second
+     * splice sits upstream of the first, so material the first mixer had on one input arrives on its
+     * other input too, and a splice that was independent when it was made is not independent
+     * afterwards. Colour paths only — a branch steering another's motion field is composition, not
+     * the same picture counted twice.
+     */
+    const operandsIndependent = (
+        pool: readonly RenderGraphEdge[],
+        nodeList: readonly GraphNode[],
+    ): boolean => nodeList.filter((node) => isDerivedJoin(node.definition)).every((join) => {
+        const operands = pool.filter((edge) =>
+            !edge.feedback
+            && edge.to.instanceId === join.instanceId
+            && join.definition.inputs
+                .find((input) => input.name === edge.to.port)?.type === 'color-texture');
+
+        return operands.every((operand) => operands.every((other) =>
+            operand === other
+            || (operand.from.instanceId !== other.from.instanceId
+                && !reachesIn(pool, other.from.instanceId, true).has(operand.from.instanceId))));
+    });
 
     const ordered = [...terminals].sort((left, right) =>
         (nodeIndex.get(left.instanceId) ?? 0) - (nodeIndex.get(right.instanceId) ?? 0));
@@ -977,10 +1015,9 @@ function spliceJoins(
         // edge's sink, and the second would put the branch on both of the mixer's inputs — the same
         // material added to itself, which is the gain chain this rebuild exists to remove. Earliest
         // first, so the mixed result still has the chain's remaining stages to pass through.
-        const fromBranch = reaches(branch.instanceId);
+        const fromBranch = reachesIn(edges, branch.instanceId, true);
         const points = edges
-            .map((edge, index) => ({ edge, index }))
-            .filter(({ edge }) => {
+            .filter((edge) => {
                 if (edge.feedback) {
                     return false;
                 }
@@ -996,15 +1033,7 @@ function spliceJoins(
                 return !reaches(edge.from.instanceId).has(branch.instanceId);
             })
             .sort((left, right) =>
-                (nodeIndex.get(left.edge.to.instanceId) ?? 0) - (nodeIndex.get(right.edge.to.instanceId) ?? 0));
-
-        const point = points[0];
-        if (!point && fromBranch.has(composite.instanceId)) {
-            // Nowhere to splice and the fallback would mix the composite with material already
-            // inside it. The branch stays loose, the scene fails its terminal count, and one of the
-            // other candidates is built instead — cheaper than shipping a doubled operand.
-            continue;
-        }
+                (nodeIndex.get(left.to.instanceId) ?? 0) - (nodeIndex.get(right.to.instanceId) ?? 0));
 
         // Weighted rather than uniform, and drawn fresh for each branch, so a scene needing three
         // joins can use three different operators. Repeats are allowed: two mixers of one mode
@@ -1016,33 +1045,51 @@ function spliceJoins(
             capabilities: [...drawn.capabilities, DERIVED_JOIN],
         };
         const occurrence = occurrences.get(definition.id) ?? 0;
-        occurrences.set(definition.id, occurrence + 1);
         const join: GraphNode = { instanceId: instanceIdFor(definition, occurrence), definition };
         const colourInputs = definition.inputs.filter((input) => input.type === 'color-texture');
         const output = definition.outputs.find((port) => port.type === 'color-texture')!;
-
-        nodes.push(join);
-        nodeIndex.set(join.instanceId, nodeIndex.get(composite.instanceId) ?? nodes.length);
+        const proposedNodes = [...nodes, join];
         byInstance.set(join.instanceId, join);
 
-        if (point) {
-            edges = [
-                ...edges.filter((edge) => edge !== point.edge),
-                { from: point.edge.from, to: { instanceId: join.instanceId, port: colourInputs[0].name } },
+        // The splice point nearest the start of the chain that leaves every mixer in the scene —
+        // this one and the ones already placed — reading two independent pictures.
+        const spliced = points
+            .map((point) => [
+                ...edges.filter((edge) => edge !== point),
+                { from: point.from, to: { instanceId: join.instanceId, port: colourInputs[0].name } },
                 { from: branch, to: { instanceId: join.instanceId, port: colourInputs[1].name } },
-                { from: { instanceId: join.instanceId, port: output.name }, to: point.edge.to },
-            ];
+                { from: { instanceId: join.instanceId, port: output.name }, to: point.to },
+            ])
+            .find((proposal) => operandsIndependent(proposal, proposedNodes));
+
+        if (spliced) {
+            edges = spliced;
+            nodes.push(join);
+            nodeIndex.set(join.instanceId, nodeIndex.get(composite.instanceId) ?? nodes.length);
+            occurrences.set(definition.id, occurrence + 1);
             continue;
         }
 
         // Nowhere legal to splice, so the join takes the composite itself and becomes the new one.
         // This is the whole of what the old derivation could do; here it is the fallback for a scene
         // whose chain is a single node.
-        edges = [
+        const appended = [
             ...edges,
             { from: composite, to: { instanceId: join.instanceId, port: colourInputs[0].name } },
             { from: branch, to: { instanceId: join.instanceId, port: colourInputs[1].name } },
         ];
+        if (!operandsIndependent(appended, proposedNodes)) {
+            // The fallback would mix the composite with material already inside it. The branch stays
+            // loose, the scene fails its terminal count, and one of the other candidates is built
+            // instead — cheaper than shipping a doubled operand.
+            byInstance.delete(join.instanceId);
+            continue;
+        }
+
+        edges = appended;
+        nodes.push(join);
+        nodeIndex.set(join.instanceId, nodeIndex.get(composite.instanceId) ?? nodes.length);
+        occurrences.set(definition.id, occurrence + 1);
         composite = { instanceId: join.instanceId, port: output.name };
     }
 
