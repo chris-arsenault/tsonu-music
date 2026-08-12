@@ -19,3 +19,4 @@
 | [0015](0015-visualizer-single-graph-owned-scene-state.md) | Complete scenes own one explicit recursive image state | Amended by [0016](0016-visualizer-canonical-state-with-material-memory.md) | 2026-08-09 |
 | [0016](0016-visualizer-canonical-state-with-material-memory.md) | The canonical state anchors a scene; bounded material memory composes beneath it | Amended by [0017](0017-visualizer-combine-operator-family.md) | 2026-08-10 |
 | [0017](0017-visualizer-combine-operator-family.md) | The scene-state combine is an operator family with a verified energy model | Accepted | 2026-08-10 |
+| [0018](0018-visualizer-branch-placement-over-mixing.md) | A leftover branch becomes an argument; a mixer is what is left when it cannot | Accepted | 2026-08-12 |

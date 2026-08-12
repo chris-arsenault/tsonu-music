@@ -196,6 +196,17 @@ producers for a mixer's two inputs. A flow-field compositor traces through force
 visible material, and derives chromatic ribbons from the same samples. Collision fields additionally
 carry boundary proximity so particles reflect from mask-derived geometry.
 
+A branch the chain does not consume becomes an argument to a stage already in the picture before it
+becomes a layer. Generators declare structural inputs — a shape's edge and interior, a texture's
+domain, a curve's profile — and a leftover branch is offered to the earliest open one, so a
+spectrum can be a polygon's boundary rather than a picture drawn over it. Structural ports pair in
+one direction: a structural output is data and reaches only a structural input, while a structural
+input takes either data or a picture. What placement cannot seat is joined by a mixer spliced into
+an existing edge, so the mixed result still passes through the transforms and the grade that follow
+it; the splice is rejected unless every mixer in the resulting graph reads two pictures with no
+forward colour path between them. The scene's fold-back loop is drawn once, on the graph assembly
+settled on. See [ADR-0018](./adr/0018-visualizer-branch-placement-over-mixing.md).
+
 Every `value`-bound parameter also receives independent, playback-clocked slow modulation across a
 visible fraction of its authored range, clamped to that range. Several layers therefore breathe,
 fold, and drift concurrently while their immediate response remains distributed across different
