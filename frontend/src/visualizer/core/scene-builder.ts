@@ -671,36 +671,79 @@ function buildSceneAttempt(
         effectiveTheme.colorPolicy,
     );
 
-    // A flow scene's state travel must outrun its own memory constant or a one-copy takeover
-    // reads as blur rather than motion (ADR-0017). The warp strength floor rises for the
-    // scene-history warps only — FeedbackFlow strengths are per-frame quantities on another
-    // scale — following the applyColourPolicy precedent of durably reshaping a binding's range
-    // rather than its smoothed-away starting value.
+    // Transport budgeting. Displacement per second times seconds of memory is smear length, and
+    // the escalations that made speed reachable — a composed pair of canonical warps whose
+    // displacements add, widened strength ranges, trail transports at the same range — were each
+    // verified alone and never jointly: their sum diffused every scene into fog ("did you
+    // oversmooth everything into oblivion"). The budget: the canonical CHAIN shares one strength
+    // range (each member scaled by 1/chain-length), trail transports ride at a fraction of it
+    // (accents, not the state transport), and the flow floor applies to the canonical chain only.
     const combineNode = wired.nodes.find((node) => node.definition.temporalCombine !== undefined);
-    if (combineNode?.definition.temporalCombine?.operator === 'flow') {
-        const FLOW_STRENGTH_FLOOR = 0.3;
-        bindings = bindings.map((entry) => {
-            const node = wired.nodes.find((candidate) => candidate.instanceId === entry.instanceId);
-            if (!node?.definition.capabilities.includes('scene-history-warp')) {
-                return entry;
+    const isFlow = combineNode?.definition.temporalCombine?.operator === 'flow';
+    // Canonical = a derived warp whose forward path reaches the combine (directly or through the
+    // rest of the chain). Trail transports are derived and displacing too, but their forward
+    // edges land on material sinks, not the combine.
+    const canonicalWarpIds = new Set<string>();
+    if (combineNode) {
+        let grew = true;
+        while (grew) {
+            grew = false;
+            for (const edge of wired.edges) {
+                if (edge.feedback) continue;
+                const from = wired.nodes.find((n) => n.instanceId === edge.from.instanceId);
+                if (!from?.definition.capabilities.includes(DERIVED_STATE)
+                    || !displacesHistory(from.definition)
+                    || canonicalWarpIds.has(from.instanceId)) continue;
+                // Colour edges only: a trail transport whose MOTION output steers the canonical
+                // field warp is not part of the chain, and sweeping it in handed it the chain's
+                // scaled flow floor — a collapsed [0.1, 0.1] range on a per-frame-scaled plugin,
+                // six frame-widths a second of fog.
+                const sink = wired.nodes.find((n) => n.instanceId === edge.to.instanceId);
+                const sinkPort = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+                if (sinkPort?.type !== 'color-texture') continue;
+                if (edge.to.instanceId === combineNode.instanceId
+                    || canonicalWarpIds.has(edge.to.instanceId)) {
+                    canonicalWarpIds.add(from.instanceId);
+                    grew = true;
+                }
             }
-
-            return {
-                ...entry,
-                bindings: entry.bindings.map((binding) => (
-                    binding.parameter === 'strength' && binding.outputRange[0] >= 0
-                        ? {
-                            ...binding,
-                            outputRange: [
-                                Math.max(binding.outputRange[0], FLOW_STRENGTH_FLOOR),
-                                Math.max(binding.outputRange[1], FLOW_STRENGTH_FLOOR),
-                            ] as [number, number],
-                        }
-                        : binding
-                )),
-            };
-        });
+        }
     }
+    const chainLength = Math.max(1, canonicalWarpIds.size);
+    const FLOW_STRENGTH_FLOOR = 0.3;
+    const TRAIL_STRENGTH_SCALE = 0.35;
+
+    bindings = bindings.map((entry) => {
+        const node = wired.nodes.find((candidate) => candidate.instanceId === entry.instanceId);
+        if (!node
+            || !node.definition.capabilities.includes(DERIVED_STATE)
+            || !displacesHistory(node.definition)) {
+            return entry;
+        }
+        const canonical = canonicalWarpIds.has(entry.instanceId);
+
+        return {
+            ...entry,
+            bindings: entry.bindings.map((binding) => {
+                if (binding.parameter !== 'strength' || binding.outputRange[0] < 0) {
+                    return binding;
+                }
+                let [low, high] = binding.outputRange;
+                if (canonical) {
+                    low /= chainLength;
+                    high /= chainLength;
+                    if (isFlow) {
+                        low = Math.max(low, FLOW_STRENGTH_FLOOR / chainLength);
+                        high = Math.max(high, FLOW_STRENGTH_FLOOR / chainLength);
+                    }
+                } else {
+                    low *= TRAIL_STRENGTH_SCALE;
+                    high *= TRAIL_STRENGTH_SCALE;
+                }
+                return { ...binding, outputRange: [low, high] as [number, number] };
+            }),
+        };
+    });
 
     return {
         ok: true,
