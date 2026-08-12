@@ -54,12 +54,20 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
   the check runs — measured over 318 builds, the smallest image-loop count was two. Counting
   material loops instead would make the flags a statement about the scene's own memory, matching
   `maximumFeedbackLoops`, and would reject the 42% of scenes that currently keep none.
-- Give a scene a reason to keep a figure. Rendered over 16 scenes at four seconds each, six came out
-  as a low-contrast mid-tone field covering the whole frame — mean luminance 0.43 to 0.51 at full
-  coverage, changing every frame with nothing in it to look at. The distinguishing measurement is
-  coverage rather than brightness: a scene with a figure in it holds coverage below one and a
-  luminance around 0.2. Nothing in assembly or in the combine's energy model asks a scene to leave
-  any of the frame empty, so accumulation fills it.
+- Stop the scene state filtering its own contents away. Every pass through the loop resamples the
+  state with bilinear filtering, and the canonical chain resamples twice per frame with the trail
+  transports adding more; material then survives ten to twenty-five seconds, so a picture is
+  filtered several hundred times before it decays. Measured on a grid with no decay and no fresh
+  material, a drift at 0.43 frame-widths per second leaves 2.8% of its detail after one second and
+  0.1% after two. Rendered scenes show the consequence directly: with memory blanked they are sharp
+  and saturated, and with the loop running the same scenes are featureless grey. This is why every
+  attempt to raise the warp speed produced fog and every attempt to reduce it produced a still
+  picture — the trade being made was against filtering, not against smear length. Candidate
+  repairs, in order of how much they promise: compose the canonical chain's transforms and resample
+  once instead of once per stage; snap a translation's per-frame offset to whole texels, which makes
+  bilinear sampling exact and held 85.7% of detail at one second against 2.8%; bound how long
+  material stays in the loop by how long it stays sharp; sharpen inside the loop, which helps but
+  needs a stability bound.
 
 ## Visualizer analysis
 
