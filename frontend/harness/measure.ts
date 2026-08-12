@@ -113,6 +113,16 @@ export interface SceneMeasurement {
      * what turns the period figure from a number into a measurement.
      */
     withoutHistory?: { periods: number; difference: number }[];
+    /**
+     * The memory-blanked render's own frame and exposure.
+     *
+     * A scene that comes out a flat field could be one whose material is already flat, or one whose
+     * loop has diffused a figure into a smear. Those want opposite repairs, and this is what tells
+     * them apart: the same scene drawing the same material with nothing remembered.
+     */
+    withoutHistoryFrame?: string;
+    withoutHistoryLuminance?: number[];
+    withoutHistoryCoverage?: number[];
     /** Brightest cell in each capture. Separates "dim everywhere" from "black with a line in it". */
     peak: number[];
     /** The last captured frame as a PNG data URI, so a run can be looked at rather than inferred. */

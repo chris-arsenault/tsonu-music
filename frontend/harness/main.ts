@@ -35,9 +35,17 @@ async function run(): Promise<void> {
 
             // The same scene without its memory, so the period divergence has something to be
             // compared against. Only worth paying for when the run is measuring path dependence.
+            //
+            // Its frame and exposure are kept too. A scene that arrives as a flat field could be
+            // one whose material is already flat or one whose loop has diffused a figure into a
+            // smear, and those want opposite repairs; the memory-blanked render is the only thing
+            // that tells them apart.
             if (periodSeconds > 0) {
                 const control = measureScene({ ...options, withoutHistory: true });
                 measured.withoutHistory = control.periodDivergence;
+                measured.withoutHistoryFrame = control.lastFrame;
+                measured.withoutHistoryLuminance = control.luminance;
+                measured.withoutHistoryCoverage = control.coverage;
             }
 
             results.push(measured);
