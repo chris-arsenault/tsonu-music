@@ -54,6 +54,12 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
   the check runs — measured over 318 builds, the smallest image-loop count was two. Counting
   material loops instead would make the flags a statement about the scene's own memory, matching
   `maximumFeedbackLoops`, and would reject the 42% of scenes that currently keep none.
+- Give a scene a reason to keep a figure. Rendered over 16 scenes at four seconds each, six came out
+  as a low-contrast mid-tone field covering the whole frame — mean luminance 0.43 to 0.51 at full
+  coverage, changing every frame with nothing in it to look at. The distinguishing measurement is
+  coverage rather than brightness: a scene with a figure in it holds coverage below one and a
+  luminance around 0.2. Nothing in assembly or in the combine's energy model asks a scene to leave
+  any of the frame empty, so accumulation fills it.
 
 ## Visualizer analysis
 
