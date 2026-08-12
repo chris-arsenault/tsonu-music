@@ -48,6 +48,12 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
   weight times how many modes it happens to have: `MaskRouter` at weight one across nine modes
   outweighs `FlowFieldCompositor`'s deliberate five, and `LayerMixer` and `ColorTransform` are
   distorted the same way.
+- Decide what a family's feedback-loop minimum should count. `minimumFeedbackLoops` and
+  `requireSpatialLoop` are checked against every image loop in the finished scene, and the canonical
+  image state supplies a displacing loop unconditionally (ADR-0016), so both are satisfied before
+  the check runs — measured over 318 builds, the smallest image-loop count was two. Counting
+  material loops instead would make the flags a statement about the scene's own memory, matching
+  `maximumFeedbackLoops`, and would reject the 42% of scenes that currently keep none.
 
 ## Visualizer analysis
 

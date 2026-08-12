@@ -562,7 +562,10 @@ function withTrailWarps(
     for (const edge of material.edges) {
         const sink = material.nodes.find((node) => node.instanceId === edge.to.instanceId);
         const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
-        const carriesImage = port !== undefined && isImagePortType(port.type);
+        // Colour, not every image type. A transport reads and writes a picture, so splicing one onto
+        // a loop that closes on a mask input would connect a colour output to a mask port and the
+        // candidate would die in the compiler rather than at the decision that caused it.
+        const carriesImage = port?.type === 'color-texture';
         if (!edge.feedback || !carriesImage) {
             edges.push(edge);
             continue;

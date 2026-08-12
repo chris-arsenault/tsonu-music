@@ -655,6 +655,12 @@ export function isBranchJoiner(definition: VisualPluginDefinition): boolean {
         && colourInputs.length >= 2
         && colourInputs.every((port) => port.required)
         && definition.outputs.some((port) => port.type === 'color-texture')
+        // The scene-state combine has the shape of a mixer — two required colour inputs, one colour
+        // output — and is the graph's memory, not a way to join two branches. Its second input is
+        // last frame's state, so spliced as a join it would be handed a branch where its own history
+        // belongs, and the scene would have two state operators and no state. Only a zero activation
+        // weight kept it out of the draw, which is a coincidence of tuning rather than a rule.
+        && definition.temporalCombine === undefined
         && !ANNIHILATING_MODES.includes(definition.id.split(':')[1] ?? '');
 }
 
