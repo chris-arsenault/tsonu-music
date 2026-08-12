@@ -566,7 +566,7 @@ export function createProceduralTextureSource(
             PERTURB_INPUT,
             // Structural argument: another branch's image bends this pattern's domain, so the
             // input's structure appears in the pattern rather than blended over it.
-            { name: 'warp', type: 'color-texture', required: false },
+            { name: 'warp', type: 'color-texture', required: false, structural: true },
         ],
         outputs: [
             { name: 'color', type: 'color-texture' },
@@ -631,7 +631,7 @@ export function createParametricCurveSource(
         inputs: [
             PERTURB_INPUT,
             // Structural argument: the input sets the stroke weight around the curve.
-            { name: 'profile', type: 'color-texture', required: false },
+            { name: 'profile', type: 'color-texture', required: false, structural: true },
         ],
         outputs: [
             { name: 'color', type: 'color-texture' },
@@ -692,8 +692,8 @@ export function createSdfShapeSource(
             // the input domain-mapped into it. Declared edge-first so the second draws from the
             // unconsumed set. Optional: unwired they read the zero texture and the presence
             // flags gate both branches off.
-            { name: 'edge', type: 'color-texture', required: false },
-            { name: 'interior', type: 'color-texture', required: false },
+            { name: 'edge', type: 'color-texture', required: false, structural: true },
+            { name: 'interior', type: 'color-texture', required: false, structural: true },
         ],
         outputs: [
             { name: 'color', type: 'color-texture' },

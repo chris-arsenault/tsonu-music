@@ -15,7 +15,7 @@ import { peakConcentration } from './audio-mapping';
 import { allDefinitions } from '../plugins/registry';
 import { GEOMETRIC_SIGNAL_THEME, THEMES } from '../plugins/themes';
 import { assetResourceId, wireScene } from './wiring';
-import { displacesHistory, ORGANIC_FLOW, REDUCED_GRAMMAR, SPATIAL_FEEDBACK } from './grammar';
+import { displacesHistory, isDerivedJoin, ORGANIC_FLOW, REDUCED_GRAMMAR, SPATIAL_FEEDBACK } from './grammar';
 import type { PluginCategory, PortType, VisualPluginDefinition } from './plugin';
 
 const FULL_CATALOG = allDefinitions();
@@ -32,6 +32,16 @@ function context(overrides: Partial<SceneBuildContext> = {}): SceneBuildContext 
 }
 
 const FULL = profileFor(0);
+
+/** What the host actually supplies: artwork, a stencil, and a device that can hold float textures. */
+const richContext = context({
+    assets: ['album-art', 'album-art:current', 'mask', 'mask:inkblot'],
+    capabilities: ['float-textures', 'webgl2'],
+    assetResources: [
+        { resource: assetResourceId('album-art:current'), type: 'color-texture' },
+        { resource: assetResourceId('mask:inkblot'), type: 'mask-texture' },
+    ],
+});
 
 describe('scene building', () => {
     test('builds a compilable connected scene from the full catalog', () => {
@@ -136,15 +146,6 @@ describe('scene building', () => {
     });
 
     test('every visual family builds a connected composition with explicit interaction', () => {
-        const richContext = context({
-            assets: ['album-art', 'album-art:current', 'mask', 'mask:inkblot'],
-            capabilities: ['float-textures', 'webgl2'],
-            assetResources: [
-                { resource: assetResourceId('album-art:current'), type: 'color-texture' },
-                { resource: assetResourceId('mask:inkblot'), type: 'mask-texture' },
-            ],
-        });
-
         // Several entropies per family rather than one. A single seed made this a statement about
         // that seed: assembly draws thirty-two candidates and a family whose sources mostly publish
         // palettes and masks rather than colour — image dream — fails a small share of seeds on the
@@ -234,6 +235,116 @@ describe('scene building', () => {
                 ?? combine.definition.temporalCombine!.output;
             expect(result.scene.graph.present, seed)
                 .toBe(result.scene.graph.state!.stateResource.replace(/\.[^.]+$/, `.${presentPort}`));
+        }
+    });
+
+    test('no derived join reads a branch that is already inside its other operand', () => {
+        // The gain chain behind the black-with-white-flashes scene. A join whose two inputs share
+        // material adds a picture to itself: two in series multiply a bright figure by four, the
+        // tone map clamps the rest, and the scene reads as flashes on black. It happened because a
+        // join was appended to the plugin list and re-wired, so its operands came from the same
+        // newest-and-unconsumed search as everything else and, once the unread outputs ran out,
+        // resolved to one branch twice. Measured before the mixers became splices: 306 of 850 joins
+        // across 240 builds, in 72% of scenes.
+        for (const theme of THEMES) {
+            for (let index = 0; index < 8; index += 1) {
+                const result = buildScene(`self-mix-${theme.id}-${index}`, theme, richContext, FULL);
+                if (!result.ok) continue;
+                const scene = result.scene.wired;
+
+                const feeds = (instanceId: string): Set<string> => {
+                    const seen = new Set<string>();
+                    const stack = [instanceId];
+                    while (stack.length > 0) {
+                        const current = stack.pop()!;
+                        for (const edge of scene.edges) {
+                            if (edge.feedback || edge.from.instanceId !== current) continue;
+                            if (seen.has(edge.to.instanceId)) continue;
+                            seen.add(edge.to.instanceId);
+                            stack.push(edge.to.instanceId);
+                        }
+                    }
+                    return seen;
+                };
+
+                for (const join of scene.nodes.filter((node) => isDerivedJoin(node.definition))) {
+                    const operands = scene.edges.filter((edge) =>
+                        !edge.feedback
+                        && edge.to.instanceId === join.instanceId
+                        && join.definition.inputs
+                            .find((input) => input.name === edge.to.port)?.type === 'color-texture');
+
+                    for (const operand of operands) {
+                        for (const other of operands) {
+                            if (operand === other) continue;
+                            expect(
+                                operand.from.instanceId === other.from.instanceId
+                                    || feeds(other.from.instanceId).has(operand.from.instanceId),
+                                `${theme.id}-${index} ${join.instanceId}: `
+                                + `${other.from.instanceId} + ${operand.from.instanceId}`,
+                            ).toBe(false);
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    test('a leftover branch becomes an argument where an input is open', () => {
+        // The composition the whole rebuild is for: given branches f, g and h, the scene should read
+        // as f(g(h())) rather than f() + g() + h(). A branch nothing consumes is offered to an open
+        // structural input — a generator's edge, interior, domain or profile — before any mixer is
+        // considered, so one branch's picture becomes another's geometry.
+        let nested = 0;
+        let built = 0;
+        for (const theme of THEMES) {
+            for (let index = 0; index < 10; index += 1) {
+                const result = buildScene(`nesting-${theme.id}-${index}`, theme, richContext, FULL);
+                if (!result.ok) continue;
+                built += 1;
+                const scene = result.scene.wired;
+                const byInstance = new Map(scene.nodes.map((node) => [node.instanceId, node]));
+                const structural = scene.edges.some((edge) => {
+                    if (edge.feedback) return false;
+                    const sink = byInstance.get(edge.to.instanceId);
+                    return sink?.definition.inputs
+                        .find((input) => input.name === edge.to.port)?.structural === true;
+                });
+                if (structural) nested += 1;
+            }
+        }
+
+        expect(built).toBeGreaterThan(0);
+        expect(nested / built).toBeGreaterThan(0.25);
+    });
+
+    test('a structural output reaches only a structural input', () => {
+        // The spectrum's band strip is data: one bar per bin, meaningful as another generator's edge
+        // or profile and meaningless composited over the picture. Wiring offered it to whatever
+        // colour input came next, so a mixer drew 64 bars across the frame — the same defect the
+        // strip exists to fix, arriving through the wiring instead of the join.
+        for (const theme of THEMES) {
+            for (let index = 0; index < 6; index += 1) {
+                const result = buildScene(`strip-${theme.id}-${index}`, theme, richContext, FULL);
+                if (!result.ok) continue;
+                const scene = result.scene.wired;
+                const byInstance = new Map(scene.nodes.map((node) => [node.instanceId, node]));
+
+                for (const edge of scene.edges) {
+                    const producer = byInstance.get(edge.from.instanceId);
+                    const output = producer?.definition.outputs
+                        .find((port) => port.name === edge.from.port);
+                    if (!output?.structural) continue;
+
+                    const sink = byInstance.get(edge.to.instanceId);
+                    const input = sink?.definition.inputs.find((port) => port.name === edge.to.port);
+                    expect(
+                        input?.structural,
+                        `${theme.id}-${index}: ${edge.from.instanceId}.${edge.from.port}`
+                        + ` -> ${edge.to.instanceId}.${edge.to.port}`,
+                    ).toBe(true);
+                }
+            }
         }
     });
 

@@ -101,10 +101,20 @@ export interface PluginPort {
      */
     internal?: boolean;
     /**
-     * A data output offered to structural inputs, never presentable material: wiring may feed it
-     * to consumers but the join machinery must not absorb it as a branch, and it is not a
-     * terminal. The spectrum's band strip is the archetype — one bar per bin, meaningful as
-     * another generator's edge or profile argument, meaningless composited over the picture.
+     * On an output: data, never presentable material. Wiring may feed it to a structural input, the
+     * join machinery must not absorb it as a branch, and it is not a terminal. The spectrum's band
+     * strip is the archetype — one bar per bin, meaningful as another generator's edge or profile
+     * argument, meaningless composited over the picture.
+     *
+     * On an input: an argument to what this plugin makes, rather than material it processes. Where
+     * an ordinary image input is a picture the plugin transforms, a structural input is read as
+     * geometry — a boundary displacement, a stroke weight, a domain bend — so a data strip is
+     * exactly what belongs there and a picture is welcome too.
+     *
+     * The pairing is one-directional and both halves matter. Without the input flag, wiring offered
+     * the band strip to any colour input that happened to be next, and a mixer composited 64 bars
+     * over the picture; without the output flag, a join absorbed the strip as though it were a
+     * branch.
      */
     structural?: boolean;
     /**

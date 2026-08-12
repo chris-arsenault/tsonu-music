@@ -437,7 +437,7 @@ export function wireScene(
     const assetBindings: WiredScene['assetBindings'] = [];
     const unsatisfied: WiredScene['unsatisfied'] = [];
     /** Most recent producer per port type, freshest last. */
-    const producers = new Map<string, { instanceId: string; port: string }[]>();
+    const producers = new Map<string, ProducerRef[]>();
     /** Outputs registered but not yet read by anything, so later inputs can fold them into the chain. */
     const unconsumed = new Set<string>();
 
@@ -550,7 +550,7 @@ export function wireScene(
             }
 
             const existing = producers.get(port.type) ?? [];
-            existing.push({ instanceId: node.instanceId, port: port.name });
+            existing.push({ instanceId: node.instanceId, port: port.name, structural: port.structural });
             producers.set(port.type, existing);
             unconsumed.add(`${node.instanceId}.${port.name}`);
         }
@@ -714,8 +714,28 @@ function satisfiedBy(
     return false;
 }
 
+/** A registered output, with the one property of it wiring has to respect beyond its type. */
+interface ProducerRef {
+    instanceId: string;
+    port: string;
+    /** Data rather than material: only a structural input may read it. See `PluginPort.structural`. */
+    structural?: boolean;
+}
+
+/**
+ * Whether this output is allowed to satisfy this input at all, type compatibility aside.
+ *
+ * A structural output is an argument, not a picture. Offered to an ordinary colour input it becomes
+ * material the scene composites: the spectrum's band strip reached a mixer in 3 of every 100 built
+ * scenes and was drawn as 64 bars across the frame — the same defect the strip was added to fix,
+ * arriving through the wiring rather than through the join.
+ */
+function producerSuits(producer: ProducerRef, port: PluginPort): boolean {
+    return !producer.structural || port.structural === true;
+}
+
 function findProducer(
-    producers: Map<string, { instanceId: string; port: string }[]>,
+    producers: Map<string, ProducerRef[]>,
     port: PluginPort,
     excluded: ReadonlySet<string> = new Set(),
     /**
@@ -745,7 +765,8 @@ function findProducer(
     if (exact && exact.length > 0) {
         for (let index = exact.length - 1; index >= 0; index -= 1) {
             const candidate = exact[index];
-            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)) {
+            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)
+                && producerSuits(candidate, port)) {
                 return candidate;
             }
         }
@@ -759,7 +780,8 @@ function findProducer(
 
         for (let index = candidates.length - 1; index >= 0; index -= 1) {
             const candidate = candidates[index];
-            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)) {
+            if (!excluded.has(`${candidate.instanceId}.${candidate.port}`)
+                && producerSuits(candidate, port)) {
                 return candidate;
             }
         }
@@ -770,16 +792,16 @@ function findProducer(
 
 /** The same search as `findProducer`, restricted to a set of candidate outputs. */
 function findProducerIn(
-    producers: Map<string, { instanceId: string; port: string }[]>,
+    producers: Map<string, ProducerRef[]>,
     port: PluginPort,
     excluded: ReadonlySet<string>,
     allowed: ReadonlySet<string>,
 ): { instanceId: string; port: string } | undefined {
-    const search = (candidates: readonly { instanceId: string; port: string }[]) => {
+    const search = (candidates: readonly ProducerRef[]) => {
         for (let index = candidates.length - 1; index >= 0; index -= 1) {
             const candidate = candidates[index];
             const key = `${candidate.instanceId}.${candidate.port}`;
-            if (allowed.has(key) && !excluded.has(key)) {
+            if (allowed.has(key) && !excluded.has(key) && producerSuits(candidate, port)) {
                 return candidate;
             }
         }

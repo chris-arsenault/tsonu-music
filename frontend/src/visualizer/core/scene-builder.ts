@@ -13,6 +13,7 @@ import {
     DERIVED_STATE,
     displacesHistory,
     grammarViolations,
+    isDerivedJoin,
     REDUCED_GRAMMAR,
     SPATIAL_FEEDBACK,
     type GrammarViolation,
@@ -21,7 +22,7 @@ import {
 import { isMotionSource } from './fields';
 import type { QualityProfile } from './performance';
 import type { VisualPluginDefinition } from './plugin';
-import { createRng, type Rng } from './random';
+import { createRng } from './random';
 import { assembleScene, type SchedulerContext, type VisualTheme } from './scheduler';
 import {
     closeSceneLoop,
@@ -257,86 +258,85 @@ export function settleScene(
         };
     }
 
-    // Joining and pruning are each other's input, so they run together until neither changes anything.
+    // Assembly is now one pass over the graph, repeated only when the prune removes a plugin.
     //
-    // Joining first was already necessary: contribution is defined by what reaches a terminal, so a
-    // plugin feeding a branch about to be absorbed reads as contributing to nothing if the join has
-    // not happened yet, and the prune takes the field count with it. The reverse is just as true and
-    // was not handled — pruning rewires, rewiring can split the branches back apart, and the join
-    // count was computed for a graph that no longer exists. `widen-2` on collision-energy arrived at
-    // the structural check with two unjoined terminals for exactly that reason.
+    // Placement and joining are functions of the wired graph: they add edges and nodes to what
+    // wiring produced instead of adding definitions to the plugin list for wiring to re-derive. That
+    // is what makes the round monotone. The old shape ran wiring, joining, wiring, pruning, wiring —
+    // each stage re-deriving what the last had decided, from a plugin list the next stage changed
+    // again. Nothing here can add a plugin, so the loop terminates on the prune alone.
     //
-    // The prune within a round repeats too, because dropping one plugin can strand the plugin that
-    // fed it. `unreachableInstances` had already learned this at render time.
+    // The prune still runs after joining, because contribution is defined by what reaches the
+    // presented image: an unjoined branch is a terminal of its own, so every plugin feeding it reads
+    // as contributing whether or not anything will ever look at it.
     for (let round = 0; round < ASSEMBLY_ROUNDS; round += 1) {
-        const joined = withJoiningCompositors(
-            plugins,
-            wired,
-            schedulerContext,
-            createRng(`${entropy}:join`),
-        );
-
-        if (joined.length !== plugins.length) {
-            plugins = joined;
-            wired = rewire();
-        }
+        // Leftover branches become arguments to stages already in the picture where an input is
+        // open, and mixers where none is.
+        let composed = placeBranches(wired, entropy);
+        composed = spliceJoins(composed, entropy, schedulerContext);
 
         // Category counts alone are not enough: an optional field can be selected without anything
-        // ever reading it. Keep only plugins that contribute to a terminal colour layer, then
-        // re-check the grammar so an allegedly full scene cannot spend passes on disconnected
-        // decoration. Compared against the number of distinct definitions in the scene, not the
-        // number of nodes: `contributingPluginIds` returns definition ids, so two instances of one
-        // definition made the set smaller than the node count on their own.
-        let pruned = false;
-        for (let pass = 0; pass < plugins.length; pass += 1) {
-            // A drawn loop that displaced a forward edge leaves the displaced producer as a second
-            // terminal. That is material for the next round's join to absorb, not a failure —
-            // treating it as fatal here is what made closing a loop on any forward-fed port
-            // impossible, and the forward-fed ports include `LayerMixer.source`, the one port whose
-            // gain was designed to carry the composed-image loop. The candidate still fails if the
-            // rounds run out with the scene unconverged.
-            if (unabsorbedOutputs(wired).length !== 1) {
-                pruned = true;
-                break;
-            }
-
-            const stateful = withCanonicalState(wired, entropy, schedulerContext.available);
-            if (!stateful) {
-                return {
-                    ok: false,
-                    failure: { reason: 'compile', detail: 'canonical scene-state nodes are unavailable' },
-                };
-            }
-            const contributing = contributingPluginIds(stateful);
-            const disconnected = wired.nodes
-                .map((node) => node.definition.id)
-                .filter((definitionId) => !contributing.has(definitionId));
-            if (disconnected.length === 0) {
-                break;
-            }
-
-            plugins = plugins.filter((definition) => contributing.has(definition.id));
-            const violations = grammarViolations(plugins, theme.grammar);
-            if (violations.length > 0) {
-                return {
-                    ok: false,
-                    failure: {
-                        reason: 'grammar',
-                        detail: `connected graph: ${violations.map((violation) => violation.detail).join('; ')}`,
-                    },
-                };
-            }
-
-            // The same draw, so a prune does not silently move every loop in the scene.
-            wired = rewire();
-            pruned = true;
+        // ever reading it. Keep only plugins that contribute to the presented image, then re-check
+        // the grammar so an allegedly full scene cannot spend passes on disconnected decoration.
+        if (unabsorbedOutputs(composed).length !== 1) {
+            // Nothing left to try: joining ran out of eligible mixers or splice points, so the scene
+            // would arrive at the composite in pieces. Another candidate is the answer.
+            break;
         }
 
-        // A round that pruned nothing leaves its own join valid, so there is nothing to re-derive and
-        // the usual scene costs exactly what it did before this loop existed: one join, one wiring,
-        // one contribution check. Only a scene that lost a plugin pays for a second round.
-        if (!pruned) {
+        const stateful = withCanonicalState(composed, entropy, schedulerContext.available);
+        if (!stateful) {
+            return {
+                ok: false,
+                failure: { reason: 'compile', detail: 'the catalog has no scene-state operators' },
+            };
+        }
+
+        const contributing = contributingInstanceIds(stateful);
+        const disconnected = composed.nodes.filter((node) => !contributing.has(node.instanceId));
+        if (disconnected.length === 0) {
+            wired = composed;
             break;
+        }
+
+        // Instances, counted back to definitions. Two instances of one definition where only one
+        // contributes leaves one copy in the list, and wiring decides afresh which of them survives.
+        // Derived nodes are not counted: they are spliced onto the graph rather than drawn from the
+        // plugin list, so a contributing mixer of the builder's own making would otherwise vouch for
+        // a disconnected one the scheduler chose.
+        const keep = new Map<string, number>();
+        for (const node of composed.nodes) {
+            if (contributing.has(node.instanceId)
+                && !isDerivedJoin(node.definition)
+                && !node.definition.capabilities.includes(DERIVED_STATE)) {
+                keep.set(node.definition.id, (keep.get(node.definition.id) ?? 0) + 1);
+            }
+        }
+        plugins = plugins.filter((definition) => {
+            const remaining = keep.get(definition.id) ?? 0;
+            if (remaining <= 0) {
+                return false;
+            }
+            keep.set(definition.id, remaining - 1);
+            return true;
+        });
+
+        const violations = grammarViolations(plugins, theme.grammar);
+        if (violations.length > 0) {
+            return {
+                ok: false,
+                failure: {
+                    reason: 'grammar',
+                    detail: `connected graph: ${violations.map((violation) => violation.detail).join('; ')}`,
+                },
+            };
+        }
+
+        wired = rewire();
+        if (round === ASSEMBLY_ROUNDS - 1) {
+            // Out of rounds with the scene still shedding plugins. Compose what is left so the
+            // structural check below judges a finished graph rather than a bare chain.
+            wired = spliceJoins(placeBranches(wired, entropy), entropy, schedulerContext);
         }
     }
 
@@ -346,12 +346,16 @@ export function settleScene(
     // Run inside the rounds above it re-drew the loop each time the joins or the prune changed the
     // set, and the rounds were chasing a fixpoint that moved underneath them — which is why a fix
     // to any one round could not converge, and why 155 of 200 builds had to discard their first
-    // candidate. Drawn here it sees the graph the scene actually ships.
+    // candidate. Drawn here it sees the graph the scene actually ships, joins included, so a branch
+    // it displaces is one the joins have already placed.
     wired = closeSceneLoop(
         wired,
         createRng(`${entropy}:loops`),
         theme.grammar.maximumFeedbackLoops,
+        true,
     );
+    // A draw that displaced a forward edge left its producer loose; the same splice places it again.
+    wired = spliceJoins(wired, `${entropy}:after-loop`, schedulerContext);
 
     // Every material previous-frame read drifts (ADR-0016): spliced after the graph settles so
     // the join and prune rounds reason about the material alone, and before the canonical state
@@ -387,6 +391,113 @@ export function settleScene(
     }
 
     return { ok: true, plugins, wired, graph: compiled.graph };
+}
+
+/**
+ * Feeds each leftover branch into an input something already reads, before any mixer is considered.
+ *
+ * A branch nothing consumes has two possible fates. It can become an argument to a stage that is
+ * already in the picture — a spectrum becoming a polygon's edge, a curve becoming a texture's
+ * domain, a trace becoming a stencil — or it can be pasted onto the finished image by a mixer the
+ * builder adds for the purpose. Only the first composes: `f(g())` puts one branch inside the other's
+ * geometry, where a mixer can only put `f() + g()` side by side and hope the eye reads a relation.
+ *
+ * The builder had only the second, so every leftover branch cost a mixer and every mixer added a
+ * layer of pixel arithmetic on top of the picture. Placement runs first and the joins take what is
+ * left, which is how the same scenes arrive with fewer mixers and more interaction.
+ *
+ * A generator's input is preferred over a later stage's, since that is where an argument changes
+ * what gets *made* rather than what has already been made; earlier targets are weighted above later
+ * ones for the same reason, so a placed branch passes through as much of the chain as possible. A
+ * target the branch can already reach is refused: that edge would be a cycle, and where a scene
+ * remembers is the loop draw's decision, not a side effect of tidying up branches.
+ */
+function placeBranches(
+    scene: WiredScene,
+    entropy: string,
+): WiredScene {
+    const terminals = unabsorbedOutputs(scene);
+    if (terminals.length <= 1) {
+        return scene;
+    }
+
+    const nodeIndex = new Map(scene.nodes.map((node, index) => [node.instanceId, index]));
+
+    // The composite is whichever terminal sits latest in the chain; the rest are the branches to
+    // place. Keeping the latest means placement never reroutes the presentation tail into a
+    // generator halfway up the scene.
+    const ordered = [...terminals].sort((left, right) =>
+        (nodeIndex.get(left.instanceId) ?? 0) - (nodeIndex.get(right.instanceId) ?? 0));
+    const branches = ordered.slice(0, -1);
+
+    const edges = [...scene.edges];
+    // A port reading its own previous frame is occupied, feedback or not: the trail transport spliced
+    // in later turns that read into a forward edge of its own, and a placement sharing the port
+    // arrives at the compiler as two connections to an input that accepts one.
+    const fed = new Set([
+        ...edges.map((edge) => `${edge.to.instanceId}.${edge.to.port}`),
+        ...scene.assetBindings.map((binding) => `${binding.instanceId}.${binding.port}`),
+    ]);
+
+    /** Instances reachable from a node by forward edges, so a placement cannot close a cycle. */
+    const reaches = (instanceId: string): Set<string> => {
+        const seen = new Set<string>();
+        const stack = [instanceId];
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            for (const edge of edges) {
+                if (edge.feedback || edge.from.instanceId !== current || seen.has(edge.to.instanceId)) {
+                    continue;
+                }
+                seen.add(edge.to.instanceId);
+                stack.push(edge.to.instanceId);
+            }
+        }
+        return seen;
+    };
+
+    const rng = createRng(`${entropy}:branch-placement`);
+    const placed: { instanceId: string; port: string }[] = [];
+
+    for (const branch of branches) {
+        const downstream = reaches(branch.instanceId);
+        const openings = scene.nodes.flatMap((node) => node.definition.inputs
+            .filter((input) =>
+                input.type === 'color-texture'
+                && !input.required
+                && !input.fromAsset
+                && !fed.has(`${node.instanceId}.${input.name}`)
+                && node.instanceId !== branch.instanceId
+                && !downstream.has(node.instanceId))
+            .map((input) => ({ node, input })));
+        if (openings.length === 0) {
+            continue;
+        }
+
+        const generators = openings.filter((opening) => opening.node.definition.category === 'source');
+        const tier = generators.length > 0 ? generators : openings;
+        const depth = scene.nodes.length;
+        const opening = rng.weighted(tier, (candidate) =>
+            depth - (nodeIndex.get(candidate.node.instanceId) ?? 0)) ?? tier[0];
+
+        edges.push({
+            from: branch,
+            to: { instanceId: opening.node.instanceId, port: opening.input.name },
+        });
+        fed.add(`${opening.node.instanceId}.${opening.input.name}`);
+        placed.push(branch);
+    }
+
+    if (placed.length === 0) {
+        return scene;
+    }
+
+    // The node list keeps the order wiring gave it. A placement can point an edge backwards through
+    // it — a generator taking an argument from a stage declared after it — and execution order is
+    // derived from the edges rather than from the list, so the compiler sorts it out. What reads the
+    // list is "later in the chain" for the loop draw and the presented output, and there the wiring
+    // order is the answer that was wanted: the composite is still the tail of the chain.
+    return { ...scene, edges };
 }
 
 /**
@@ -779,57 +890,160 @@ function buildSceneAttempt(
 }
 
 /**
- * Adds one branch-joining compositor per unabsorbed colour output beyond the first.
+ * Splices a mixer into the chain for each branch placement could not find an input for.
  *
  * Joining N branches into one takes N-1 two-input mixers, and nothing was doing that arithmetic: the
  * grammar drew a compositor count from a range and whatever did not fit was left for the layer stack
  * to sum. The count is derived here instead, from what the wiring actually left over.
  *
- * The joiners are drawn from the catalog by the same interaction weight the scheduler uses, so a
- * scene's joins are as characterful as the rest of its choices rather than always the same mixer. A
- * scene with nothing eligible is left as it was, and `structuralViolations` rejects it — which is the
- * honest outcome for a catalog that cannot join what the grammar asked it to draw.
+ * The mixer is spliced into an edge rather than appended to the plugin list. Appended, it went back
+ * through wiring, and wiring answered "which two outputs does this mixer read" with the same
+ * newest-and-unconsumed search it uses for everything else — which, once the unconsumed outputs ran
+ * out, handed the mixer two views of one branch. Measured over 240 builds, 36% of derived joins read
+ * a branch together with its own ancestor. Two mixers of that kind in series multiply a bright figure
+ * by four and the tone map clamps the rest, which is the scene that came back black with white
+ * flashes.
+ *
+ * Spliced, the two operands are the edge's own producer and the leftover branch, and the branch is a
+ * terminal — nothing reads it — so it can be neither an ancestor nor a descendant of the chain it
+ * joins as long as the splice point cannot reach it, which is the one condition checked below. A
+ * scene with nothing eligible is left as it was, and `structuralViolations` rejects it — the honest
+ * outcome for a catalog that cannot join what the grammar asked it to draw.
+ *
+ * The earliest legal splice point is favoured, so an absorbed branch passes through the transforms,
+ * the grade and the palette rather than being pasted onto the finished picture.
  */
-function withJoiningCompositors(
-    plugins: readonly VisualPluginDefinition[],
-    wired: WiredScene,
+function spliceJoins(
+    scene: WiredScene,
+    entropy: string,
     context: SchedulerContext,
-    rng: Rng,
-): VisualPluginDefinition[] {
-    const needed = unabsorbedOutputs(wired).length - 1;
-    if (needed <= 0) {
-        return [...plugins];
+): WiredScene {
+    const terminals = unabsorbedOutputs(scene);
+    if (terminals.length <= 1) {
+        return scene;
     }
 
     const eligible = context.available.filter((definition) =>
         isBranchJoiner(definition)
+        && definition.inputs.every((input) => !input.required || input.type === 'color-texture')
         && !(context.theme.excludedPlugins ?? []).includes(definition.id));
-
     if (eligible.length === 0) {
-        return [...plugins];
+        return scene;
     }
 
+    const nodeIndex = new Map(scene.nodes.map((node, index) => [node.instanceId, index]));
+    const byInstance = new Map(scene.nodes.map((node) => [node.instanceId, node]));
+    const occurrences = new Map<string, number>();
+    for (const node of scene.nodes) {
+        occurrences.set(node.definition.id, (occurrences.get(node.definition.id) ?? 0) + 1);
+    }
+
+    const nodes = [...scene.nodes];
+    let edges = [...scene.edges];
+
+    const reaches = (instanceId: string): Set<string> => {
+        const seen = new Set<string>();
+        const stack = [instanceId];
+        while (stack.length > 0) {
+            const current = stack.pop()!;
+            for (const edge of edges) {
+                if (edge.feedback || edge.from.instanceId !== current || seen.has(edge.to.instanceId)) {
+                    continue;
+                }
+                seen.add(edge.to.instanceId);
+                stack.push(edge.to.instanceId);
+            }
+        }
+        return seen;
+    };
+
+    const ordered = [...terminals].sort((left, right) =>
+        (nodeIndex.get(left.instanceId) ?? 0) - (nodeIndex.get(right.instanceId) ?? 0));
+    let composite = ordered[ordered.length - 1];
     // Bounded so a pathological candidate cannot turn into a scene of mixers. A candidate needing
     // more joins than this is left unconverged and rejected by `structuralViolations`, and another of
     // the thirty-two is tried — which is the right shape: assembly settles on scenes it can actually
     // join rather than paying a pass per leftover branch.
-    const limit = Math.min(needed, MAXIMUM_DERIVED_JOINS);
+    const branches = ordered.slice(0, -1).slice(0, MAXIMUM_DERIVED_JOINS);
 
-    const added: VisualPluginDefinition[] = [];
-    for (let index = 0; index < limit; index += 1) {
-        // Weighted rather than uniform, and drawn fresh each time, so a scene needing three joins can
-        // use three different operators. Repeats are allowed: two mixers of one mode joining different
-        // pairs of branches is a legitimate composition, not a duplicate.
+    const rng = createRng(`${entropy}:join`);
+
+    for (const branch of branches) {
+        // Where the branch enters. A forward colour edge that neither reaches the branch nor is
+        // reached by it: the first would make the splice a cycle, since the mixer's output feeds the
+        // edge's sink, and the second would put the branch on both of the mixer's inputs — the same
+        // material added to itself, which is the gain chain this rebuild exists to remove. Earliest
+        // first, so the mixed result still has the chain's remaining stages to pass through.
+        const fromBranch = reaches(branch.instanceId);
+        const points = edges
+            .map((edge, index) => ({ edge, index }))
+            .filter(({ edge }) => {
+                if (edge.feedback) {
+                    return false;
+                }
+                const sink = byInstance.get(edge.to.instanceId);
+                const port = sink?.definition.inputs.find((input) => input.name === edge.to.port);
+                if (port?.type !== 'color-texture' || port.structural) {
+                    return false;
+                }
+                if (edge.from.instanceId === branch.instanceId
+                    || fromBranch.has(edge.from.instanceId)) {
+                    return false;
+                }
+                return !reaches(edge.from.instanceId).has(branch.instanceId);
+            })
+            .sort((left, right) =>
+                (nodeIndex.get(left.edge.to.instanceId) ?? 0) - (nodeIndex.get(right.edge.to.instanceId) ?? 0));
+
+        const point = points[0];
+        if (!point && fromBranch.has(composite.instanceId)) {
+            // Nowhere to splice and the fallback would mix the composite with material already
+            // inside it. The branch stays loose, the scene fails its terminal count, and one of the
+            // other candidates is built instead — cheaper than shipping a doubled operand.
+            continue;
+        }
+
+        // Weighted rather than uniform, and drawn fresh for each branch, so a scene needing three
+        // joins can use three different operators. Repeats are allowed: two mixers of one mode
+        // joining different pairs of branches is a composition, not a duplicate.
         const drawn = rng.weighted(eligible, (definition) => definition.activationRules.activationWeight)
             ?? eligible[0];
-
-        added.push({
+        const definition: VisualPluginDefinition = {
             ...drawn,
             capabilities: [...drawn.capabilities, DERIVED_JOIN],
-        });
+        };
+        const occurrence = occurrences.get(definition.id) ?? 0;
+        occurrences.set(definition.id, occurrence + 1);
+        const join: GraphNode = { instanceId: instanceIdFor(definition, occurrence), definition };
+        const colourInputs = definition.inputs.filter((input) => input.type === 'color-texture');
+        const output = definition.outputs.find((port) => port.type === 'color-texture')!;
+
+        nodes.push(join);
+        nodeIndex.set(join.instanceId, nodeIndex.get(composite.instanceId) ?? nodes.length);
+        byInstance.set(join.instanceId, join);
+
+        if (point) {
+            edges = [
+                ...edges.filter((edge) => edge !== point.edge),
+                { from: point.edge.from, to: { instanceId: join.instanceId, port: colourInputs[0].name } },
+                { from: branch, to: { instanceId: join.instanceId, port: colourInputs[1].name } },
+                { from: { instanceId: join.instanceId, port: output.name }, to: point.edge.to },
+            ];
+            continue;
+        }
+
+        // Nowhere legal to splice, so the join takes the composite itself and becomes the new one.
+        // This is the whole of what the old derivation could do; here it is the fallback for a scene
+        // whose chain is a single node.
+        edges = [
+            ...edges,
+            { from: composite, to: { instanceId: join.instanceId, port: colourInputs[0].name } },
+            { from: branch, to: { instanceId: join.instanceId, port: colourInputs[1].name } },
+        ];
+        composite = { instanceId: join.instanceId, port: output.name };
     }
 
-    return [...plugins, ...added];
+    return { ...scene, nodes, edges };
 }
 
 /**
@@ -1029,6 +1243,24 @@ export function materialBranchCount(scene: WiredScene): number {
  * contribution by colour paths alone would prune exactly the fields that move the picture.
  */
 export function contributingPluginIds(scene: WiredScene): Set<string> {
+    const instances = contributingInstanceIds(scene);
+
+    return new Set(
+        scene.nodes
+            .filter((node) => instances.has(node.instanceId))
+            .map((node) => node.definition.id),
+    );
+}
+
+/**
+ * The same question asked of instances, which is the grain the prune has to act on.
+ *
+ * Answered as definition ids, a scene holding two warps of one mode where only one is connected
+ * reported that definition as contributing and kept both, or — once the connected one was the second
+ * instance — reported neither and dropped the pair. The definitions are what the plugin list holds,
+ * so the prune counts these back into it rather than testing membership.
+ */
+export function contributingInstanceIds(scene: WiredScene): Set<string> {
     const forwardConsumed = new Set(
         scene.edges
             .filter((edge) => !edge.feedback)
@@ -1066,11 +1298,7 @@ export function contributingPluginIds(scene: WiredScene): Set<string> {
         }
     }
 
-    return new Set(
-        scene.nodes
-            .filter((node) => contributingInstances.has(node.instanceId))
-            .map((node) => node.definition.id),
-    );
+    return contributingInstances;
 }
 
 /**

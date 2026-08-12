@@ -31,6 +31,8 @@ export interface SimpleShaderPlugin {
         required: boolean;
         sampler?: string;
         multiple?: boolean;
+        /** An argument to what this plugin makes, not material it processes. See `PluginPort`. */
+        structural?: boolean;
         /** Parameter scaling this input's contribution, for the loop-gain check (ADR-0013). */
         gainParameter?: string;
     }[];
@@ -126,6 +128,7 @@ export function defineShaderPlugin(spec: SimpleShaderPlugin): VisualPluginDefini
             type: input.type,
             required: input.required,
             multiple: input.multiple,
+            structural: input.structural,
             gainParameter: input.gainParameter,
         })),
         outputs: spec.outputs.map((output): PluginPort => ({
