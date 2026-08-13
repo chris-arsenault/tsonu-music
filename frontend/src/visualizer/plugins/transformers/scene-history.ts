@@ -9,6 +9,7 @@
 import { DERIVED_STATE, SPATIAL_FEEDBACK } from '../../core/grammar';
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import { previousTexture, type RenderPass } from '../../core/passes';
+import { GLSL_RESAMPLE } from '../define';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
 
 export const SCENE_HISTORY_MODES = ['zoom', 'rotate', 'drift', 'spiral', 'field'] as const;
@@ -34,6 +35,7 @@ uniform vec2 uDrift;
  */
 uniform vec2 uCentre;
 uniform float uDelta;
+${GLSL_RESAMPLE}
 
 vec2 rotateAroundCentre(vec2 uv, float angle) {
     vec2 p = uv - uCentre;
@@ -61,7 +63,9 @@ void main() {
         source = vUv - field * stepSize;
     }
 
-    fragColor = texture(uSource, clamp(source, 0.0, 1.0));
+    // Unfiltered. This read happens every frame for as long as the state survives, so a bilinear
+    // tap here is a blur kernel applied hundreds of times over — see the resample helper.
+    fragColor = resample(uSource, source);
 }`;
 
 export function createSceneHistoryWarp(mode: SceneHistoryMode): VisualPluginDefinition {

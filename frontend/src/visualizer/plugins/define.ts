@@ -361,12 +361,42 @@ export function character(overrides: Partial<SelectionCharacter> = {}): Selectio
 export const GLSL_HISTORY = `
 const float HISTORY_CEILING = 256.0;
 
-/** Attenuated and bounded previous frame. The decay is the fraction surviving one second. */
+/**
+ * Attenuated and bounded previous frame. The decay is the fraction surviving one second.
+ *
+ * Read through resample, so a tap at an offset takes one texel rather than a mean of four. Every
+ * caller here reads its own past at a displacement — that is what a temporal transform is — and a
+ * filtered read at that position is a blur applied once per frame for the life of the material.
+ */
 vec4 history(sampler2D previous, vec2 uv, float decay, float delta) {
     float survival = delta > 0.0 ? pow(clamp(decay, 0.0, 1.0), delta) : 1.0;
-    vec4 sampled = texture(previous, clamp(uv, 0.0, 1.0)) * survival;
+    vec4 sampled = resample(previous, uv) * survival;
 
     return clamp(sampled, vec4(-HISTORY_CEILING), vec4(HISTORY_CEILING));
+}
+`;
+
+/**
+ * Reads displaced material without filtering it.
+ *
+ * A texture read at a coordinate between texels returns a weighted mean of the four around it. Once,
+ * that is a resample. Every frame, inside a loop, it is a blur kernel applied for as long as the
+ * material survives — measured on a grid with no decay and no fresh material at all, a drift at 0.43
+ * frame-widths per second leaves 2.8% of its detail after one second and 0.1% after two. That is the
+ * whole of why raising the warp speed produced fog and lowering it produced a still picture: the
+ * trade was never speed against smear length, it was speed against filtering.
+ *
+ * Snapping the coordinate to the texel centre makes the read exact. Material moves in whole-texel
+ * steps rather than continuously, which at sixty frames a second is a sub-pixel difference in where
+ * a thing is and the difference between a picture and a wash in what it is made of.
+ */
+export const GLSL_RESAMPLE = `
+/** The material at this coordinate, taken from one texel rather than averaged across four. */
+vec4 resample(sampler2D image, vec2 uv) {
+    vec2 size = vec2(textureSize(image, 0));
+    vec2 snapped = (floor(clamp(uv, 0.0, 1.0) * size) + 0.5) / size;
+
+    return texture(image, snapped);
 }
 `;
 

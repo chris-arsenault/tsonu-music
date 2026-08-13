@@ -11,6 +11,7 @@ import {
     defineShaderPlugin,
     GLSL_COMMON,
     GLSL_HISTORY,
+    GLSL_RESAMPLE,
     GLSL_RESAMPLE_MOTION,
 } from '../define';
 import type { VisualPluginDefinition } from '../../core/plugin';
@@ -775,6 +776,7 @@ uniform float uDepth;
 uniform float uDecay;
 uniform float uDelta;
 ${GLSL_COMMON}
+${GLSL_RESAMPLE}
 ${GLSL_HISTORY}
 
 void main() {

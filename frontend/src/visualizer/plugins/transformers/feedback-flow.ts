@@ -3,6 +3,7 @@
 import type { VisualPluginDefinition, VisualPluginInstance } from '../../core/plugin';
 import type { RenderPass } from '../../core/passes';
 import { QUAD_VERTEX_SHADER } from '../../host/device';
+import { GLSL_RESAMPLE } from '../define';
 import { SPATIAL_FEEDBACK } from '../../core/grammar';
 
 export type FeedbackFlowMode =
@@ -105,6 +106,7 @@ uniform float uDelta;
 /** Frames a second the strength constant is tuned against. */
 const float REFERENCE_RATE = 60.0;
 
+${GLSL_RESAMPLE}
 ${WARP_BODY}
 
 void main() {
@@ -122,7 +124,8 @@ void main() {
         sampleUv = warp(vUv, uMode, step);
     }
 
-    fragColor = texture(uSource, clamp(sampleUv, 0.0, 1.0));
+    // Unfiltered, for the reason the resample helper states: this read recirculates.
+    fragColor = resample(uSource, sampleUv);
 }`;
 
 /**
