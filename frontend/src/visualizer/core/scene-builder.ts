@@ -743,7 +743,19 @@ function withCanonicalState(
             case 'deposit':
                 return 0.15 + (1 - density);
             default:
-                return 0.4;
+                // `max` is not drawn. A running maximum against displaced history is a morphological
+                // dilation: each frame the state takes the brightest value in a neighbourhood the
+                // width of one displacement, and repeated for the life of the material that is a
+                // smoothing filter as thorough as a blur, built entirely out of operations that
+                // never average. Measured across sixteen rendered scenes against each scene's own
+                // memory-blanked render, the scenes drawing it kept 14% to 20% of their material's
+                // structure while the accumulating operator kept 99% to 123%.
+                //
+                // Left in the catalog rather than deleted: an authored document may ask for a flash
+                // afterimage on purpose, and ADR-0017's arithmetic is what those documents were
+                // written against. What stops here is assembly choosing it for a third of all
+                // scenes.
+                return 0;
         }
     }) ?? combineCandidates[0];
     // Occurrence counted against the material, not assumed zero: trail transports interposed by

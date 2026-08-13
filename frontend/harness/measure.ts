@@ -123,6 +123,14 @@ export interface SceneMeasurement {
     withoutHistoryFrame?: string;
     withoutHistoryLuminance?: number[];
     withoutHistoryCoverage?: number[];
+    withoutHistoryDetail?: number[];
+    /**
+     * Structure in each capture: how much neighbouring cells differ. See `gridDetail`.
+     *
+     * The measurement brightness and coverage could not make. A picture and a wash score the same on
+     * both of those, and differ here by an order of magnitude.
+     */
+    detail: number[];
     /** Brightest cell in each capture. Separates "dim everywhere" from "black with a line in it". */
     peak: number[];
     /** The last captured frame as a PNG data URI, so a run can be looked at rather than inferred. */
@@ -357,6 +365,36 @@ function sampleGrid(
         lum: grid,
         ...(red && green && blue ? { rgb: { r: red, g: green, b: blue } } : {}),
     };
+}
+
+/**
+ * How much structure a frame has in it, as the mean absolute Laplacian of the grid.
+ *
+ * Brightness and coverage cannot tell a picture from a wash. Measured across sixteen scenes, the
+ * vivid ones and the featureless grey ones both settle around a mean luminance of 0.3 and both cover
+ * the whole frame; what separates them is whether neighbouring cells differ. A blur drives this to
+ * zero while leaving the other two untouched, which is exactly how the loop could filter every scene
+ * into a uniform field without a single measurement moving.
+ *
+ * Read against the same scene's memory-blanked render rather than against an absolute threshold: a
+ * scene drawing three soft blobs has little detail to keep and should not be failed for it.
+ */
+function gridDetail(grid: Float32Array): number {
+    const size = GRID;
+    let total = 0;
+    let count = 0;
+
+    for (let y = 1; y < size - 1; y += 1) {
+        for (let x = 1; x < size - 1; x += 1) {
+            const at = y * size + x;
+            const laplace = grid[at - 1] + grid[at + 1] + grid[at - size] + grid[at + size]
+                - 4 * grid[at];
+            total += Math.abs(laplace);
+            count += 1;
+        }
+    }
+
+    return count > 0 ? total / count : 0;
 }
 
 function mean(values: ArrayLike<number>): number {
@@ -629,6 +667,7 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
     const luminance: number[] = [];
     const coverage: number[] = [];
     const peak: number[] = [];
+    const detail: number[] = [];
     let lastFrame: string | undefined;
 
     // The first frame at or after the requested clear time, so the blank lands exactly once and on
@@ -659,6 +698,7 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
             if (sampled.rgb) rgbGrids.push(sampled.rgb);
             luminance.push(mean(grid));
             peak.push(Math.max(...grid));
+            detail.push(gridDetail(grid));
             let lit = 0;
             for (let index = 0; index < grid.length; index += 1) if (grid[index] > 0.02) lit += 1;
             coverage.push(lit / grid.length);
@@ -768,6 +808,7 @@ export function measureScene(options: MeasureOptions): SceneMeasurement {
         plugins: scene.nodes.map((node) => node.pluginId),
         luminance,
         coverage,
+        detail,
         changeRate,
         peak,
         lastFrame,

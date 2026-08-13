@@ -46,6 +46,7 @@ async function run(): Promise<void> {
                 measured.withoutHistoryFrame = control.lastFrame;
                 measured.withoutHistoryLuminance = control.luminance;
                 measured.withoutHistoryCoverage = control.coverage;
+                measured.withoutHistoryDetail = control.detail;
             }
 
             results.push(measured);

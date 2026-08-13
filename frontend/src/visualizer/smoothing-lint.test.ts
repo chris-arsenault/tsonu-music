@@ -76,6 +76,16 @@ const RULES: { kind: string; pattern: RegExp; note: string }[] = [
         pattern: /\bpow\s*\([^;]*\buDelta\b/,
         note: 'an exponential decay is a low-pass in time',
     },
+    {
+        kind: 'dilation',
+        // A max or min taken against remembered material. Repeated with displacement this is a
+        // morphological filter — the supremum over a neighbourhood — and it smooths as thoroughly as
+        // a blur while containing no average for the rules above to find. Measured over sixteen
+        // rendered scenes, the operator built this way kept 14% to 20% of its own material's
+        // structure where the accumulating one kept 99% to 123%.
+        pattern: /\b(?:max|min)\s*\([^;]*\b(?:history|previous|past|state)\w*/i,
+        note: 'a running max over displaced history is a dilation, which smooths without averaging',
+    },
 ];
 
 /** Reads of a texture at a coordinate the shader computed, which bilinear filtering will smooth. */
@@ -230,6 +240,7 @@ const CEILING: Record<string, number> = {
     'loop-tap': 9,
     'tap-average': 4,
     'temporal-decay': 12,
+    dilation: 17,
 };
 
 describe('nothing averages by default', () => {
