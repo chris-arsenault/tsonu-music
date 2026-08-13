@@ -19,7 +19,7 @@
  * be the lossy element, and making that explicit is the point of the contract.
  */
 
-import { character, defineShaderPlugin, GLSL_COMMON } from '../define';
+import { character, defineShaderPlugin, GLSL_COMMON, GLSL_RESAMPLE } from '../define';
 import { SPATIAL_FEEDBACK } from '../../core/grammar';
 import type { VisualPluginDefinition } from '../../core/plugin';
 
@@ -54,10 +54,13 @@ in vec2 vUv;
 out vec4 fragColor;
 ${UNIFORMS}
 ${GLSL_COMMON}
+${GLSL_RESAMPLE}
 ${SOURCE_COORD}
 
 void main() {
-    fragColor = texture(uSource, sourceCoord(vUv));
+    // Unfiltered: this plugin recirculates, so a bilinear tap here is a blur applied once a frame
+    // for the life of the material. See the resample helper.
+    fragColor = resample(uSource, sourceCoord(vUv));
 }`;
 
 const MOTION_FRAGMENT = `#version 300 es

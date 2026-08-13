@@ -25,6 +25,7 @@
 
 import { describe, expect, test } from 'vitest';
 import { allDefinitions } from './plugins/registry';
+import { SPATIAL_FEEDBACK } from './core/grammar';
 import type { VisualPluginDefinition } from './core/plugin';
 
 /** Every shader source a plugin registers, vertex and fragment together. */
@@ -88,8 +89,76 @@ const RULES: { kind: string; pattern: RegExp; note: string }[] = [
     },
 ];
 
-/** Reads of a texture at a coordinate the shader computed, which bilinear filtering will smooth. */
-const DISPLACED_READ = /\btexture\s*\(\s*(\w+)\s*,\s*([^)]*(?:\([^)]*\))?[^)]*)\)/g;
+/**
+ * Every `texture(sampler, coordinate)` in a line, with the coordinate whole.
+ *
+ * Scanned rather than matched. A coordinate is an expression and expressions nest, so a regular
+ * expression stops at the first close paren and hands back `clamp(vUv, 0.0, 1.0` — which matches
+ * nothing, so every field read in the catalog reported as a displacement.
+ */
+function textureReads(line: string): { sampler: string; coordinate: string }[] {
+    const reads: { sampler: string; coordinate: string }[] = [];
+    const call = /\btexture\s*\(/g;
+
+    for (let match = call.exec(line); match !== null; match = call.exec(line)) {
+        let depth = 1;
+        let index = match.index + match[0].length;
+        const start = index;
+        while (index < line.length && depth > 0) {
+            if (line[index] === '(') depth += 1;
+            if (line[index] === ')') depth -= 1;
+            index += 1;
+        }
+        if (depth !== 0) {
+            continue;
+        }
+
+        const argumentText = line.slice(start, index - 1);
+        let commaDepth = 0;
+        let comma = -1;
+        for (let scan = 0; scan < argumentText.length; scan += 1) {
+            if (argumentText[scan] === '(') commaDepth += 1;
+            else if (argumentText[scan] === ')') commaDepth -= 1;
+            else if (argumentText[scan] === ',' && commaDepth === 0) {
+                comma = scan;
+                break;
+            }
+        }
+        if (comma < 0) {
+            continue;
+        }
+
+        reads.push({
+            sampler: argumentText.slice(0, comma).trim(),
+            coordinate: argumentText.slice(comma + 1).trim(),
+        });
+    }
+
+    return reads;
+}
+
+/**
+ * Whether a sampling coordinate is this fragment's own position, however it is written.
+ *
+ * `clamp(vUv, 0.0, 1.0)` is `vUv` for every coordinate a fragment can have, and reading there lands
+ * on the texel being written rather than between four of them. Counting the clamp as a displacement
+ * reported every field read in the catalog as a filtered resample.
+ */
+function isOwnPosition(coordinate: string): boolean {
+    let text = coordinate.trim();
+    let unwrapped = true;
+
+    while (unwrapped) {
+        unwrapped = false;
+        const clamped = text.match(/^clamp\s*\(\s*(.*?)\s*,\s*0\.0\s*,\s*1\.0\s*\)$/);
+        if (clamped) {
+            text = clamped[1].trim();
+            unwrapped = true;
+        }
+    }
+
+    return /^v?[Uu][Vv]$/.test(text) || text === 'snapped';
+}
 
 /**
  * Loops that sample a texture: the shape of a convolution, whatever the weights are called.
@@ -184,11 +253,10 @@ function findings(): Finding[] {
                         }
                     }
 
-                    for (const match of code.matchAll(DISPLACED_READ)) {
-                        const coordinate = match[2].trim();
+                    for (const read of textureReads(code)) {
                         // A read at the fragment's own coordinate is not a resample: it lands on the
                         // texel it is writing. Anything else is sampled between texels and filtered.
-                        if (/^v?[Uu][Vv]$/.test(coordinate) || coordinate === 'vUv') {
+                        if (isOwnPosition(read.coordinate)) {
                             continue;
                         }
                         record('filtered-resample');
@@ -234,7 +302,7 @@ const EXEMPT_LINES: Record<string, string> = {
  * it takes one line and it means the class shrank.
  */
 const CEILING: Record<string, number> = {
-    'filtered-resample': 272,
+    'filtered-resample': 229,
     mix: 566,
     smoothstep: 108,
     'loop-tap': 9,
@@ -270,6 +338,39 @@ describe('nothing averages by default', () => {
                 `${kind}: ${count} where ${ceiling ?? 0} is allowed.\n${examples.join('\n')}`,
             ).toBeLessThanOrEqual(ceiling ?? 0);
         }
+    });
+
+    test('nothing that recirculates reads its material through a filter', () => {
+        // Zero tolerance, unlike the ratchet above, because this is the class that compounds. A
+        // filtered read anywhere else costs one blur; a filtered read on a plugin that feeds its own
+        // output back costs one per frame for as long as the material survives, which is hundreds.
+        //
+        // A rule rather than a habit because the habit failed: three plugins declare this capability
+        // and fixing them by hand fixed two. The third sat in eleven of sixteen rendered scenes and
+        // cost them half their structure.
+        const offenders: string[] = [];
+
+        for (const definition of allDefinitions()) {
+            if (!definition.capabilities.includes(SPATIAL_FEEDBACK)) {
+                continue;
+            }
+
+            for (const source of shaderSources(definition)) {
+                for (const [index, line] of source.fragment.split('\n').entries()) {
+                    const code = line.replace(/\/\/.*$/, '');
+                    for (const read of textureReads(code)) {
+                        if (isOwnPosition(read.coordinate)) {
+                            continue;
+                        }
+                        offenders.push(
+                            `${definition.id} ${source.id}:${index + 1} ${code.trim()}`,
+                        );
+                    }
+                }
+            }
+        }
+
+        expect([...new Set(offenders)], 'read these through resample instead').toEqual([]);
     });
 
     test('the ceilings are not stale, so removing an operation lowers one', () => {
