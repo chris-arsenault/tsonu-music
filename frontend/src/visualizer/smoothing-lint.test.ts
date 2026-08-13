@@ -378,10 +378,21 @@ describe('nothing averages by default', () => {
             (finding) => STATED[`${finding.plugin} ${finding.kind}`] === undefined,
         );
 
-        for (const [kind, ceiling] of Object.entries(CEILING)) {
-            const count = unstated.filter((finding) => finding.kind === kind).length;
-            expect(count, `${kind} is down to ${count}; lower its ceiling from ${ceiling}`)
-                .toBe(ceiling);
-        }
+        // Reported together rather than one assertion per kind: a failing expectation ends the test,
+        // so removing operations of three kinds at once would report the first and hide the rest,
+        // and each re-run would surface one more.
+        const stale = Object.entries(CEILING)
+            .map(([kind, ceiling]) => ({
+                kind,
+                ceiling,
+                count: unstated.filter((finding) => finding.kind === kind).length,
+            }))
+            .filter((entry) => entry.count !== entry.ceiling);
+
+        expect(
+            stale,
+            stale.map((entry) => `${entry.kind}: ${entry.count} now, ceiling says ${entry.ceiling}`)
+                .join('\n'),
+        ).toEqual([]);
     });
 });
