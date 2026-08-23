@@ -33,24 +33,23 @@ output to the whole canvas; selecting a muted one excludes it from the graph alo
 leaves unreachable.
 
 The graph shows more than the document's own edges. The layer stack — every colour output nothing
-else consumes, which is what actually reaches the screen — and the motion bus, summed from every
-motion-typed resource whether or not the graph reads it, are drawn as dashed edges into the kernel
-stages that consume them. Composite, motion sum, accumulation and grade appear as nodes, each
-inspectable, and each showing the values it is running with.
+else consumes, which is what actually reaches the screen — is drawn as dashed edges into the stage
+that consumes it. The kernel's own stages appear as nodes in the order they run: palette, composite,
+grade, canvas. Each is inspectable and shows the values it is running with.
 
 While a document is in control the graph is editable. Nodes drag, links are drawn between sockets and
 cut with Delete, double-clicking the canvas opens a searchable catalog, and dropping a link on empty
 canvas opens the same search narrowed to plugins that could take it. A link the canvas refuses is one
-the compiler would have rejected: both ask `portsCompatible`. Derived connections — the layer stack,
-the motion bus, the kernel chain — cannot be cut, and say so rather than appearing to work.
+the compiler would have rejected: both ask `portsCompatible`. Derived connections — the layer stack
+and the kernel chain — cannot be cut, and say so rather than appearing to work.
 
 Selecting a node opens an inspector beside the canvas: its parameters, what drives each of them with
 the binding's feature, mode, range, curve, attack, release and polarity, its seed, and mute, clone and
 remove. A parameter can be converted to an input, which draws its driver as a node wired into a socket
 — ComfyUI's convert-widget-to-input, and promotion is per parameter so the one under investigation
-becomes visible wiring while the rest stay as rows. The accumulation's three values are pinned or
-released individually, the grade's are ordinary parameters, and each layer's blend mode and opacity
-can be overridden from the composite stage. Ctrl+Z and Ctrl+Shift+Z step the history.
+becomes visible wiring while the rest stay as rows. The grade's values are ordinary parameters, and
+each layer's blend mode and opacity can be overridden from the composite stage. Ctrl+Z and
+Ctrl+Shift+Z step the history.
 
 A parameter or binding change reaches the running instance without recompiling, so a value can be
 dragged while watching what it does; a topology change recompiles and keeps the instances it did not
@@ -161,6 +160,15 @@ state, material memory is legal and bounded (ADR-0016): plugins may keep self-lo
 wiring may fold the composed image back through a lossy port, with every image cycle required to
 converge at its gain ceiling before the scene compiles.
 
+Material that recirculates is read without filtering. A texture read at a coordinate between texels
+returns a weighted mean of the four around it, and a stage that displaces its own past applies that
+mean once per frame for as long as the material survives, which is hundreds of times; the transports
+snap the coordinate to a texel centre instead. Material therefore moves in whole-texel steps. The
+combine assembly draws between the two accumulating operators, `flow` and `deposit`. `max` remains
+in the catalog for authored documents and is not drawn: a running maximum against displaced history
+is a morphological dilation, which erases structure as thoroughly as a blur while containing no
+average. See [ADR-0019](./adr/0019-visualizer-structure-preserving-recirculation.md).
+
 The state resource is ping-ponged because its historical edge explicitly reads the previous slot.
 Its survival is per second, so trail length is independent of refresh rate. A frozen clock holds the
 transition; a seek, track change, or genuinely new scene clears the new scene's historical slots.
@@ -247,9 +255,9 @@ mid-gradient.
 The scheme drifts by walking its own colours, crossfading each branch from one to the next, rather
 than by rotating hue: rotating a designed palette destroys the relationships that made it designed.
 Grading itself is not a hard-coded feature mapping — the compositor declares parameters in
-`core/composite-grade.ts` and binds them through the same roles, modes, and role dynamics as any
-plugin, so hue drift is a rate binding, exposure lifts on a transient, and saturation follows
-intensity.
+`core/composite-grade.ts` and binds them through the same signal shapes, modes, and envelope
+dynamics as any plugin, so hue drift is a rate binding, exposure lifts on a transient, and
+saturation follows intensity.
 
 Every modal opening, track change, explicit **New scene**, and full scene mutation selects from fresh
 entropy. Tracks do not map to repeatable scenes, and diagnostics do not expose a reproduction control.
@@ -295,6 +303,22 @@ Rendering stops when the page is hidden.
 `make ci` runs the visualizer's unit tests in the Node environment. `acceptance.test.ts` asserts the
 specification's section 26 criteria, one test per criterion.
 
-Three criteria are outside its reach, needing a real GPU or a listener: a 3D source outputting colour
-and depth, perceived beat synchronisation, and shaders producing the intended image. They are tracked
-in [backlog.md](./backlog.md).
+Two static passes check what a unit test over behaviour cannot. `shader-contract.test.ts` checks
+every shader's source against its plugin's declarations — a parameter with no matching uniform is a
+dead binding the scheduler distributes and nothing reads. `smoothing-lint.test.ts` counts the
+operations that destroy structure: weighted means, soft thresholds, blur kernels including loops
+that sample a texture, exponential decay, dilation, and texture reads at a computed coordinate. It
+is a ratchet — the count per kind may fall and never rise — with one rule at zero tolerance: a
+plugin that feeds its own output back may not read material through a filter.
+
+`frontend/harness/` renders scenes against a real WebGL2 context under SwiftShader and measures what
+happens to the picture over simulated seconds: how fast it changes, whether the change is material
+travelling or intensity shifting in place, how far back it remembers, and how much structure it
+keeps. Structure is the measurement brightness and coverage cannot make — a picture and a wash score
+the same on both — and it is read against the same scene rendered with its memory blanked every
+frame, so a scene drawing three soft blobs is not marked down for having little structure to keep.
+It needs a browser and minutes per scene, so it is a deliberate check rather than part of `make ci`.
+
+Three specification criteria are outside all of this, needing a real GPU or a listener: a 3D source
+outputting colour and depth, perceived beat synchronisation, and shaders producing the intended
+image. They are tracked in [backlog.md](./backlog.md).

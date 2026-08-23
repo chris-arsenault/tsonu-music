@@ -10,5 +10,6 @@
 | [testing.md](./testing.md) | What `make ci` runs, and the separate encode fixture target |
 | [visualizer.md](./visualizer.md) | The WebGL music visualizer: surface, layout, audio, timing, rendering, scenes, assets |
 | [visualizer-spec.md](./visualizer-spec.md) | Requirements for the WebGL music visualizer, referenced by section number |
+| [visualizer-masks.md](./visualizer-masks.md) | Authoring and generating the mask library |
 | [adr/](./adr) | Architecture decision records |
 | [backlog.md](./backlog.md) | Planned-but-not-built work |

@@ -1,6 +1,6 @@
 # 0017 — The scene-state combine is an operator family with a verified energy model
 
-- Status: Accepted
+- Status: Amended by [0019](./0019-visualizer-structure-preserving-recirculation.md)
 - Date: 2026-08-10
 - Amends: [0016](./0016-visualizer-canonical-state-with-material-memory.md)
 

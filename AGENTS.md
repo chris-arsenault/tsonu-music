@@ -76,5 +76,33 @@ and Rust Lambda artifacts under `backend/`.
   mounted only by the checked-in Visualizer Lab; the public player must not import or expose it. See
   [ADR-0010](./docs/adr/0010-visualizer-authored-scene-graphs.md) and
   [ADR-0011](./docs/adr/0011-visualizer-graph-editor-canvas.md).
+- **Nothing in the visualizer may average by default.** `smoothing-lint.test.ts` counts the
+  operations that destroy structure and its per-kind ceilings may only fall. A plugin that feeds its
+  own output back may not read material through a filter at all. See
+  [ADR-0019](./docs/adr/0019-visualizer-structure-preserving-recirculation.md).
 - **Do not commit runtime catalog data.** RDS is the source of truth for releases, songs,
   recordings, tracks, and jobs.
+
+## Working on the visualizer
+
+Four things this subsystem has taught expensively. They are here because each one cost weeks and
+none of them is visible from the code.
+
+- **Measure the middle of a chain, not its ends.** Every wrong conclusion in this subsystem's
+  history came from inferring a middle stage from its two ends.
+- **Measure the consumer as well as the producer.** One pass fixed a producer emitting four channels
+  in the bottom one percent of their range and stopped there; the consumers were still authored
+  against a distribution nothing had, and the median binding traversed a fifth of its range for
+  another month.
+- **Check the arithmetic of a fix, not only its shape.** A convex accumulator was the right idea
+  about washout applied where it forbade the thing the subsystem exists to do, and it survived two
+  ADRs because every reading of it was about what it prevented rather than about what its steady
+  state actually was.
+- **A property with no check degrades to zero.** Loop gain, terminal count and operand independence
+  are computed numbers that fail a build, and they hold. Structure had no check and was destroyed by
+  round after round of individually defensible changes. Before relying on a property, ask what
+  fails when it stops being true.
+
+Brightness and coverage cannot tell a picture from a wash — a vivid scene and a featureless grey one
+score the same on both. `frontend/harness/` measures structure, read against the same scene rendered
+with its memory blanked.

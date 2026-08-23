@@ -2118,8 +2118,7 @@ links, widgets that promote to inputs, and a searchable node catalog. It should 
 
 * One node per plugin instance, with its typed inputs, typed outputs, and parameters
 * The layer stack, as edges from every unconsumed colour output into the composite stage
-* The motion bus, as edges from every motion-typed resource into the motion stage
-* The kernel stages between the graph and the canvas: composite, motion, accumulation, meter, grade
+* The kernel stages between the graph and the canvas: palette, composite, grade, canvas
 * Host assets as producer nodes
 * Live resolved values for every parameter, alongside the constant or binding driving it
 * Resolution problems against the node or edge that caused them

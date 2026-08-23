@@ -28,11 +28,12 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 - Add a particle life simulator with multiple classes and inter-class attraction relationships.
 - Add a cellular field simulator covering Conway-like, cyclic, excitable-media, and continuous
   growth behavior.
+- Let dense particle piles settle. The CPU solver converges, but the broadphase grid stores one list
+  per cell sized to a single diameter, so a deep pile needs more relaxation passes than a frame
+  affords. Only worth doing if piles become a visual goal.
 
 ## Visualizer transforms and fields
 
-- Add a temporal transform maintaining bounded frame history for echo, slit scan, time slices,
-  directional smear, and delayed mirror modes.
 - Add an optical flow field estimating motion between successive textures for particle advection
   and feedback dragging.
 - Add a model depth field supplying depth-based force, collision, and occlusion from a 3D source.
@@ -40,9 +41,6 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
 
 ## Visualizer scene structure
 
-- Verify on real hardware that the composite stage renders what `core/persistence.ts` computes. The
-  recurrence is unit-tested against a grid in the Node environment; that the GPU path is wired to the
-  same numbers is not observable there.
 - Normalize selection weight across a plugin family's variants, so a long mode list buys coverage
   rather than influence. Activation weight is per variant, so a family's effect on selection is its
   weight times how many modes it happens to have: `MaskRouter` at weight one across nine modes
@@ -54,20 +52,30 @@ Planned-but-not-built work. Each item is a positive assertion of future-state be
   the check runs — measured over 318 builds, the smallest image-loop count was two. Counting
   material loops instead would make the flags a statement about the scene's own memory, matching
   `maximumFeedbackLoops`, and would reject the 42% of scenes that currently keep none.
-- Stop the scene state filtering its own contents away. Every pass through the loop resamples the
-  state with bilinear filtering, and the canonical chain resamples twice per frame with the trail
-  transports adding more; material then survives ten to twenty-five seconds, so a picture is
-  filtered several hundred times before it decays. Measured on a grid with no decay and no fresh
-  material, a drift at 0.43 frame-widths per second leaves 2.8% of its detail after one second and
-  0.1% after two. Rendered scenes show the consequence directly: with memory blanked they are sharp
-  and saturated, and with the loop running the same scenes are featureless grey. This is why every
-  attempt to raise the warp speed produced fog and every attempt to reduce it produced a still
-  picture — the trade being made was against filtering, not against smear length. Candidate
-  repairs, in order of how much they promise: compose the canonical chain's transforms and resample
-  once instead of once per stage; snap a translation's per-frame offset to whole texels, which makes
-  bilinear sampling exact and held 85.7% of detail at one second against 2.8%; bound how long
-  material stays in the loop by how long it stays sharp; sharpen inside the loop, which helps but
-  needs a stability bound.
+- Recover the structure the remaining five scenes in sixteen lose. Measured against each scene's own
+  memory-blanked render, the median scene keeps 98% of its material's structure and these keep 31%
+  to 47%. Three of the five carry a `GlowAndScatter` bloom and three carry a `TemporalTransform`
+  trail, both of which are on the smoothing lint's list with line numbers. Making the trails
+  accumulate rather than dilate was measured and did not pay: it gained twelve points on two scenes
+  and lost thirteen on another.
+- Compose the canonical chain's two transports into one pass. Each stage resamples, so a chain of
+  two costs twice the sampling of one for a composition that is the same either way — two geometric
+  transforms compose analytically, and the chain exists so the motion has no simple closed orbit
+  rather than because it needs two passes.
+- Ask whether a scene is any good, not only whether it is legal. `buildFirstViableScene` returns the
+  first candidate satisfying the grammar and discards up to thirty-one others unexamined. Bound
+  parameter count, expression diversity, `peakConcentration`, `materialBranchCount`, chain depth,
+  structural-edge count, and the structure a scene keeps are all measurable now; branch contrast is
+  reachable through `SelectionCharacter`, and focal structure through whether exactly one plugin is
+  `dominance: 'primary'`.
+- Decide whether a family may exempt itself from motion. `GEOMETRIC_SIGNAL` sets
+  `requireSpatialLoop: false` and `requireMotionSource: false`, citing the specification's
+  "restrained feedback" for that family, and it is a quarter of the rotation.
+- Connect a spatial field the grammar asked for. `collision-energy` with masks loaded fails on
+  roughly one seed in twenty because all thirty-two candidates leave their field unread, the prune
+  removes it, and the field count then fails — a consumer is present in those candidates, so the gap
+  is in wiring rather than selection, and a selection-side repair had no effect. Theme fallback
+  covers it, so the cost is one family being unavailable for one entropy rather than a black frame.
 
 ## Visualizer analysis
 

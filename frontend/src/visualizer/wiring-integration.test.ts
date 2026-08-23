@@ -548,7 +548,7 @@ describe('assets are reachable by scene assembly', () => {
         // noise. Requiring a scene to converge to a single terminal narrowed the candidate space, and
         // `widen-4` on collision-energy now spends all thirty-two candidates on graphs whose field is
         // left unread and pruned, failing the field count. A consumer is present in those candidates;
-        // wiring does not connect it. Recorded in VISUALIZER-BACKLOG.md rather than tuned away.
+        // wiring does not connect it. Recorded in docs/backlog.md rather than tuned away.
         for (const theme of THEMES) {
             const results = Array.from({ length: 20 }, (_, index) =>
                 buildScene(`widen-${index}`, theme, withMasks, profileFor(0)));
