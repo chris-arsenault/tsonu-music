@@ -19,7 +19,16 @@ export default defineConfig({
       output: {
         entryFileNames: 'assets/index-[hash].js',
         chunkFileNames: 'assets/chunk-[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash][extname]',
+        // The website module detects the entry stylesheet by globbing
+        // `assets/index-*.css`, so the one stylesheet has to carry that name;
+        // Vite would otherwise call it `style-[hash].css` and the module would
+        // publish the OG Lambda with no ENTRY_CSS at all.
+        assetFileNames: (asset) => {
+          const name = asset.names?.[0] ?? '';
+          return name.endsWith('.css')
+            ? 'assets/index-[hash][extname]'
+            : 'assets/[name]-[hash][extname]';
+        },
       },
     },
   },

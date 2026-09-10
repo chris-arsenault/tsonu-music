@@ -69,8 +69,10 @@ and Rust Lambda artifacts under `backend/`.
   [ADR-0003](./docs/adr/0003-visualizer-pure-core-thin-shell.md).
 - **Visual time comes from the playback clock**, never from `requestAnimationFrame`, track time
   alone, or a precomputed BPM.
-- **The Vite build publishes one stylesheet** (`cssCodeSplit: false`), because the `website` module
-  is configured with a single `ENTRY_CSS`. Do not add a second entry stylesheet.
+- **The Vite build publishes one stylesheet, named `assets/index-<hash>.css`** (`cssCodeSplit:
+  false`), because the `website` module globs `assets/index-*.css` to fill the OG Lambda's
+  `ENTRY_CSS`. A second entry stylesheet makes that glob ambiguous; a differently named one makes it
+  empty, and an empty `ENTRY_CSS` ships an unstyled site with no build or apply error.
 - **Every scene reaches the screen through `compileGraph`.** An authored graph may skip the scene
   grammar; it may not skip port typing, required inputs, or cycle declaration. The graph editor is
   mounted only by the checked-in Visualizer Lab; the public player must not import or expose it. See
