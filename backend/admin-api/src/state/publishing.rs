@@ -99,7 +99,7 @@ impl AppState {
             format!("/releases/{}", published_release.slug),
             format!("/tracks/{}/*", published_release.slug),
             format!("/catalog/releases/{}", published_release.slug),
-            format!("/catalog/songs/*"),
+            "/catalog/songs/*".to_string(),
         ];
         let invalidation_id = self
             .invalidate_manifest_paths(&release_id, invalidation_paths.clone())
